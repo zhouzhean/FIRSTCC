@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>番茄钟</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <main class="timer-panel">
+      <div class="phase-indicator" id="phase-label">专注</div>
+      <div class="timer-ring">
+        <svg viewBox="0 0 200 200">
+          <circle class="track" cx="100" cy="100" r="90" />
+          <circle class="progress" id="progress-ring" cx="100" cy="100" r="90"
+                  stroke-dasharray="565.49" stroke-dashoffset="0" />
+        </svg>
+        <div class="timer-display">
+          <span class="time" id="timer-display">25:00</span>
+          <span class="cycle-count" id="cycle-count">#1</span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn btn-primary" id="btn-start">开始</button>
+        <button class="btn btn-secondary" id="btn-reset" disabled>重置</button>
+      </div>
+    </main>
+
+    <aside class="task-panel">
+      <h2>任务列表</h2>
+      <div class="task-input-row">
+        <input type="text" id="task-input" placeholder="添加新任务..." maxlength="120">
+        <button class="btn btn-add" id="btn-add-task">+</button>
+      </div>
+      <ul class="task-list" id="task-list"></ul>
+      <div class="task-footer">
+        <span id="completed-count">0</span> / <span id="total-count">0</span> 已完成
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

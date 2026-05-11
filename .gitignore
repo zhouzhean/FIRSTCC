@@ -1,0 +1,14 @@
+# Claude local config
+.claude/
+
+# Environment files
+*.env
+*.env.*
+
+# System files
+Thumbs.db
+Desktop.ini
+
+# IDE
+.vscode/
+.idea/
