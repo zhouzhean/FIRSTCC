@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026年投资建议与分析报告</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+  :root {
+    --primary: #0a1f3f;
+    --secondary: #c9a84c;
+    --accent: #1a3a6b;
+    --bg-light: #f5f3ee;
+    --bg-white: #ffffff;
+    --text: #2c2c2c;
+    --text-light: #555;
+    --border: #d4c9a8;
+    --danger: #c0392b;
+    --success: #1a7a3a;
+    --warning: #d4880f;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    background: #e8e6df;
+    color: var(--text);
+    line-height: 1.8;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* COVER PAGE */
+  .cover {
+    background: linear-gradient(135deg, var(--primary) 0%, #0d2b56 40%, var(--accent) 100%);
+    color: white;
+    padding: 80px 60px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -100px;
+    right: -100px;
+    width: 500px;
+    height: 500px;
+    border: 2px solid rgba(201,168,76,0.2);
+    border-radius: 50%;
+  }
+  .cover::after {
+    content: '';
+    position: absolute;
+    bottom: -150px;
+    left: -150px;
+    width: 600px;
+    height: 600px;
+    border: 1px solid rgba(201,168,76,0.1);
+    border-radius: 50%;
+  }
+  .cover-badge {
+    display: inline-block;
+    border: 2px solid var(--secondary);
+    color: var(--secondary);
+    padding: 8px 24px;
+    font-size: 14px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    margin-bottom: 40px;
+    position: relative;
+    z-index: 1;
+  }
+  .cover h1 {
+    font-size: 48px;
+    font-weight: 900;
+    margin-bottom: 16px;
+    position: relative;
+    z-index: 1;
+    letter-spacing: 2px;
+  }
+  .cover .subtitle {
+    font-size: 20px;
+    font-weight: 300;
+    color: rgba(255,255,255,0.75);
+    margin-bottom: 48px;
+    position: relative;
+    z-index: 1;
+  }
+  .cover .divider {
+    width: 80px;
+    height: 3px;
+    background: var(--secondary);
+    margin-bottom: 48px;
+    position: relative;
+    z-index: 1;
+  }
+  .cover .meta {
+    font-size: 14px;
+    color: rgba(255,255,255,0.6);
+    position: relative;
+    z-index: 1;
+  }
+  .cover .meta p { margin-bottom: 6px; }
+
+  /* MAIN CONTENT */
+  .container {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 20px;
+  }
+
+  /* SECTION */
+  .section {
+    background: var(--bg-white);
+    margin: 32px 0;
+    padding: 48px 52px;
+    box-shadow: 0 2px 20px rgba(0,0,0,0.06);
+    page-break-inside: avoid;
+  }
+  .section-header {
+    border-left: 4px solid var(--secondary);
+    padding-left: 18px;
+    margin-bottom: 32px;
+  }
+  .section-header .num {
+    font-size: 13px;
+    color: var(--secondary);
+    font-weight: 700;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+  .section-header h2 {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--primary);
+    margin-top: 4px;
+  }
+  .section-header .desc {
+    font-size: 14px;
+    color: var(--text-light);
+    margin-top: 4px;
+  }
+
+  /* TABLES */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 14px;
+  }
+  thead th {
+    background: var(--primary);
+    color: white;
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 500;
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+  tbody td {
+    padding: 11px 14px;
+    border-bottom: 1px solid #eee;
+  }
+  tbody tr:nth-child(even) { background: #fafaf8; }
+  tbody tr:hover { background: #f5f3ee; }
+
+  /* KEY METRICS */
+  .metrics-row {
+    display: flex;
+    gap: 20px;
+    margin: 24px 0;
+    flex-wrap: wrap;
+  }
+  .metric-card {
+    flex: 1;
+    min-width: 160px;
+    background: linear-gradient(135deg, var(--primary), var(--accent));
+    color: white;
+    padding: 22px 20px;
+    text-align: center;
+  }
+  .metric-card .label { font-size: 12px; opacity: 0.75; letter-spacing: 1px; margin-bottom: 6px; }
+  .metric-card .value { font-size: 28px; font-weight: 700; }
+  .metric-card .sub { font-size: 12px; opacity: 0.6; margin-top: 4px; }
+  .metric-card.warn { background: linear-gradient(135deg, #8b0000, #c0392b); }
+  .metric-card.good { background: linear-gradient(135deg, #0d3b1e, #1a7a3a); }
+
+  /* CALLOUTS */
+  .callout {
+    padding: 18px 22px;
+    margin: 20px 0;
+    border-left: 4px solid;
+    font-size: 14px;
+    line-height: 1.7;
+  }
+  .callout.info { background: #eef4fb; border-color: #3a7bd5; }
+  .callout.warning { background: #fef9ee; border-color: var(--warning); }
+  .callout.danger { background: #fdefef; border-color: var(--danger); }
+  .callout.success { background: #edf7f0; border-color: var(--success); }
+  .callout strong { display: block; margin-bottom: 4px; font-size: 15px; }
+
+  /* POLICY TAG */
+  .policy-tag {
+    display: inline-block;
+    background: var(--primary);
+    color: var(--secondary);
+    padding: 3px 10px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    margin-right: 6px;
+    margin-bottom: 4px;
+  }
+
+  /* TIMELINE */
+  .timeline { margin: 24px 0; }
+  .timeline-item {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 24px;
+    align-items: flex-start;
+  }
+  .timeline-marker {
+    min-width: 90px;
+    background: var(--primary);
+    color: white;
+    padding: 8px 14px;
+    text-align: center;
+    font-weight: 700;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+  .timeline-marker.q2 { background: #1a6b3a; }
+  .timeline-marker.q3 { background: #1a5a8a; }
+  .timeline-marker.q4 { background: #7a3a1a; }
+  .timeline-content h4 { font-size: 16px; color: var(--primary); margin-bottom: 6px; }
+  .timeline-content p { font-size: 14px; color: var(--text-light); }
+
+  /* MONTHLY CARDS */
+  .month-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+    margin: 20px 0;
+  }
+  .month-card {
+    border: 1px solid #e0dcd0;
+    padding: 18px;
+    background: #fdfdfb;
+  }
+  .month-card h5 {
+    font-size: 14px;
+    color: var(--primary);
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--secondary);
+  }
+  .month-card ul { font-size: 13px; padding-left: 16px; color: var(--text-light); }
+  .month-card li { margin-bottom: 4px; }
+
+  /* FOOTER */
+  .disclaimer {
+    background: #fdf2f2;
+    border: 2px solid #e74c3c;
+    padding: 28px 32px;
+    margin: 32px 0;
+    font-size: 13px;
+    color: #8b0000;
+  }
+  .disclaimer h4 {
+    color: #c0392b;
+    font-size: 16px;
+    margin-bottom: 10px;
+  }
+
+  .footer {
+    text-align: center;
+    padding: 40px 20px;
+    color: #999;
+    font-size: 12px;
+  }
+
+  /* STOCK HEADER */
+  .stock-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .stock-code {
+    font-size: 32px;
+    font-weight: 900;
+    color: var(--primary);
+  }
+  .stock-rating {
+    display: inline-block;
+    padding: 8px 20px;
+    font-weight: 700;
+    font-size: 14px;
+    letter-spacing: 1px;
+  }
+  .rating-buy { background: #1a7a3a; color: white; }
+  .rating-hold { background: #d4880f; color: white; }
+  .rating-sell { background: #c0392b; color: white; }
+
+  /* PAGE BREAKS FOR PRINT */
+  @media print {
+    body { background: white; }
+    .section { box-shadow: none; margin: 16px 0; padding: 32px 0; }
+    .cover { min-height: auto; padding: 60px 40px; page-break-after: always; }
+    h2 { page-break-after: avoid; }
+    .section { page-break-inside: avoid; }
+    .disclaimer { page-break-before: always; }
+  }
+
+  @media screen and (max-width: 768px) {
+    .cover { padding: 40px 24px; }
+    .cover h1 { font-size: 32px; }
+    .section { padding: 28px 22px; }
+    .metrics-row { flex-direction: column; }
+    .month-grid { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============= COVER ============= -->
+<div class="cover">
+  <div class="cover-badge">CONFIDENTIAL · 投资研究</div>
+  <h1>2026年投资建议<br>与分析报告</h1>
+  <p class="subtitle">A股机器人赛道 · 个人投资组合策略</p>
+  <div class="divider"></div>
+  <div class="meta">
+    <p><strong>编制日期：</strong>2026年5月11日</p>
+    <p><strong>分析标的：</strong>金发科技（600143） / 利欧股份（002131）</p>
+    <p><strong>投资主题：</strong>具身智能 + 机器人核心材料 + AI数字营销</p>
+    <p><strong>报告属性：</strong>个人投资参考 · 不构成投资建议</p>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- ============= CH1: 持仓概览 ============= -->
+<div class="section" id="ch1">
+  <div class="section-header">
+    <div class="num">Chapter 01</div>
+    <h2>持仓概览与当前状态</h2>
+    <div class="desc">截至2026年5月，个人A股投资组合全景</div>
+  </div>
+
+  <div class="metrics-row">
+    <div class="metric-card">
+      <div class="label">总资产（成本）</div>
+      <div class="value">¥13.60万</div>
+      <div class="sub">人民币 · A股</div>
+    </div>
+    <div class="metric-card warn">
+      <div class="label">浮动亏损</div>
+      <div class="value">-¥5,759</div>
+      <div class="sub">亏损比例约 4.23%</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">持仓股票数</div>
+      <div class="value">2只</div>
+      <div class="sub">集中持仓策略</div>
+    </div>
+    <div class="metric-card">
+      <div class="label">投资主题</div>
+      <div class="value" style="font-size:18px;">机器人</div>
+      <div class="sub">具身智能 + 核心材料</div>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>股票名称</th>
+        <th>代码</th>
+        <th>持仓成本</th>
+        <th>持仓股数</th>
+        <th>估算成本价</th>
+        <th>占组合比</th>
+        <th>投资逻辑</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>金发科技</strong></td>
+        <td>600143</td>
+        <td>¥120,700</td>
+        <td>6,800股</td>
+        <td>≈17.75元/股</td>
+        <td><strong>88.7%</strong></td>
+        <td>宇树科技供应链+机器人特种材料龙头</td>
+      </tr>
+      <tr>
+        <td><strong>利欧股份</strong></td>
+        <td>002131</td>
+        <td>¥15,312</td>
+        <td>2,200股</td>
+        <td>≈6.96元/股</td>
+        <td>11.3%</td>
+        <td>AI数字营销+机器人概念泵业</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout warning">
+    <strong>⚠ 组合结构诊断</strong>
+    当前组合存在明显的<b>集中度风险</b>：金发科技占比高达88.7%，单一标的集中度过高。一旦该股出现超预期利空，组合回撤将非常显著。建议在未来调仓中逐步引入第二核心持仓，将单票上限控制在60%以内。
+  </div>
+</div>
+
+<!-- ============= CH2: 宏观经济与政策环境 ============= -->
+<div class="section" id="ch2">
+  <div class="section-header">
+    <div class="num">Chapter 02</div>
+    <h2>宏观经济与政策环境分析</h2>
+    <div class="desc">2026年中国经济格局：新质生产力驱动的结构性慢牛</div>
+  </div>
+
+  <h3 style="font-size:18px;color:var(--primary);margin:20px 0 12px;">一、宏观经济定调</h3>
+  <table>
+    <thead><tr><th>维度</th><th>核心内容</th></tr></thead>
+    <tbody>
+      <tr><td><strong>GDP目标</strong></td><td>全年增速4.5%–5.0%，2026Q1已实现5.0%，处于目标区间上沿</td></tr>
+      <tr><td><strong>货币政策</strong></td><td>"适度宽松"，强调精准支持而非大规模刺激</td></tr>
+      <tr><td><strong>财政政策</strong></td><td>"更加积极有为"，保就业稳民生激活消费潜力</td></tr>
+      <tr><td><strong>核心转型</strong></td><td>新质生产力接替房地产成为支柱产业</td></tr>
+      <tr><td><strong>"十五五"方向</strong></td><td>科技自立自强，"8466"产业格局，重点突破半导体/AI/机器人/航天</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;color:var(--primary);margin:24px 0 12px;">二、机器人产业政策矩阵（2026年密集出台）</h3>
+  <table>
+    <thead><tr><th>时间</th><th>政策/事件</th><th>核心理念</th><th>对投资的启示</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>2026.01</td>
+        <td>工信部等八部门《"人工智能+制造"专项行动实施意见》</td>
+        <td>加快人形机器人产业化，建设中试基地和训练场</td>
+        <td><span class="policy-tag">政策驱动</span> 产业链上游材料/零部件率先受益</td>
+      </tr>
+      <tr>
+        <td>2026.03</td>
+        <td>《人形机器人与具身智能标准体系（2026版）》</td>
+        <td>首个全产业链国标，覆盖基础共性到安全伦理</td>
+        <td><span class="policy-tag">规范化</span> 行业从"炒概念"进入"看业绩"阶段</td>
+      </tr>
+      <tr>
+        <td>2026.03</td>
+        <td>政府工作报告</td>
+        <td>机器人列为"走在世界前列"的创新成果</td>
+        <td><span class="policy-tag">顶层背书</span> 国家级战略定位确立</td>
+      </tr>
+      <tr>
+        <td>2026.03</td>
+        <td>国家AI产业投资基金（大基金三期）</td>
+        <td>首次出手具身智能赛道，参与银河通用25亿融资</td>
+        <td><span class="policy-tag">国家队进场</span> 资本+政策双轮驱动</td>
+      </tr>
+      <tr>
+        <td>2026.04</td>
+        <td>江苏省率先将人形机器人纳入以旧换新补贴</td>
+        <td>C端消费补贴落地</td>
+        <td><span class="policy-tag">消费刺激</span> 打开C端市场想象空间</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;color:var(--primary);margin:24px 0 12px;">三、全球经济格局与中国资产</h3>
+  <table>
+    <thead><tr><th>因素</th><th>现状</th><th>对中国A股影响</th></tr></thead>
+    <tbody>
+      <tr><td><strong>美联储降息</strong></td><td>推迟至2026Q4，美国通胀3.3%</td><td>短期外资流入放缓，中长期人民币升值预期增强</td></tr>
+      <tr><td><strong>中东局势</strong></td><td>布伦特原油突破100美元/桶</td><td>利好新能源替代+石化上游，但抬高制造业成本</td></tr>
+      <tr><td><strong>全球资本流向</strong></td><td>中东主权基金加速布局A股科技</td><td>A股科技资产成全球资本"新锚点"</td></tr>
+      <tr><td><strong>人民币汇率</strong></td><td>温和升值通道</td><td>提升中国资产吸引力，外资回流利好白马股</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout info">
+    <strong>📊 机构共识：2026年A股"科技成长+顺周期"双主线</strong>
+    中信建投、国泰海通、中金等主流券商一致判断：2026年A股从"拔估值"切换到"涨业绩"，算力牛+复苏牛并行。
+    机器人赛道处于<b>政策+产业+资本三重共振</b>的黄金窗口。2026年被视为人形机器人"量产元年"——中国出货量占全球84.7%。
+  </div>
+</div>
+
+<!-- ============= CH3: 金发科技深度分析 ============= -->
+<div class="section" id="ch3">
+  <div class="section-header">
+    <div class="num">Chapter 03</div>
+    <h2>金发科技（600143）深度分析</h2>
+    <div class="desc">改性塑料全球龙头 · 机器人特种材料核心供应商</div>
+  </div>
+
+  <div class="stock-header">
+    <div class="stock-code">600143 · 金发科技</div>
+    <div><span class="stock-rating rating-buy">综合评级：增持/买入</span></div>
+  </div>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:16px 0 10px;">核心投资逻辑</h3>
+  <p>金发科技并非简单的"宇树科技概念股"，而是<strong>机器人产业链上游关键材料供应商</strong>。公司研发的PEEK、PPA、LCP等特种工程塑料已批量应用于人形机器人/机器狗的关键零部件（关节、结构件等），PEEK密度仅为铝合金一半、钢铁的1/6，是机器人减重增效的核心材料。</p>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:20px 0 10px;">与宇树科技的真实关联</h3>
+  <table>
+    <thead><tr><th>关联维度</th><th>详情</th><th>评估</th></tr></thead>
+    <tbody>
+      <tr><td>持股路径</td><td>金发科技→金石成长基金（6.80%）→宇树科技（基金持股4.77%）</td><td>穿透仅0.32%，股权增值贡献有限</td></tr>
+      <tr><td>供应链合作</td><td>向宇树、优必选等头部机器人企业批量供应PEEK等特种材料</td><td><strong>核心价值所在</strong>——实物供应>股权概念</td></tr>
+      <tr><td>组织保障</td><td>已成立机器人材料项目研发团队，联合行业头部开发零部件方案</td><td>战略重视，非短期蹭热点</td></tr>
+      <tr><td>宇树IPO催化</td><td>2026.3.20上交所受理科创板IPO，募资42亿元</td><td>宇树上市将提升整个机器人供应链的关注度</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:20px 0 10px;">业绩表现与券商预测</h3>
+  <table>
+    <thead><tr><th>指标</th><th>2024实际</th><th>2025前三季</th><th>2026Q1实际</th><th>2026E（券商均值）</th></tr></thead>
+    <tbody>
+      <tr><td>营业收入</td><td>605.14亿</td><td>496.16亿(+22.6%)</td><td>155.90亿(-0.5%)</td><td>—</td></tr>
+      <tr><td>归母净利润</td><td>8.25亿(+160%)</td><td>10.65亿(+55.9%)</td><td>3.05亿(+23.7%)</td><td><strong>17-20亿</strong></td></tr>
+      <tr><td>新材料销量</td><td>—</td><td>2.4万吨(+54%)</td><td>8.76万吨(+56.4%)</td><td>全年高增预期</td></tr>
+      <tr><td>毛利率</td><td>≈11.5%</td><td>—</td><td>13.26%(+1.17pct)</td><td>持续改善</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:20px 0 10px;">主流券商目标价（2026年4月）</h3>
+  <table>
+    <thead><tr><th>券商</th><th>评级</th><th>2026E净利润</th><th>目标价</th><th>估值方法</th></tr></thead>
+    <tbody>
+      <tr><td>华泰证券</td><td>增持</td><td>18.8亿</td><td><strong>21.30元</strong></td><td>30x PE</td></tr>
+      <tr><td>国泰海通</td><td>增持</td><td>19.6亿</td><td><strong>22.59元</strong></td><td>30x PE</td></tr>
+      <tr><td>中信建投</td><td><strong>买入</strong></td><td>17.5亿</td><td>未明确</td><td>—</td></tr>
+      <tr><td>华鑫证券</td><td><strong>买入</strong></td><td>18.29亿</td><td>未明确</td><td>—</td></tr>
+      <tr><td>东方证券</td><td>增持</td><td>EPS 0.54</td><td><strong>17.82元</strong></td><td>33x PE</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout success">
+    <strong>✅ 看多逻辑</strong>
+    ① 改性塑料全球龙头地位稳固，业绩托底能力强；<br>
+    ② 新材料（PEEK/LCP/PPA）是机器人+AI算力的"卖铲人"，增长弹性大——2026Q1新材料销量同比+56.4%；<br>
+    ③ 海外基地（波兰/墨西哥/西班牙）加速投产，全球化布局降低单一市场风险；<br>
+    ④ 券商目标价17.82-22.59元，当前价（约17.75元成本价附近）处于目标区间低位。
+  </div>
+  <div class="callout danger">
+    <strong>⚠ 风险提示</strong>
+    ① 宇树科技穿透持股仅0.32%，"概念股"溢价随时可能消退；<br>
+    ② 整体毛利率仅13.26%，绿色石化板块（占营收约16%）仍在拖累；<br>
+    ③ 特种工程塑料虽增速快，但绝对值占比仍低（改性塑料销量的1-2%）；<br>
+    ④ 中东局势推高原油价格→石化原材料成本上升。
+  </div>
+</div>
+
+<!-- ============= CH4: 利欧股份深度分析 ============= -->
+<div class="section" id="ch4">
+  <div class="section-header">
+    <div class="num">Chapter 04</div>
+    <h2>利欧股份（002131）深度分析</h2>
+    <div class="desc">双主业转型阵痛 · AI数字营销能否撑起估值？</div>
+  </div>
+
+  <div class="stock-header">
+    <div class="stock-code">002131 · 利欧股份</div>
+    <div><span class="stock-rating rating-hold">综合评级：谨慎持有</span></div>
+  </div>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:16px 0 10px;">2025年"业绩变脸"事件回顾</h3>
+  <table>
+    <thead><tr><th>时间</th><th>事件</th><th>市场反应</th></tr></thead>
+    <tbody>
+      <tr><td>2026.01.31</td><td>预告2025年净利润1.90亿~2.50亿元</td><td>股价正面反馈</td></tr>
+      <tr><td>2026.04.23</td><td>修正预告：仅3000万~4500万元（下修超80%）</td><td><strong>股价暴跌，市场信任崩塌</strong></td></tr>
+      <tr><td>2026.04.30</td><td>年报正式公布：全年净利润约3374万元</td><td>连续下跌，人气大幅消耗</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:20px 0 10px;">2026Q1业绩速览</h3>
+  <table>
+    <thead><tr><th>指标</th><th>数据</th><th>同比变化</th><th>判断</th></tr></thead>
+    <tbody>
+      <tr><td>营业收入</td><td>51.01亿</td><td style="color:#1a7a3a;">+7.18%</td><td>尚可</td></tr>
+      <tr><td>归母净利润</td><td>3126.23万</td><td style="color:#c0392b;">-71.06%</td><td>大幅恶化</td></tr>
+      <tr><td>毛利率</td><td>6.84%</td><td style="color:#c0392b;">-19.44%</td><td>盈利空间压缩</td></tr>
+      <tr><td>净利率</td><td>0.43%</td><td style="color:#c0392b;">-79.66%</td><td>几乎无利润</td></tr>
+      <tr><td>经营性现金流</td><td>-0.09元/股</td><td style="color:#c0392b;">-1470%</td><td>现金流告急</td></tr>
+      <tr><td>应收账款/净利润</td><td>17259%</td><td>—</td><td>回款压力巨大</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:16px;color:var(--primary);margin:20px 0 10px;">双主业拆解</h3>
+  <table>
+    <thead><tr><th>业务板块</th><th>2026Q1表现</th><th>前景判断</th></tr></thead>
+    <tbody>
+      <tr><td><strong>数字营销（AI方向）</strong></td><td>营收和利润双位数增长，"多智能体协同"技术落地</td><td>✅ 有成长性，但需验证持续性</td></tr>
+      <tr><td><strong>机械制造（泵业）</strong></td><td>收入下降、毛利率下行，受地缘冲突+原材料涨价+汇率影响</td><td>❌ 短期承压，财务费用激增1788%</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout warning">
+    <strong>⚡ 关键判断</strong>
+    利欧股份当前市值约471亿元，TTM市盈率93-110倍，对于一个2025年全年净利润仅3374万元、2026Q1净利润再降71%的公司来说，估值明显偏高。AI数字营销方向有潜力，但<b>业绩变脸</b>严重透支了市场信任。机械制造业务何时修复是关键观察点——产品调价已推进，但见效需要时间。
+  </div>
+  <div class="callout danger">
+    <strong>⚠ 核心风险</strong>
+    ① 应收账款畸高（占净利润17259%），一旦坏账将严重冲击利润；<br>
+    ② 近3年经营现金流均值/流动负债仅-2.87%，偿债能力存疑；<br>
+    ③ 基金持股比例0.00%，机构完全不关注；<br>
+    ④ 近3个月跌幅-29.77%，下跌趋势尚未明确止住。
+  </div>
+</div>
+
+<!-- ============= CH5: 季度/月度投资策略 ============= -->
+<div class="section" id="ch5">
+  <div class="section-header">
+    <div class="num">Chapter 05</div>
+    <h2>2026年季度与月度投资策略</h2>
+    <div class="desc">基于政策节奏、财报节点和产业催化剂的动态操作建议</div>
+  </div>
+
+  <!-- Q2 -->
+  <div class="timeline">
+    <div class="timeline-item">
+      <div class="timeline-marker q2">Q2 · 当前<br>5月-6月</div>
+      <div class="timeline-content">
+        <h4>第二季度策略：调仓优化窗口</h4>
+        <p>
+          <strong>宏观背景：</strong>Q1 GDP 5.0%符合预期，两会政策落地效果开始显现。宇树科技IPO审核推进中，机器人板块情绪有望反复活跃。<br>
+          <strong>金发科技：</strong>Q1净利润+23.7%、新材料销量+56.4%，业绩向上趋势明确。5-6月关注宇树科技IPO进展（问询/回复），可能带来阶段性催化。若股价回调至券商目标区间下限（17.8元以下），可视作安全边际较高的位置。<br>
+          <strong>利欧股份：</strong>Q1净利润暴跌71%，需密切关注6月是否有半年报预披露。若Q2仍无改善迹象，建议考虑<b>减仓或置换</b>。
+        </p>
+      </div>
+    </div>
+
+    <!-- Q3 -->
+    <div class="timeline-item">
+      <div class="timeline-marker q3">Q3<br>7月-9月</div>
+      <div class="timeline-content">
+        <h4>第三季度策略：半年报大考 + 产业加速期</h4>
+        <p>
+          <strong>核心事件：</strong>① 8月半年报密集披露——验证金发科技新材料能否持续高增（关键指标：新材料销量增速是否维持50%+）；② 宇树科技IPO审核关键期——若过会将是重大催化；③ 特斯拉Optimus V3可能发布——全球机器人产业链共振。<br>
+          <strong>金发科技：</strong>若半年报验证新材料继续放量+毛利率改善，可考虑在回调时适度加仓（单票上限60%）。关注海外基地产能爬坡进度。<br>
+          <strong>利欧股份：</strong>半年报是决定性节点——若机械制造业务仍无起色+AI营销增速放缓，强烈建议<b>清仓置换</b>到机器人核心零部件龙头（如绿的谐波、双环传动等）。
+        </p>
+      </div>
+    </div>
+
+    <!-- Q4 -->
+    <div class="timeline-item">
+      <div class="timeline-marker q4">Q4<br>10月-12月</div>
+      <div class="timeline-content">
+        <h4>第四季度策略：年终收官 + 布局来年</h4>
+        <p>
+          <strong>核心事件：</strong>① 10月Q3季报；② 11月中央经济工作会议——定调2027年政策方向；③ 年末机构调仓+估值切换行情；④ 宇树科技若已上市，关注解禁节奏。<br>
+          <strong>操作思路：</strong>若前三季度金发科技业绩符合预期（全年净利17亿+），Q4可能迎来估值切换至2027年（券商预测23-26亿），对应目标价有上行空间。年终做好组合再平衡，考虑纳入2027年主线品种。<br>
+          <strong>关注新方向：</strong>中央经济工作会议可能释放的新兴产业信号（低空经济？量子科技？核聚变？），为2027年提前布局。
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- MONTHLY CARDS -->
+  <h3 style="font-size:18px;color:var(--primary);margin:32px 0 16px;">月度操作日历（2026年5月-12月）</h3>
+  <div class="month-grid">
+    <div class="month-card">
+      <h5>📅 5月</h5>
+      <ul>
+        <li>评估Q1季报完整数据</li>
+        <li>关注宇树科技IPO问询</li>
+        <li>观察利欧股份是否止跌</li>
+        <li><b>行动：制定调仓计划</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 6月</h5>
+      <ul>
+        <li>半年报业绩预告窗口</li>
+        <li>关注金发科技Q2经营数据</li>
+        <li>利欧若预亏→果断减仓</li>
+        <li><b>行动：半年报前瞻布局</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 7月</h5>
+      <ul>
+        <li>半年报开始披露</li>
+        <li>机器人行业大会密集</li>
+        <li>关注特斯拉Optimus动态</li>
+        <li><b>行动：验证新材料增速</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 8月</h5>
+      <ul>
+        <li>半年报披露高峰期</li>
+        <li>利欧股份半年报大考</li>
+        <li>宇树IPO问询回复关键期</li>
+        <li><b>行动：调仓/加仓决策月</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 9月</h5>
+      <ul>
+        <li>Q3收官前的布局窗口</li>
+        <li>金发科技海外产能评估</li>
+        <li>关注美联储政策信号</li>
+        <li><b>行动：年末行情预热</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 10月</h5>
+      <ul>
+        <li>Q3季报密集披露</li>
+        <li>金发全年业绩可预测性提升</li>
+        <li>机构年末调仓开始</li>
+        <li><b>行动：确认全年收益预期</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 11月</h5>
+      <ul>
+        <li>中央经济工作会议</li>
+        <li>下一年政策方向明朗</li>
+        <li>年末估值切换行情启动</li>
+        <li><b>行动：2027年布局</b></li>
+      </ul>
+    </div>
+    <div class="month-card">
+      <h5>📅 12月</h5>
+      <ul>
+        <li>年末收官+机构排名</li>
+        <li>组合年终再平衡</li>
+        <li>金发科技全年业绩确认</li>
+        <li><b>行动：年终总结+新年计划</b></li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>📌 全年关键催化剂时间表</strong>
+    ① <b>宇树科技IPO进展</b>（全年持续，Q2-Q3上会关键期）→ 机器人产业链情绪催化；<br>
+    ② <b>特斯拉Optimus V3发布</b>（预期H2）→ 全球机器人供应链共振；<br>
+    ③ <b>半年报/年报</b>（8月/次年3月）→ 验证业绩增长质量；<br>
+    ④ <b>中央经济工作会议</b>（11月）→ 2027年政策方向定调。
+  </div>
+</div>
+
+<!-- ============= CH6: 风险管理 ============= -->
+<div class="section" id="ch6">
+  <div class="section-header">
+    <div class="num">Chapter 06</div>
+    <h2>风险管理与资产配置建议</h2>
+    <div class="desc">控制回撤 · 优化组合 · 保护本金</div>
+  </div>
+
+  <h3 style="font-size:18px;color:var(--primary);margin-bottom:12px;">一、组合优化建议</h3>
+  <table>
+    <thead><tr><th>当前状态</th><th>问题</th><th>建议优化方向</th><th>执行节点</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>金发科技占88.7%</td>
+        <td>单票集中度过高</td>
+        <td>逐步降至60%以下，引入第二核心标的</td>
+        <td>2026H2逢高减持</td>
+      </tr>
+      <tr>
+        <td>利欧股份占11.3%</td>
+        <td>业绩变脸+估值虚高</td>
+        <td>考虑置换为机器人核心零部件龙头</td>
+        <td>8月半年报后决策</td>
+      </tr>
+      <tr>
+        <td>无现金仓位</td>
+        <td>缺乏抄底/加仓弹药</td>
+        <td>保留10-20%现金应对波动</td>
+        <td>逐步建立</td>
+      </tr>
+      <tr>
+        <td>全仓机器人主题</td>
+        <td>行业集中度风险</td>
+        <td>可配置10-20%红利/消费底仓对冲</td>
+        <td>Q3-Q4逐步布局</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;color:var(--primary);margin:24px 0 12px;">二、替代标的参考（机器人产业链核心环节）</h3>
+  <table>
+    <thead><tr><th>环节</th><th>代表标的</th><th>逻辑</th><th>适合场景</th></tr></thead>
+    <tbody>
+      <tr><td>减速器</td><td>绿的谐波、双环传动</td><td>机器人关节核心，技术壁垒高</td><td>置换利欧股份或新增配置</td></tr>
+      <tr><td>执行器/传感器</td><td>拓普集团、奥比中光</td><td>特斯拉Optimus供应链</td><td>分散化配置</td></tr>
+      <tr><td>AI/控制</td><td>科大讯飞、汇川技术</td><td>机器人"大脑"+工控龙头</td><td>长期底仓</td></tr>
+      <tr><td>材料</td><td>金发科技（已持有）</td><td>继续作为核心持仓</td><td>维持配置</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;color:var(--primary);margin:24px 0 12px;">三、风险控制纪律</h3>
+  <table>
+    <thead><tr><th>类型</th><th>纪律</th></tr></thead>
+    <tbody>
+      <tr><td><strong>单票止损线</strong></td><td>单只股票从买入价下跌20%，强制止损</td></tr>
+      <tr><td><strong>组合回撤控制</strong></td><td>组合总回撤超过15%，减仓至50%以下</td></tr>
+      <tr><td><strong>业绩变脸应对</strong></td><td>持仓标的出现业绩预告下修超30%，无条件减半仓</td></tr>
+      <tr><td><strong>概念退潮应对</strong></td><td>若机器人板块整体回调超25%，评估是否清仓非核心标的</td></tr>
+      <tr><td><strong>再平衡频率</strong></td><td>每季度末审视组合，单票偏离目标配置±15%则触发再平衡</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout info">
+    <strong>💡 关键思路：从"押注"到"配置"</strong>
+    您当前的投资本质上是<b>主题押注</b>——全仓机器人赛道，重仓单一个股。这在牛市中可能带来超额收益，但在波动市中回撤剧烈。
+    建议逐步向<b>核心-卫星策略</b>过渡：<br>
+    · <b>核心仓位（60-70%）</b>：金发科技等确定性较高的标的；<br>
+    · <b>卫星仓位（20-30%）</b>：机器人产业链其他环节、低空经济等新兴方向；<br>
+    · <b>防御仓位（10-20%）</b>：现金或红利ETF，应对极端波动。
+  </div>
+</div>
+
+<!-- ============= DISCLAIMER ============= -->
+<div class="disclaimer">
+  <h4>⚠ 免责声明</h4>
+  <p>
+    本报告由AI助手基于公开信息自动生成，仅供个人学习与参考之用，<strong>不构成任何形式的投资建议</strong>。
+  </p>
+  <p>
+    报告中引用的数据来源包括但不限于：东方财富、证券之星、新浪财经、人民网、证券日报、经济日报、华泰证券研报、国泰海通研报、中信建投研报、华鑫证券研报、东方证券研报、国信证券研报、申万宏源研报、摩根士丹利研究等公开渠道。
+  </p>
+  <p>
+    <strong>股市有风险，投资需谨慎。</strong>股票市场存在不可预测的波动，过往表现不代表未来收益。任何投资决策均应以个人独立判断为准，必要时应咨询持牌专业投资顾问。作者不对因使用本报告中的任何信息而产生的直接或间接损失承担责任。
+  </p>
+  <p style="margin-top:12px;">
+    <strong>报告日期：</strong>2026年5月11日 | <strong>数据截止：</strong>2026年5月上旬公开信息
+  </p>
+</div>
+
+<div class="footer">
+  <p>2026 Investment Analysis & Recommendations · 个人投资参考 · 不构成投资建议</p>
+  <p style="margin-top:4px;">Generated on 2026-05-11 · Powered by AI Research</p>
+</div>
+
+</div><!-- container -->
+
+</body>
+</html>

@@ -1,0 +1,1208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2026年A股低位潜力股推荐报告 | 股价＜20元精选</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+  :root {
+    --bg: #0a1628;
+    --card-bg: #0f1f3a;
+    --accent: #c9a84c;
+    --accent2: #2ecc71;
+    --accent3: #e74c3c;
+    --text: #e8e8e8;
+    --text-muted: #a0a8b8;
+    --border: #1e3050;
+    --tag-bg: #152540;
+    --highlight: #1a3050;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+    -webkit-text-size-adjust: 100%;
+    -ms-text-size-adjust: 100%;
+  }
+
+  /* ===== PRINT / PDF PAGE CONTROL ===== */
+  @page {
+    margin: 12mm 10mm;
+    size: A4;
+  }
+
+  /* Avoid breaking inside cards, tables, and key blocks */
+  .stock-card, .macro-card, .quarter-card, .sector-intro,
+  .callout, .risk-box, .rationale, .summary-table {
+    page-break-inside: avoid;
+  }
+
+  /* Force page break before each major sector heading */
+  h2 {
+    page-break-before: always;
+    page-break-after: avoid;
+  }
+  h2:first-of-type { page-break-before: avoid; }
+
+  /* Keep heading with following content */
+  h3, h4 {
+    page-break-after: avoid;
+  }
+
+  /* Prevent table headers from being orphaned */
+  .summary-table thead { display: table-header-group; }
+  .summary-table tr { page-break-inside: avoid; }
+
+  /* Full-width for PDF/mobile */
+  .content, .cover {
+    max-width: 100%;
+  }
+
+  /* Cover */
+  .cover {
+    background: linear-gradient(135deg, #050d1a 0%, #0a1f3f 40%, #0d1a30 100%);
+    padding: 50px 24px 40px;
+    text-align: center;
+    border-bottom: 3px solid var(--accent);
+    position: relative;
+    overflow: hidden;
+  }
+  .cover::before {
+    content: '';
+    position: absolute;
+    top: -50%; left: -50%;
+    width: 200%; height: 200%;
+    background: radial-gradient(circle at 30% 50%, rgba(201,168,76,0.08) 0%, transparent 60%),
+                radial-gradient(circle at 70% 30%, rgba(46,204,113,0.05) 0%, transparent 50%);
+  }
+  .cover h1 {
+    font-size: clamp(1.4em, 4vw, 2.6em);
+    font-weight: 900;
+    color: #fff;
+    position: relative;
+    letter-spacing: 0.05em;
+  }
+  .cover h1 span { color: var(--accent); white-space: nowrap; }
+  .cover .subtitle {
+    font-size: clamp(0.85em, 1.8vw, 1.15em);
+    color: var(--text-muted);
+    margin-top: 16px;
+    position: relative;
+  }
+  .cover .meta {
+    margin-top: 32px;
+    font-size: clamp(0.72em, 1.4vw, 0.9em);
+    color: #6a7a90;
+    position: relative;
+    line-height: 1.8;
+  }
+  .cover .disclaimer-badge {
+    display: inline-block;
+    margin-top: 24px;
+    padding: 8px 18px;
+    border: 1px solid var(--accent3);
+    color: var(--accent3);
+    border-radius: 4px;
+    font-size: 0.8em;
+    font-weight: 500;
+    position: relative;
+  }
+
+  /* Content */
+  .content { max-width: 960px; margin: 0 auto; padding: 28px 18px; }
+
+  h2 {
+    font-size: 1.55em;
+    color: var(--accent);
+    border-bottom: 2px solid var(--border);
+    padding-bottom: 10px;
+    margin: 44px 0 22px;
+    font-weight: 700;
+  }
+  h3 {
+    font-size: 1.2em;
+    color: #d0d8e8;
+    margin: 28px 0 14px;
+    font-weight: 600;
+  }
+  h4 {
+    font-size: 1.05em;
+    color: #c0c8d8;
+    margin: 20px 0 10px;
+    font-weight: 500;
+  }
+
+  p { margin-bottom: 12px; color: #c8d0dc; }
+
+  /* Cards */
+  .macro-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 20px 0;
+  }
+  .macro-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px 22px;
+  }
+  .macro-card .icon { font-size: 1.6em; margin-bottom: 8px; }
+  .macro-card h4 { margin: 0 0 8px; color: var(--accent); font-size: 1em; }
+  .macro-card p { font-size: 0.88em; color: var(--text-muted); margin: 0; }
+
+  /* Stock cards */
+  .stock-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 8px;
+    padding: 24px 28px;
+    margin: 20px 0;
+  }
+  .stock-card.recommend { border-left-color: var(--accent2); }
+  .stock-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 14px;
+  }
+  .stock-name {
+    font-size: 1.3em;
+    font-weight: 700;
+    color: #fff;
+  }
+  .stock-code {
+    font-size: 0.85em;
+    color: var(--text-muted);
+    font-weight: 400;
+    margin-left: 8px;
+  }
+  .stock-price {
+    background: var(--accent);
+    color: #0a1628;
+    padding: 4px 14px;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 0.9em;
+    white-space: nowrap;
+  }
+  .stock-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 14px;
+  }
+  .stock-tags span {
+    background: var(--tag-bg);
+    color: var(--accent);
+    padding: 3px 12px;
+    border-radius: 12px;
+    font-size: 0.78em;
+    border: 1px solid rgba(201,168,76,0.3);
+  }
+
+  .analysis-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px 20px;
+    margin: 12px 0;
+  }
+  .analysis-item {
+    font-size: 0.88em;
+  }
+  .analysis-item .label {
+    color: var(--text-muted);
+    font-size: 0.82em;
+  }
+  .analysis-item .value {
+    color: #d0d8e8;
+    font-weight: 500;
+  }
+
+  .rationale {
+    background: var(--highlight);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-top: 14px;
+    font-size: 0.9em;
+    color: #b8c4d6;
+  }
+  .rationale strong { color: var(--accent); }
+
+  /* Sector intro */
+  .sector-intro {
+    background: linear-gradient(135deg, rgba(201,168,76,0.08), rgba(201,168,76,0.02));
+    border: 1px solid rgba(201,168,76,0.2);
+    border-radius: 8px;
+    padding: 18px 22px;
+    margin: 16px 0;
+    font-size: 0.9em;
+  }
+  .sector-intro .policy-tag {
+    display: inline-block;
+    background: rgba(201,168,76,0.2);
+    color: var(--accent);
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 0.8em;
+    margin-right: 6px;
+  }
+
+  /* Quarter plan */
+  .quarter-timeline {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    margin: 20px 0;
+  }
+  .quarter-card {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    text-align: center;
+  }
+  .quarter-card .q-label {
+    font-size: 0.85em;
+    color: var(--accent);
+    font-weight: 600;
+    margin-bottom: 6px;
+  }
+  .quarter-card .q-theme {
+    font-size: 1.05em;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .quarter-card .q-detail {
+    font-size: 0.82em;
+    color: var(--text-muted);
+    line-height: 1.6;
+  }
+
+  /* Risk */
+  .risk-box {
+    background: rgba(231,76,60,0.08);
+    border: 2px solid rgba(231,76,60,0.4);
+    border-radius: 8px;
+    padding: 24px 28px;
+    margin: 20px 0;
+  }
+  .risk-box h3 { color: var(--accent3); margin-top: 0; }
+  .risk-box ul { color: #d0b0b0; font-size: 0.9em; padding-left: 20px; }
+  .risk-box ul li { margin-bottom: 8px; }
+
+  /* Summary table */
+  .summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 0.88em;
+  }
+  .summary-table th {
+    background: var(--card-bg);
+    color: var(--accent);
+    padding: 12px 14px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+  }
+  .summary-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    color: #c8d0dc;
+  }
+  .summary-table tr:hover td { background: rgba(201,168,76,0.04); }
+  .summary-table .star { color: var(--accent); }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 40px;
+    color: #4a5a70;
+    font-size: 0.82em;
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+  }
+
+  .callout {
+    background: rgba(201,168,76,0.08);
+    border-left: 3px solid var(--accent);
+    padding: 14px 20px;
+    border-radius: 4px;
+    margin: 16px 0;
+    font-size: 0.9em;
+  }
+
+  .score-bar {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+  }
+  .score-dot {
+    width: 16px; height: 8px;
+    border-radius: 4px;
+    background: var(--accent);
+    opacity: 0.3;
+  }
+  .score-dot.active { opacity: 1; }
+
+  @media print {
+    body { background: #fff; color: #000; }
+    .cover { background: #0a1628; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .stock-card, .macro-card, .quarter-card, .sector-intro, .risk-box, .rationale, .callout {
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+    }
+    @page { margin: 0; }
+  }
+
+  /* ===== MOBILE / SMALL SCREEN (< 768px) ===== */
+  @media (max-width: 768px) {
+    .content { padding: 16px 10px; }
+
+    h2 {
+      font-size: 1.25em;
+      page-break-before: always;
+      margin: 28px 0 14px;
+    }
+    h3 { font-size: 1.05em; }
+
+    /* Macro cards: single column */
+    .macro-grid {
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+
+    /* Stock card: compact */
+    .stock-card {
+      padding: 14px 12px;
+      margin: 12px 0;
+      page-break-inside: avoid;
+    }
+    .stock-header {
+      flex-direction: column;
+      gap: 6px;
+    }
+    .stock-name { font-size: 1.1em; }
+    .stock-price { font-size: 0.82em; padding: 3px 10px; align-self: flex-start; }
+
+    /* Analysis grid: stack single column */
+    .analysis-grid {
+      grid-template-columns: 1fr;
+      gap: 4px 0;
+    }
+    .analysis-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 8px;
+      font-size: 0.82em;
+      padding: 3px 0;
+      border-bottom: 1px dotted rgba(255,255,255,0.06);
+    }
+    .analysis-item .label { min-width: 60px; flex-shrink: 0; }
+    .analysis-item .value { text-align: right; }
+
+    /* Quarter timeline: single column */
+    .quarter-timeline {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .quarter-card { padding: 14px; }
+
+    /* Sector intro: compact */
+    .sector-intro {
+      font-size: 0.82em;
+      padding: 12px 14px;
+    }
+    .sector-intro .policy-tag {
+      font-size: 0.75em;
+      padding: 1px 7px;
+    }
+
+    /* Summary table: scrollable */
+    .summary-table {
+      font-size: 0.75em;
+    }
+    .summary-table th, .summary-table td {
+      padding: 8px 6px;
+    }
+
+    /* Callout & rationale */
+    .callout, .rationale {
+      font-size: 0.84em;
+      padding: 10px 14px;
+    }
+
+    /* Risk box */
+    .risk-box {
+      padding: 14px 16px;
+      page-break-inside: avoid;
+    }
+    .risk-box ul { font-size: 0.84em; padding-left: 16px; }
+
+    /* Footer */
+    .footer { padding: 20px 12px; font-size: 0.72em; }
+
+    .cover { padding: 36px 16px 28px; }
+  }
+
+  /* ===== TABLET (768px - 1024px) ===== */
+  @media (min-width: 769px) and (max-width: 1024px) {
+    .content { padding: 24px 28px; }
+    .macro-grid { grid-template-columns: repeat(2, 1fr); }
+    .quarter-timeline { grid-template-columns: repeat(2, 1fr); }
+    .analysis-grid { gap: 6px 14px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== COVER ===== -->
+<div class="cover">
+  <h1>2026年 <span>A股低位潜力股</span> 精选推荐</h1>
+  <div class="subtitle">聚焦政策主线 · 股价＜20元 · 机构研报深度筛选</div>
+  <div class="meta">
+    报告日期：2026年5月11日 &nbsp;|&nbsp; 数据来源：中信建投/华西/兴业/信达/天风/五矿等券商公开研报<br>
+    覆盖板块：机器人/商业航天/半导体/固态电池/有色金属/新能源基建
+  </div>
+  <div class="disclaimer-badge">⚠ 风险提示：本报告不构成投资建议，股市有风险，投资需谨慎</div>
+</div>
+
+<div class="content">
+
+<!-- ===== EXECUTIVE SUMMARY ===== -->
+<h2>一、宏观环境与政策总览</h2>
+
+<div class="macro-grid">
+  <div class="macro-card">
+    <div class="icon">📋</div>
+    <h4>2026年政府工作报告</h4>
+    <p>集成电路列为六大新兴支柱产业之首，航空航天、低空经济、新型储能、智能机器人并列。国家发改委预计六大产业产值2030年翻番至10万亿+。</p>
+  </div>
+  <div class="macro-card">
+    <div class="icon">💰</div>
+    <h4>货币政策</h4>
+    <p>适度宽松延续，财政赤字率4%，超长期特别国债1.3万亿（其中2000亿支持设备更新），专项债向新基建倾斜。</p>
+  </div>
+  <div class="macro-card">
+    <div class="icon">🤖</div>
+    <h4>机器人产业</h4>
+    <p>宇树科技科创板IPO受理（拟募资42亿），特斯拉Optimus V3预计7-8月量产。2026年为"AI+机器人规模落地元年"。</p>
+  </div>
+  <div class="macro-card">
+    <div class="icon">🛰</div>
+    <h4>商业航天</h4>
+    <p>5-9月密集发射窗口：长征十号乙首飞、蓝箭朱雀三号复用挑战、天舟/神舟任务。SpaceX估值达1.75-2万亿美元IPO预期。</p>
+  </div>
+  <div class="macro-card">
+    <div class="icon">🔋</div>
+    <h4>固态电池/储能</h4>
+    <p>26Q1全球储能电池出货216GWh（+117%），固态电池进入"中试线密集落地→产线建设→供应链确立"关键年。</p>
+  </div>
+  <div class="macro-card">
+    <div class="icon">⛏</div>
+    <h4>有色金属涨价</h4>
+    <p>全球铜缺口~80万吨，稀土Q2精矿定价环比+44.6%，锡连续两年短缺。供给刚性+AI/新能源需求爆发共振。</p>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>核心策略：</strong>"科技成长+顺周期"双主线配置。科技端聚焦机器人/商业航天/半导体/AI算力，顺周期端布局有色涨价链+新能源基建。A股26Q1整体净利润增速6.8%（25Q4为2.0%），盈利修复趋势确立。两融规模2.79万亿创历史新高，市场风险偏好持续回暖。
+</div>
+
+<!-- ===== SECTOR 1: 机器人 ===== -->
+<h2>二、板块一：机器人/具身智能</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> 政府工作报告六大新兴产业 | <span class="policy-tag">催化</span> 宇树科技IPO+特斯拉Optimus V3量产 | <span class="policy-tag">机构</span> 华创/渤海/信达维持"推荐"
+  <br>万得机器人指数5月初周涨+6.78%，板块从高点回调50%后爆发。"业绩扰动出清+事件催化临近"形成共振。
+</div>
+
+<!-- 巨轮智能 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">巨轮智能</span><span class="stock-code">002031 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~7.65元</span>
+  </div>
+  <div class="stock-tags">
+    <span>机器人关节</span><span>精密减速器</span><span>RV减速器</span><span>工业母机</span><span>轮胎模具龙头</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心产品</div>
+      <div class="value">机器人关节轴承、RV/谐波精密减速器、轮胎模具</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">行业地位</div>
+      <div class="value">国内机器人关节核心部件供应商，减速器国产替代先锋</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">受益方向</div>
+      <div class="value">人形机器人关节→精密减速器需求爆发式增长</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">估值优势</div>
+      <div class="value">低价股（~7.65元），市值适中，机器人板块弹性标的</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>人形机器人核心部件——精密减速器相当于机器人的"关节"，每台人形机器人需10-20个旋转关节，对应10-20套减速器。宇树科技IPO加速国内机器人产业链成熟，特斯拉Optimus量产直接拉动供应链需求。巨轮智能在RV减速器领域已实现技术突破并量产供货，叠加传统轮胎模具业务提供业绩安全垫。华创证券将"工业母机/减速器"列为机器人板块重点配置方向。<strong>政策关键词：</strong>新质生产力、智能制造2025、机器人+应用行动。
+  </div>
+</div>
+
+<!-- 埃斯顿 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">埃斯顿</span><span class="stock-code">002747 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~18.50元</span>
+  </div>
+  <div class="stock-tags">
+    <span>国产工业机器人第一</span><span>核心部件自主</span><span>人形机器人</span><span>Q1+674%</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">行业地位</div>
+      <div class="value">中国工业机器人出货量第一（MIR 2025数据），市占率持续提升</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">2026Q1业绩</div>
+      <div class="value">归母净利润同比+674.64%，经营质量大幅改善</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">2025年营收</div>
+      <div class="value">48.88亿元，同比+21.93%</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">券商评级</div>
+      <div class="value">国泰海通首次覆盖，目标价25.38元（对应26年5x PS）</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>国产工业机器人绝对龙头，拥有控制器、伺服系统、减速器等核心部件自主能力，是A股机器人板块"纯度"最高的标的之一。2026Q1业绩大爆发（+674%），经营拐点确认。国泰海通给出25.38元目标价，较当前价格仍有30%+上行空间。人形机器人时代，埃斯顿的运动控制技术可直接迁移至人形机器人领域。<strong>全球对标：</strong>发那科（FANUC）市值超3000亿人民币，埃斯顿目前市值仅~150亿，国产替代空间巨大。
+  </div>
+</div>
+
+<!-- ===== SECTOR 2: 商业航天 ===== -->
+<h2>三、板块二：商业航天/低轨卫星</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> "十五五"航天规划+卫星互联网新基建 | <span class="policy-tag">催化</span> 5-6月密集发射+SpaceX史上最大IPO | <span class="policy-tag">机构</span> 华西/西部/中信建投/华福"持续推荐"
+  <br>华西证券："2026年最确定的科技投资主线之一"。5-9月商业航天催化密集：长征十号乙首飞、朱雀三号复用、卫星互联网常态化发射。
+</div>
+
+<!-- 三维通信 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">三维通信</span><span class="stock-code">002115 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~15.42元</span>
+  </div>
+  <div class="stock-tags">
+    <span>航天测控</span><span>卫星通信</span><span>低轨星座</span><span>Q1+1540%</span><span>业绩暴增</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心业务</div>
+      <div class="value">航天测控通信、星地通信链路、天地组网全环节</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">2026Q1业绩</div>
+      <div class="value">归母净利润同比暴增约+1540%（一季度业绩预告）</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">催化事件</div>
+      <div class="value">天舟十号/神舟二十三号/朱雀三号等5-9月密集发射</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">行业空间</div>
+      <div class="value">低轨卫星互联网纳入新基建，千亿级市场启动</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>A股商业航天中业绩兑现度最高的标的之一。Q1净利润暴增1540%验证了航天测控/卫星通信业务的爆发力。公司深度卡位航天测控、星地通信、天地组网全环节，2026年5-9月密集发射窗口直接拉动在手订单交付。SpaceX预计以1.75-2万亿美元估值IPO，将大幅提升全球商业航天关注度和估值中枢。<strong>全球趋势：</strong>Starlink已发射7000+颗卫星，中国低轨星座（GW星座/千帆星座）建设才刚起步，差距=空间。
+  </div>
+</div>
+
+<!-- 飞沃科技 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">飞沃科技</span><span class="stock-code">301232 · 创业板</span>
+    </div>
+    <span class="stock-price">参考价 ~16-18元</span>
+  </div>
+  <div class="stock-tags">
+    <span>火箭紧固件</span><span>3D打印</span><span>低空经济</span><span>大飞机</span><span>机器人</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">航天业务</div>
+      <div class="value">火箭紧固件/结构件+金属3D打印，多型号火箭供应商</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">多线布局</div>
+      <div class="value">商业航天 + 低空经济无人机 + C919大飞机 + 机器人零部件</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">机构关注</div>
+      <div class="value">华福证券建议关注，近5日主力资金净流入1.51亿</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">资金热度</div>
+      <div class="value">日成交额14.84亿元，市场关注度快速升温</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>"商业航天+低空经济+机器人"三重稀缺标的。火箭紧固件是"小零件、高壁垒"赛道——一枚火箭有数万个紧固件，任何一个失效都可能导致任务失败，供应商认证壁垒极高。3D打印技术切入火箭关键结构件制造，减重+缩短交付周期。同时布局无人机（低空经济）和机器人零部件，多条政策主线交叉受益。<strong>风险提示：</strong>股价近期涨幅较大，注意回调风险，建议逢低布局。
+  </div>
+</div>
+
+<!-- ===== SECTOR 3: 半导体/AI算力 ===== -->
+<h2>四、板块三：半导体/AI算力</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> 六大新兴产业之首+大基金三期+国产替代绿色通道 | <span class="policy-tag">催化</span> AI推理需求爆发+端侧AI元年 | <span class="policy-tag">机构</span> 西部/山西/博时基金等"核心配置"
+  <br>两会代表建议为集成电路开辟资本市场"绿色通道"。三大云厂商集体涨价，DeepSeek-V4支持华为昇腾950，国产算力生态加速成熟。
+</div>
+
+<!-- 华天科技 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">华天科技</span><span class="stock-code">002185 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~15.12元</span>
+  </div>
+  <div class="stock-tags">
+    <span>半导体封测三巨头</span><span>先进封装</span><span>存储芯片</span><span>Chiplet</span><span>车规级</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">行业地位</div>
+      <div class="value">中国半导体封测三巨头之一（长电/通富/华天），全球前十</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">技术布局</div>
+      <div class="value">Chiplet先进封装 + 3D堆叠 + HBM存储封测 + 车规级</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">受益逻辑</div>
+      <div class="value">AI算力爆发→先进封装需求井喷，国产替代加速</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">估值水平</div>
+      <div class="value">封测板块PE处于历史中位偏低，安全边际较高</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>半导体产业链中"相对低估值+确定性受益"环节。AI芯片对先进封装（CoWoS/Chiplet）需求呈指数级增长，台积电CoWoS产能供不应求，国内封测龙头直接受益外溢效应。华天科技在Chiplet、3D封装领域布局领先，车规级封测业务受益于新能源车渗透率持续提升。相比动辄百倍PE的AI芯片设计公司，封测环节估值更合理，业绩确定性更强。<strong>政策关键：</strong>集成电路列为六大新兴产业之首，大基金三期重点扶持先进封装。
+  </div>
+</div>
+
+<!-- 光迅科技 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">光迅科技</span><span class="stock-code">002194 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~15.6-16.0元（支撑位）</span>
+  </div>
+  <div class="stock-tags">
+    <span>光芯片</span><span>光模块</span><span>国产替代</span><span>AI算力</span><span>5G/6G</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心产品</div>
+      <div class="value">光芯片（EML/DFB）+ 光模块 + 光器件全产业链</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">稀缺性</div>
+      <div class="value">A股少数实现光芯片自研自产的厂商，IDM模式</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">受益方向</div>
+      <div class="value">AI数据中心800G/1.6T光模块爆发 + 光芯片国产替代</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">技术壁垒</div>
+      <div class="value">光芯片是光模块核心，占成本50%+，国产化率不足20%</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>AI算力基建中"光模块→光芯片"的上游核心环节。三大云厂商算力集体涨价，数据中心从400G向800G/1.6T升级，光模块需求持续井喷。光迅科技是国内稀缺的IDM光芯片厂商（自研EML/DFB激光器芯片），光芯片是光模块成本占比最高的核心部件，国产化率不足20%，替代空间巨大。当前股价处于15.6-16.0元技术支撑位附近。<strong>全球视角：</strong>全球AI数据中心光模块市场规模预计2026年突破100亿美元。
+  </div>
+</div>
+
+<!-- ===== SECTOR 4: 固态电池/储能 ===== -->
+<h2>五、板块四：固态电池/新能源储能</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> 新型储能列为六大新兴产业 | <span class="policy-tag">催化</span> 固态电池中试线密集落地+碳酸锂涨价至18万/吨 | <span class="policy-tag">机构</span> 五矿/天风/万联"供需紧平衡+技术突破"
+  <br>26Q1全球储能电池出货216GWh（+117%），国内储能采招3月达81.9GWh（+138%）。固态电池进入产线建设+供应链确立关键年。
+</div>
+
+<!-- 国轩高科 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">国轩高科</span><span class="stock-code">002074 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~18-20元</span>
+  </div>
+  <div class="stock-tags">
+    <span>大众电芯</span><span>金石固态电池</span><span>储能</span><span>磷酸铁锂</span><span>国际化</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心亮点</div>
+      <div class="value">金石全固态电池中试线良率达90%，大众标准电芯放量</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">大众供应链</div>
+      <div class="value">大众汽车中国唯一战略投资电池企业，定点订单明确</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">券商评级</div>
+      <div class="value">华创"推荐"目标价44.27元；华安"买入"</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">全球布局</div>
+      <div class="value">美国/德国/越南/印度基地，全球化产能布局领先</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>固态电池赛道中兼具"低价+大众背书+全固态突破"三重优势。公司金石全固态电池中试线良率达到90%——这在全固态电池领域属于全球领先水平。大众汽车战略入股并深度绑定（大众标准电芯定点），为公司提供稳定的下游需求保障。华创证券给出44.27元目标价，潜在上行空间超100%。储能电池业务同样受益于全球储能装机量50%+增速。<strong>全球对标：</strong>QuantumScape（美国固态电池公司）市值~50亿美元，国轩技术进度不落后但估值大幅折价。
+  </div>
+</div>
+
+<!-- 德方纳米 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">德方纳米</span><span class="stock-code">300769 · 创业板</span>
+    </div>
+    <span class="stock-price">参考价 ~15-18元</span>
+  </div>
+  <div class="stock-tags">
+    <span>磷酸铁锂龙头</span><span>Q1+258%</span><span>半固态材料</span><span>补锂增强剂</span><span>满产满销</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">2026Q1业绩</div>
+      <div class="value">归母净利润2.65亿元，同比暴增+258%</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">经营状态</div>
+      <div class="value">满产满销，磷酸铁锂正极材料景气度持续回升</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">固态布局</div>
+      <div class="value">补锂增强剂在半固态电池领域已稳定交付</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">机构关注</div>
+      <div class="value">中信证券/光大证券密集调研，行业拐点确认</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>磷酸铁锂正极材料绝对龙头，2026Q1业绩暴增258%验证行业拐点。碳酸锂价格回升至18万元/吨（较底部翻倍），磷酸铁锂正极价格跟涨，公司直接受益于涨价弹性。补锂增强剂已切入半固态电池供应链，为未来全固态电池材料做技术储备。当前满产满销、量价齐升，26年全年业绩高增确定性较强。<strong>行业趋势：</strong>全球储能电池出货26Q1同比+117%，磷酸铁锂在储能领域占据绝对主流（占比>90%）。
+  </div>
+</div>
+
+<!-- ===== SECTOR 5: 有色金属 ===== -->
+<h2>六、板块五：有色金属/稀土小金属</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> 工信部有色稳增长方案+稀土管理条例 | <span class="policy-tag">催化</span> 全球供给刚性+AI/新能源需求爆发 | <span class="policy-tag">机构</span> 中信建投/兴业/国金"战略金属迎强成长"
+  <br>铜全球缺口~80万吨，稀土Q2精矿定价环比+44.6%，锡连续两年短缺。中信建投："科技与稀缺共振，战略金属及新材料迎强成长。"
+</div>
+
+<!-- 驰宏锌锗 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">驰宏锌锗</span><span class="stock-code">600497 · 上交所</span>
+    </div>
+    <span class="stock-price">参考价 ~6元</span>
+  </div>
+  <div class="stock-tags">
+    <span>锗龙头</span><span>锑</span><span>铋</span><span>稀散金属</span><span>Q1+34%</span><span>军工半导体</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心资源</div>
+      <div class="value">锗、锑、铋等稀散金属产量大幅增长，锌铅为安全垫</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">2026Q1业绩</div>
+      <div class="value">营收净利双位数增长，归母净利润同比+34%</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">锗的战略价值</div>
+      <div class="value">红外光学（军工）+ 半导体衬底 + 光纤通信核心材料</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">价格催化</div>
+      <div class="value">锗价受军工+半导体双重需求驱动，供应持续偏紧</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>A股最纯正的稀散金属标的之一，锗资源储量全国领先。锗是红外光学（导弹制导/夜视仪）、半导体衬底、光纤通信的不可替代材料，被多国列为关键矿产。全球地缘冲突加剧→红外武器需求攀升→锗需求持续增长。Q1净利润+34%验证涨价传导。当前股价仅~6元，市值~160亿，属于"大资源+小市值"的稀缺组合。兴业证券将驰宏锌锗列为有色板块重点标的。<strong>政策关键：</strong>中国对锗/锑/镓等关键矿产实施出口管制，全球供应链重构推升战略价值。
+  </div>
+</div>
+
+<!-- 盛和资源 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">盛和资源</span><span class="stock-code">600392 · 上交所</span>
+    </div>
+    <span class="stock-price">参考价 ~10-15元</span>
+  </div>
+  <div class="stock-tags">
+    <span>稀土全产业链</span><span>海外矿布局</span><span>永磁材料</span><span>机器人</span><span>新能源</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">产业链</div>
+      <div class="value">稀土矿采选→冶炼分离→金属加工→永磁材料全链条</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">海外资源</div>
+      <div class="value">格陵兰/美国/越南稀土矿权益，全球化资源布局</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">价格催化</div>
+      <div class="value">北方稀土Q2精矿定价环比+44.6%，稀土价格上行周期</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">需求驱动</div>
+      <div class="value">机器人电机（钕铁硼）+新能源车+风电，三引擎共振</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>稀土是机器人产业"卖铲人"——每台人形机器人用到大量钕铁硼永磁电机（手指关节、旋转关节均需高性能磁材）。北方稀土Q2精矿涨价44.6%确认行业景气上行。盛和资源拥有海外稀土矿权益（格陵兰/美国/越南），在稀土全球供应链重构中占据独特优势。同时公司向下游永磁材料延伸，直接受益于机器人和新能源车放量。<strong>地缘背景：</strong>中美科技博弈背景下，稀土作为中国最具话语权的战略资源，政策价值将持续重估。
+  </div>
+</div>
+
+<!-- ===== SECTOR 6: 新能源基建 ===== -->
+<h2>七、板块六：新能源基建/电力</h2>
+
+<div class="sector-intro">
+  <span class="policy-tag">政策</span> 国常会六张现代化基础设施网（水网/电网/算力网等）总投资超7万亿 | <span class="policy-tag">催化</span> 世界级AI数据中心电力缺口 | <span class="policy-tag">机构</span> 中信/兴业"低估值+高股息"
+  <br>"算电协同"——AI算力爆发带来巨大电力需求。四部委发布《关于促进人工智能与能源双向赋能的行动方案》。
+</div>
+
+<!-- 中国能建 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">中国能建</span><span class="stock-code">601868 · 上交所</span>
+    </div>
+    <span class="stock-price">参考价 ~2.50元</span>
+  </div>
+  <div class="stock-tags">
+    <span>全球能源基建龙头</span><span>央企</span><span>PE仅13x</span><span>特高压</span><span>新型电力系统</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">行业地位</div>
+      <div class="value">全球最大的电力工程承包商之一，覆盖全产业链</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">受益方向</div>
+      <div class="value">新型电力系统建设+特高压+核电+新能源+储能全包</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">估值</div>
+      <div class="value">PE仅约13倍，央企价值重估主线直接受益</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">股息率</div>
+      <div class="value">高股息属性，适合稳健型底仓配置</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>"AI尽头是电力"——全球AI数据中心电力需求呈指数级增长，算力网+电网协同建设成为2026年政策重点。国常会部署的六张现代化基础设施网总投资超7万亿，电力基建是最大受益方向。中国能建作为全球能源电力基建龙头，PE仅13倍，兼具"低估值+高股息+政策催化"三重优势，是组合中理想的防御性配置。<strong>全球视野：</strong>IEA预计全球电力需求增速将从2023年的2.7%加快至2026年的4%，AI数据中心是最主要增量来源。
+  </div>
+</div>
+
+<!-- 汉缆股份 -->
+<div class="stock-card recommend">
+  <div class="stock-header">
+    <div>
+      <span class="stock-name">汉缆股份</span><span class="stock-code">002498 · 深交所</span>
+    </div>
+    <span class="stock-price">参考价 ~8.38元</span>
+  </div>
+  <div class="stock-tags">
+    <span>特高压</span><span>海缆龙头</span><span>电网升级</span><span>海上风电</span><span>新基建</span>
+  </div>
+
+  <div class="analysis-grid">
+    <div class="analysis-item">
+      <div class="label">核心产品</div>
+      <div class="value">特高压电缆 + 海底电缆 + 高压超高压电力电缆</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">受益方向</div>
+      <div class="value">特高压电网建设加速 + 海上风电海缆需求爆发</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">行业壁垒</div>
+      <div class="value">海缆/特高压电缆认证壁垒极高，寡头竞争格局</div>
+    </div>
+    <div class="analysis-item">
+      <div class="label">政策催化</div>
+      <div class="value">国家电网2026年投资计划超6500亿元，历史新高</div>
+    </div>
+  </div>
+
+  <div class="rationale">
+    <strong>推荐理由：</strong>特高压+海缆双赛道龙头，直接受益于国家电网投资创历史新高（2026年超6500亿元）。海上风电进入深远海开发阶段，海缆价值量占比提升至10-15%，海缆市场增速远超电缆行业整体。特高压/海缆认证周期长（3-5年），汉缆的先发优势构成坚实护城河。股价仅~8.38元，属于"低价+垄断"稀缺组合。<strong>趋势判断：</strong>AI算力中心集群化建设+西电东送，特高压建设将进入新一轮加速周期。
+  </div>
+</div>
+
+<!-- ===== SUMMARY TABLE ===== -->
+<h2>八、推荐股票汇总</h2>
+
+<div style="overflow-x:auto; -webkit-overflow-scrolling:touch; margin:20px 0;">
+<table class="summary-table">
+  <thead>
+    <tr>
+      <th>板块</th>
+      <th>股票名称</th>
+      <th>代码</th>
+      <th>参考价(元)</th>
+      <th>核心亮点</th>
+      <th>综合评级</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>🤖 机器人</td>
+      <td><strong>巨轮智能</strong></td>
+      <td>002031</td>
+      <td>~7.65</td>
+      <td>机器人关节减速器，人形机器人核心部件</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>🤖 机器人</td>
+      <td><strong>埃斯顿</strong></td>
+      <td>002747</td>
+      <td>~18.50</td>
+      <td>国产工业机器人第一，Q1+674%，目标价25.38</td>
+      <td><span class="star">★★★★★</span></td>
+    </tr>
+    <tr>
+      <td>🛰 商业航天</td>
+      <td><strong>三维通信</strong></td>
+      <td>002115</td>
+      <td>~15.42</td>
+      <td>航天测控+卫星通信，Q1+1540%业绩爆发</td>
+      <td><span class="star">★★★★★</span></td>
+    </tr>
+    <tr>
+      <td>🛰 商业航天</td>
+      <td><strong>飞沃科技</strong></td>
+      <td>301232</td>
+      <td>~16-18</td>
+      <td>火箭紧固件+3D打印，航天+低空+机器人三重概念</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>💻 半导体</td>
+      <td><strong>华天科技</strong></td>
+      <td>002185</td>
+      <td>~15.12</td>
+      <td>封测三巨头，Chiplet先进封装+存储+车规</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>💻 半导体</td>
+      <td><strong>光迅科技</strong></td>
+      <td>002194</td>
+      <td>~15.6-16</td>
+      <td>光芯片IDM稀缺标的，AI光模块核心上游</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>🔋 固态电池</td>
+      <td><strong>国轩高科</strong></td>
+      <td>002074</td>
+      <td>~18-20</td>
+      <td>金石全固态中试良率90%+大众电芯放量</td>
+      <td><span class="star">★★★★★</span></td>
+    </tr>
+    <tr>
+      <td>🔋 新能源</td>
+      <td><strong>德方纳米</strong></td>
+      <td>300769</td>
+      <td>~15-18</td>
+      <td>磷酸铁锂龙头，Q1+258%，满产满销</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>⛏ 有色金属</td>
+      <td><strong>驰宏锌锗</strong></td>
+      <td>600497</td>
+      <td>~6.00</td>
+      <td>锗/锑/铋稀散金属龙头，Q1+34%，军工半导体</td>
+      <td><span class="star">★★★★★</span></td>
+    </tr>
+    <tr>
+      <td>⛏ 稀土</td>
+      <td><strong>盛和资源</strong></td>
+      <td>600392</td>
+      <td>~10-15</td>
+      <td>稀土全产业链+海外矿权益，机器人电机上游</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>⚡ 电力基建</td>
+      <td><strong>中国能建</strong></td>
+      <td>601868</td>
+      <td>~2.50</td>
+      <td>全球能源基建龙头，PE仅13x，央企价值重估</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+    <tr>
+      <td>⚡ 电力基建</td>
+      <td><strong>汉缆股份</strong></td>
+      <td>002498</td>
+      <td>~8.38</td>
+      <td>特高压+海缆龙头，国网投资历史新高</td>
+      <td><span class="star">★★★★☆</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ===== QUARTER STRATEGY ===== -->
+<h2>九、2026年季度投资策略建议</h2>
+
+<div class="quarter-timeline">
+  <div class="quarter-card">
+    <div class="q-label">Q1（1-3月）✅ 已过</div>
+    <div class="q-theme">AI算力+周期启动</div>
+    <div class="q-detail">
+      碳酸锂涨价至18万/吨，有色周期启动。<br>
+      两会确立六大新兴产业方向。<br>
+      机器人板块回调筑底。
+    </div>
+  </div>
+  <div class="quarter-card">
+    <div class="q-label">Q2（4-6月）📍 当前</div>
+    <div class="q-theme">商业航天+机器人</div>
+    <div class="q-detail">
+      5-6月密集发射窗口最强催化期。<br>
+      宇树科技IPO进展+特斯拉Optimus量产。<br>
+      有色涨价扩散（稀土+44%精矿涨价）。
+    </div>
+  </div>
+  <div class="quarter-card">
+    <div class="q-label">Q3（7-9月）🔮</div>
+    <div class="q-theme">机器人量产+固态电池</div>
+    <div class="q-detail">
+      Tesla Optimus V3 7-8月量产落地。<br>
+      固态电池中试线转量产关键验证期。<br>
+      中报业绩兑现度验证，去伪存真。
+    </div>
+  </div>
+  <div class="quarter-card">
+    <div class="q-label">Q4（10-12月）🔮</div>
+    <div class="q-theme">年底估值切换+央企</div>
+    <div class="q-detail">
+      "十五五"规划细则密集发布。<br>
+      年末估值切换行情，高成长标的获溢价。<br>
+      央企价值重估+高股息防御配置。
+    </div>
+  </div>
+</div>
+
+<div class="callout">
+  <strong>仓位建议（针对14.5万总资产）：</strong><br>
+  ① <strong>核心底仓（40-50%，约6-7万）</strong>：原有持仓金发科技继续持有（宇树科技IPO催化），配置中国能建/驰宏锌锗作防御仓<br>
+  ② <strong>主线进攻（30-40%，约4-6万）</strong>：商业航天（三维通信）+ 机器人（埃斯顿/巨轮智能）+ 固态电池（国轩高科）<br>
+  ③ <strong>机动仓位（10-20%，约1-3万）</strong>：半导体（华天科技/光迅科技）+ 有色金属（盛和资源），波段操作
+</div>
+
+<!-- ===== RISK ===== -->
+<h2>十、风险提示 ⚠</h2>
+
+<div class="risk-box">
+  <h3>⚠ 重要风险提示</h3>
+  <ul>
+    <li><strong>市场系统性风险：</strong>美联储货币政策超预期紧缩、全球经济衰退可能拖累A股整体表现。</li>
+    <li><strong>板块轮动风险：</strong>商业航天/机器人等热门板块短期涨幅已大（如商业航天5月8日单日暴涨8.72%），追高风险显著，建议逢低分批布局。</li>
+    <li><strong>业绩兑现风险：</strong>部分概念股暂无实质业绩支撑（如再升科技已公告航天业务"对业绩无重大影响"），需区分"真成长"与"概念炒作"。</li>
+    <li><strong>技术路线不确定：</strong>固态电池（硫化物/氧化物/聚合物）和人形机器人技术路线尚未收敛，存在技术替代风险。</li>
+    <li><strong>地缘政治风险：</strong>中美科技博弈、稀土出口管制、关税政策等可能对相关股票产生重大冲击。</li>
+    <li><strong>流动性风险：</strong>部分小市值股票流动性较差，大额买卖可能产生较大冲击成本。</li>
+    <li><strong>价格信息时效性：</strong>本报告股价为2026年5月11日前后参考价，实际价格请以实时行情为准。</li>
+  </ul>
+</div>
+
+<!-- ===== DISCLAIMER ===== -->
+<div class="risk-box" style="border-color: var(--accent); background: rgba(201,168,76,0.05);">
+  <h3 style="color: var(--accent);">📌 免责声明</h3>
+  <ul style="color: #c0b080;">
+    <li>本报告所有信息均来源于公开渠道（券商研报、财经媒体、公司公告等），仅供参考，<strong>不构成任何投资建议</strong>。</li>
+    <li>报告中提及的股票、价格、评级等信息均具有时效性，市场变化可能导致分析失效。</li>
+    <li>股票投资具有高风险性，过往业绩不代表未来表现，投资者应当基于自身的风险承受能力和投资目标进行独立判断。</li>
+    <li>作者不对因使用本报告中的任何信息所导致的任何直接或间接损失承担责任。</li>
+    <li><strong>投资有风险，入市需谨慎。</strong></li>
+  </ul>
+</div>
+
+<!-- ===== FOOTER ===== -->
+<div class="footer">
+  <p><strong>2026年A股低位潜力股精选推荐</strong> | 股价＜20元 · 政策主线 · 机构研报深度筛选</p>
+  <p>报告生成日期：2026年5月11日 | 数据截止：2026年5月11日</p>
+  <p style="margin-top:12px; color:#5a6a80;">
+    数据来源：中信建投证券 · 华西证券 · 兴业证券 · 信达证券 · 华创证券 · 天风证券 · 五矿证券 · 国泰海通证券 · 华福证券 · 东方财富 · 同花顺 · 证券时报 · 新浪财经
+  </p>
+</div>
+
+</div>
+
+</body>
+</html>
