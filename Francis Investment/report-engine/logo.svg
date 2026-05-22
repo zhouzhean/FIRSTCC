@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a2744"/>
+      <stop offset="100%" style="stop-color:#0a1628"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#e8c95c"/>
+      <stop offset="40%" style="stop-color:#c9a84c"/>
+      <stop offset="100%" style="stop-color:#8b6914"/>
+    </linearGradient>
+    <linearGradient id="goldLight" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#f0d878"/>
+      <stop offset="100%" style="stop-color:#c9a84c"/>
+    </linearGradient>
+    <filter id="glow">
+      <feDropShadow dx="0" dy="0" stdDeviation="3" flood-color="#c9a84c" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="10" y="10" width="180" height="180" rx="28" fill="url(#bg)"/>
+  <rect x="10" y="10" width="180" height="180" rx="28" fill="none" stroke="url(#gold)" stroke-width="3" filter="url(#glow)"/>
+
+  <!-- Inner decorative ring -->
+  <circle cx="100" cy="100" r="74" fill="none" stroke="url(#gold)" stroke-width="0.5" opacity="0.3"/>
+  <circle cx="100" cy="100" r="62" fill="none" stroke="url(#gold)" stroke-width="0.5" opacity="0.15"/>
+
+  <!-- FI Monogram -->
+  <text x="100" y="118" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="bold" font-size="82" fill="url(#goldLight)" letter-spacing="4" filter="url(#glow)">FI</text>
+
+  <!-- Subtitle -->
+  <text x="100" y="148" text-anchor="middle" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif" font-weight="600" font-size="15" fill="#c9a84c" letter-spacing="6" opacity="0.85">弗朗西斯投资</text>
+
+  <!-- Decorative line -->
+  <line x1="50" y1="158" x2="150" y2="158" stroke="#c9a84c" stroke-width="0.5" opacity="0.4"/>
+
+  <!-- Bottom dots -->
+  <circle cx="76" cy="170" r="2" fill="#c9a84c" opacity="0.5"/>
+  <circle cx="100" cy="170" r="2.5" fill="#c9a84c" opacity="0.7"/>
+  <circle cx="124" cy="170" r="2" fill="#c9a84c" opacity="0.5"/>
+</svg>

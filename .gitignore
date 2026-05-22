@@ -5,6 +5,9 @@
 *.env
 *.env.*
 
+# Email credentials
+send_mail.js
+
 # System files
 Thumbs.db
 Desktop.ini

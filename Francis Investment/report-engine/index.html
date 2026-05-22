@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Francis Investment · 报告引擎</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 40 40'><rect x='2' y='2' width='36' height='36' rx='8' fill='%23b8942c'/><text x='20' y='27' text-anchor='middle' font-family='Georgia,serif' font-weight='bold' font-size='22' fill='white'>FI</text></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <div class="toolbar-left">
+      <svg class="toolbar-logo" viewBox="0 0 44 44" width="38" height="38">
+        <defs>
+          <linearGradient id="logoGradH" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#d4a843"/>
+            <stop offset="50%" style="stop-color:#b8942c"/>
+            <stop offset="100%" style="stop-color:#8b6914"/>
+          </linearGradient>
+          <filter id="logoGlow">
+            <feDropShadow dx="0" dy="0" stdDeviation="1" flood-color="#b8942c" flood-opacity="0.3"/>
+          </filter>
+        </defs>
+        <rect x="3" y="3" width="38" height="38" rx="9" fill="url(#logoGradH)" filter="url(#logoGlow)"/>
+        <rect x="3" y="3" width="38" height="38" rx="9" fill="none" stroke="#fff" stroke-opacity="0.2" stroke-width="1.5"/>
+        <text x="22" y="30" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="bold" font-size="23" fill="#fff" letter-spacing="1">FI</text>
+      </svg>
+      <span class="toolbar-title">Francis <span class="accent">Investment</span></span>
+      <span class="toolbar-divider">|</span>
+      <span id="toolbar-date" class="toolbar-date">2026年5月15日</span>
+    </div>
+    <div class="toolbar-right">
+      <button id="btn-gen-pdf" class="btn btn-outline" title="生成PDF报告（含学术格式）" style="color:var(--accent);border-color:var(--accent);">生成PDF</button>
+      <button id="btn-send-pdf" class="btn btn-primary" title="发送PDF报告至邮箱">发送PDF至邮箱</button>
+    </div>
+  </div>
+
+  <!-- Status bar -->
+  <div id="status-bar">就绪</div>
+
+  <!-- Main layout: Sidebar + Content -->
+  <div id="main-layout">
+
+    <!-- ====== SIDEBAR ====== -->
+    <div id="sidebar">
+
+      <!-- Compact Calendar -->
+      <div id="calendar-widget"></div>
+
+      <!-- Section Navigation -->
+      <div id="section-nav">
+        <div class="section-nav-title">报告板块</div>
+        <div class="section-nav-list" id="section-nav-list">
+          <div class="section-nav-item active" data-section="cover">
+            <span class="section-nav-icon">📋</span>
+            <span class="section-nav-label">报告封面</span>
+          </div>
+          <div class="section-nav-item" data-section="newsPolicy">
+            <span class="section-nav-icon">📰</span>
+            <span class="section-nav-label">时政要点</span>
+          </div>
+          <div class="section-nav-item" data-section="marketOverview">
+            <span class="section-nav-icon">📊</span>
+            <span class="section-nav-label">大盘综述</span>
+          </div>
+          <div class="section-nav-item" data-section="holdingsAnalysis">
+            <span class="section-nav-icon">💼</span>
+            <span class="section-nav-label">持仓分析</span>
+          </div>
+          <div class="section-nav-item" data-section="sectorTracking">
+            <span class="section-nav-icon">🔥</span>
+            <span class="section-nav-label">板块跟踪</span>
+          </div>
+          <div class="section-nav-item" data-section="lowPricePicks">
+            <span class="section-nav-icon">💎</span>
+            <span class="section-nav-label">潜力股推荐</span>
+          </div>
+          <div class="section-nav-item" data-section="top5Ranking">
+            <span class="section-nav-icon">🏆</span>
+            <span class="section-nav-label">TOP5 排行</span>
+          </div>
+          <div class="section-nav-item" data-section="riskMatrix">
+            <span class="section-nav-icon">⚠️</span>
+            <span class="section-nav-label">风险矩阵</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Report List -->
+      <div id="report-list">
+        <div class="report-list-title">已有报告</div>
+        <div id="report-list-items"></div>
+      </div>
+    </div>
+
+    <!-- ====== CONTENT AREA ====== -->
+    <div id="content-panel">
+      <div class="content-header">
+        <span id="content-title">报告封面</span>
+      </div>
+      <div id="content-area">
+        <div class="content-placeholder">
+          <p>请从左侧日历选择日期，然后点击板块查看对应内容</p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Load all scripts in dependency order -->
+<script src="templates/css.js"></script>
+<script src="kline.js"></script>
+<script src="templates/cover.js"></script>
+<script src="templates/news-policy.js"></script>
+<script src="templates/market-overview.js"></script>
+<script src="templates/holdings-analysis.js"></script>
+<script src="templates/sector-tracking.js"></script>
+<script src="templates/low-price-picks.js"></script>
+<script src="templates/top5-ranking.js"></script>
+<script src="templates/risk-matrix.js"></script>
+<script src="templates/recommendation-history.js"></script>
+<script src="templates/disclaimer-footer.js"></script>
+<script src="data/reports-index.js"></script>
+<script src="data/recommendation-history.js"></script>
+<script src="data/2026-05-22/meta.js"></script>
+<script src="data/2026-05-22/section1_newsPolicy.js"></script>
+<script src="data/2026-05-22/section2_marketOverview.js"></script>
+<script src="data/2026-05-22/section3_holdingsAnalysis.js"></script>
+<script src="data/2026-05-22/section4_sectorTracking.js"></script>
+<script src="data/2026-05-22/section5_lowPricePicks.js"></script>
+<script src="data/2026-05-22/section6_top5Ranking.js"></script>
+<script src="data/2026-05-22/section7_riskMatrix.js"></script>
+<script src="renderer.js"></script>
+<script src="app.js"></script>
+
+</body>
+</html>

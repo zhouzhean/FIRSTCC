@@ -1,0 +1,331 @@
+{
+  "meta": {
+    "reportDate": "YYYY-MM-DD",
+    "reportTitle": "YYYY年M月D日 每日行情分析报告",
+    "subtitle": "",
+    "coreEvent": "",
+    "analysisTargets": ["", ""],
+    "coveredSectors": ["机器人", "商业航天", "半导体", "固态电池", "有色金属", "电力基建", "创新药", "军工"],
+    "dataDeadline": "",
+    "nextUpdate": ""
+  },
+
+  "section1_newsPolicy": {
+    "coreEvents": [
+      {
+        "dimension": "",
+        "content": "",
+        "impactAssessment": "",
+        "impactClass": "neutral"
+      }
+    ],
+    "impactForecast": {
+      "calloutType": "info",
+      "title": "对股市的综合影响预测",
+      "body": ""
+    },
+    "otherPolicies": [
+      {
+        "field": "",
+        "content": "",
+        "impact": ""
+      }
+    ],
+    "watchNote": {
+      "calloutType": "warning",
+      "title": "关键观察窗口",
+      "body": ""
+    }
+  },
+
+  "section2_marketOverview": {
+    "indices": {
+      "shanghai": { "name": "上证指数", "close": 0, "change": 0, "note": "" },
+      "shenzhen": { "name": "深证成指", "close": 0, "change": 0, "note": "" },
+      "chiNext": { "name": "创业板指", "close": 0, "change": 0, "note": "" },
+      "star50": { "name": "科创50", "close": 0, "change": 0, "note": "" },
+      "totalVolume": { "name": "成交额", "close": "", "change": null, "note": "" }
+    },
+    "indexDetailTable": [
+      { "name": "", "close": "", "change": "", "feature": "" }
+    ],
+    "intradayPattern": {
+      "calloutType": "info",
+      "title": "今日盘面特征",
+      "body": ""
+    },
+    "shortTermOutlook": {
+      "calloutType": "warning",
+      "title": "短期大势判断",
+      "body": ""
+    }
+  },
+
+  "section3_holdingsAnalysis": {
+    "stocks": [
+      {
+        "code": "600143",
+        "name": "金发科技",
+        "exchange": "上交所",
+        "price": 0,
+        "changePercent": 0,
+        "cardType": "hold",
+        "tags": [""],
+        "fundamentals": [
+          { "dimension": "", "data": "", "judgment": "", "judgmentClass": "flat" }
+        ],
+        "kline": {
+          "priceMin": 0,
+          "priceMax": 0,
+          "priceStep": 0,
+          "candles": [
+            { "date": "", "dayOfWeek": "", "open": 0, "high": 0, "low": 0, "close": 0, "volumeMoney": 0, "changePercent": 0, "feature": "", "highlighted": false }
+          ],
+          "ma5Values": [0, 0, 0, 0, 0],
+          "chartTitle": ""
+        },
+        "weeklyReview": "",
+        "monthlyReview": "",
+        "techAnalysis": {
+          "maSystem": "",
+          "maSystemClass": "signal-neutral",
+          "resistance": ["", ""],
+          "support": ["", ""],
+          "indicators": ""
+        },
+        "overallRating": {
+          "calloutType": "success",
+          "title": "",
+          "body": ""
+        }
+      },
+      {
+        "code": "002131",
+        "name": "利欧股份",
+        "exchange": "深交所",
+        "price": 0,
+        "changePercent": 0,
+        "cardType": "hold",
+        "tags": [""],
+        "fundamentals": [
+          { "dimension": "", "data": "", "judgment": "", "judgmentClass": "flat" }
+        ],
+        "kline": {
+          "priceMin": 0,
+          "priceMax": 0,
+          "priceStep": 0,
+          "candles": [
+            { "date": "", "dayOfWeek": "", "open": 0, "high": 0, "low": 0, "close": 0, "volumeMoney": 0, "changePercent": 0, "feature": "", "highlighted": false }
+          ],
+          "ma5Values": [0, 0, 0, 0, 0],
+          "chartTitle": ""
+        },
+        "weeklyReview": "",
+        "monthlyReview": "",
+        "techAnalysis": {
+          "maSystem": "",
+          "maSystemClass": "signal-neutral",
+          "resistance": ["", ""],
+          "support": ["", ""],
+          "indicators": ""
+        },
+        "overallRating": {
+          "calloutType": "success",
+          "title": "",
+          "body": ""
+        }
+      }
+    ]
+  },
+
+  "section4_sectorTracking": {
+    "sectors": [
+      { "emoji": "🤖", "name": "机器人/具身智能", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "🚀", "name": "商业航天", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "💻", "name": "半导体", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "🔋", "name": "固态电池", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "⛏️", "name": "有色金属", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "⚡", "name": "电力基建", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "💊", "name": "创新药", "impact": "", "impactClass": "neutral", "catalysts": "" },
+      { "emoji": "🛡️", "name": "军工", "impact": "", "impactClass": "neutral", "catalysts": "" }
+    ]
+  },
+
+  "section5_lowPricePicks": {
+    "filterCallout": {
+      "calloutType": "info",
+      "title": "筛选标准",
+      "body": "股价<10元 + 基本面可验证 + 所属板块有政策/产业催化 + 流动性充足（日成交>1亿）。每只股票从财务报表、K线技术面、董事会/公司治理、产业逻辑、机构态度、资金面六个维度进行全方面分析。"
+    },
+    "stocks": [
+      {
+        "medal": "🥇",
+        "name": "",
+        "code": "",
+        "exchange": "深交所",
+        "price": 0,
+        "changePercent": 0,
+        "priceColor": null,
+        "tags": [""],
+        "analysis": [
+          { "dimension": "", "content": "", "stars": "★★★", "ratingClass": "flat" }
+        ],
+        "conclusion": {
+          "calloutType": "success",
+          "title": "",
+          "body": ""
+        }
+      },
+      {
+        "medal": "🥈",
+        "name": "",
+        "code": "",
+        "exchange": "深交所",
+        "price": 0,
+        "changePercent": 0,
+        "priceColor": null,
+        "tags": [""],
+        "analysis": [
+          { "dimension": "", "content": "", "stars": "★★★", "ratingClass": "flat" }
+        ],
+        "conclusion": {
+          "calloutType": "success",
+          "title": "",
+          "body": ""
+        }
+      },
+      {
+        "medal": "🥉",
+        "name": "",
+        "code": "",
+        "exchange": "上交所",
+        "price": 0,
+        "changePercent": 0,
+        "priceColor": null,
+        "tags": [""],
+        "analysis": [
+          { "dimension": "", "content": "", "stars": "★★★", "ratingClass": "flat" }
+        ],
+        "conclusion": {
+          "calloutType": "success",
+          "title": "",
+          "body": ""
+        }
+      }
+    ]
+  },
+
+  "section6_top5Ranking": {
+    "infoCallout": {
+      "calloutType": "info",
+      "title": "排行说明",
+      "body": "综合基本面质量（PE/业绩增速/负债率）× 产业逻辑强度 × 当前价位安全边际 × 短期催化密度 × 风险可控性五个维度进行评分排序。"
+    },
+    "rankedStocks": [
+      {
+        "rank": 1,
+        "name": "",
+        "code": "",
+        "price": 0,
+        "pe": "",
+        "risk": "",
+        "riskClass": "up",
+        "suggestedPosition": "",
+        "oneLiner": "",
+        "fullLogic": "",
+        "borderColor": "#FFD700"
+      },
+      {
+        "rank": 2,
+        "name": "",
+        "code": "",
+        "price": 0,
+        "pe": "",
+        "risk": "",
+        "riskClass": "up",
+        "suggestedPosition": "",
+        "oneLiner": "",
+        "fullLogic": "",
+        "borderColor": "#C0C0C0"
+      },
+      {
+        "rank": 3,
+        "name": "",
+        "code": "",
+        "price": 0,
+        "pe": "",
+        "risk": "",
+        "riskClass": "up",
+        "suggestedPosition": "",
+        "oneLiner": "",
+        "fullLogic": "",
+        "borderColor": "#CD7F32"
+      },
+      {
+        "rank": 4,
+        "name": "",
+        "code": "",
+        "price": 0,
+        "pe": "",
+        "risk": "",
+        "riskClass": "up",
+        "suggestedPosition": "",
+        "oneLiner": "",
+        "fullLogic": "",
+        "borderColor": "#8B7355"
+      },
+      {
+        "rank": 5,
+        "name": "",
+        "code": "",
+        "price": 0,
+        "pe": "",
+        "risk": "",
+        "riskClass": "up",
+        "suggestedPosition": "",
+        "oneLiner": "",
+        "fullLogic": "",
+        "borderColor": "#5a6a80"
+      }
+    ],
+    "summaryTable": [
+      { "rank": 1, "name": "", "price": 0, "pe": "", "risk": "", "riskClass": "up", "position": "", "oneLiner": "" },
+      { "rank": 2, "name": "", "price": 0, "pe": "", "risk": "", "riskClass": "up", "position": "", "oneLiner": "" },
+      { "rank": 3, "name": "", "price": 0, "pe": "", "risk": "", "riskClass": "up", "position": "", "oneLiner": "" },
+      { "rank": 4, "name": "", "price": 0, "pe": "", "risk": "", "riskClass": "up", "position": "", "oneLiner": "" },
+      { "rank": 5, "name": "", "price": 0, "pe": "", "risk": "", "riskClass": "up", "position": "", "oneLiner": "" }
+    ],
+    "warningCallout": {
+      "calloutType": "warning",
+      "title": "排行使用须知",
+      "body": "① 本排行基于当日收盘数据，股价每日变动，需动态更新；\n② 排名1-2属于防御型标的适合底仓；排名3-5属于进攻型标的适合小仓位参与；\n③ 以上股票来自不同板块，天然分散行业风险；\n④ 所有推荐均不是买入建议，具体买卖时点和仓位需根据个人风险承受能力自行判断。"
+    }
+  },
+
+  "section7_riskMatrix": {
+    "risks": [
+      { "risk": "", "probability": "", "impact": "", "strategy": "" },
+      { "risk": "", "probability": "", "impact": "", "strategy": "" },
+      { "risk": "", "probability": "", "impact": "", "strategy": "" },
+      { "risk": "", "probability": "", "impact": "", "strategy": "" },
+      { "risk": "", "probability": "", "impact": "", "strategy": "" },
+      { "risk": "", "probability": "", "impact": "", "strategy": "" }
+    ],
+    "fiveDisciplines": {
+      "calloutType": "danger",
+      "title": "五条不可妥协的纪律",
+      "body": "① 单票止损-20%；\n② 不追涨停板；\n③ 单票上限60%；\n④ 不因概念买入，买入前必须确认PE/Q1业绩/主力资金至少满足两个；\n⑤ 保留至少5%现金缓冲。"
+    }
+  },
+
+  "disclaimer": {
+    "introLine": "本报告由AI助手基于公开信息自动生成，仅供个人学习与参考之用，不构成任何形式的投资建议。",
+    "sourceNote": "报告中所有股票价格数据截至收盘，来源包括东方财富、同花顺、证券时报、新浪财经、证券之星等公开渠道。",
+    "analysisNote": "特朗普访华相关分析基于公开新闻报道，实际后续影响可能与预期存在重大偏差。",
+    "techNote": "技术分析（K线、均线、MACD、BOLL、RSI等指标）属于统计性分析工具，信号存在滞后性和误导性，不应作为单一决策依据。",
+    "riskWarning": "股市有风险，投资需谨慎。过往表现不代表未来收益。",
+    "disclaimerBody": "",
+    "dateLine": "",
+    "footerHTML": ""
+  }
+}
