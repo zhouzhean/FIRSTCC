@@ -35,14 +35,16 @@ function createPortfolio() {
 
 function loadPortfolio() {
   ensureDir();
+  let pf;
   if (fs.existsSync(PORTFOLIO_FILE)) {
     try {
-      return JSON.parse(fs.readFileSync(PORTFOLIO_FILE, 'utf8'));
+      pf = JSON.parse(fs.readFileSync(PORTFOLIO_FILE, 'utf8'));
     } catch (e) {
       console.error('  Simfolio: failed to load portfolio, creating new one');
     }
   }
-  return createPortfolio();
+  if (!pf) pf = createPortfolio();
+  return migratePortfolio(pf);
 }
 
 function savePortfolio(pf) {
@@ -267,12 +269,15 @@ function executeBuy(pf, decision, date) {
     shares: decision.shares,
     avgCost: decision.price,
     currentPrice: decision.price,
+    peakPrice: decision.price,        // 移动止盈：历史最高价
+    trailingStopPrice: null,          // 移动止盈触发价（激活后设置）
     entryDate: date,
     entryReason: decision.reason,
   });
 
   const trade = {
     date: date,
+    time: new Date().toTimeString().slice(0, 8),
     action: 'buy',
     code: decision.code,
     name: decision.name,
@@ -306,6 +311,7 @@ function executeSell(pf, decision, date) {
 
   const trade = {
     date: date,
+    time: new Date().toTimeString().slice(0, 8),
     action: 'sell',
     code: decision.code,
     name: decision.name,
@@ -432,6 +438,213 @@ function resetPortfolio() {
   return pf;
 }
 
+// ---- Migration (向后兼容) ----
+
+function migratePortfolio(pf) {
+  let migrated = false;
+  for (const pos of pf.positions) {
+    if (pos.peakPrice === undefined) {
+      pos.peakPrice = pos.currentPrice || pos.avgCost;
+      migrated = true;
+    }
+    if (pos.trailingStopPrice === undefined) {
+      pos.trailingStopPrice = null;
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    savePortfolio(pf);
+  }
+  return pf;
+}
+
+// ---- Position Price Update (持仓价格刷新) ----
+
+function updatePositionPrices(pf, priceMap) {
+  for (const pos of pf.positions) {
+    const live = priceMap[pos.code];
+    if (live && live.price != null) {
+      pos.currentPrice = live.price;
+    }
+  }
+  savePortfolio(pf);
+}
+
+// ---- Trailing Stop (移动止盈) ----
+
+function updateTrailingStop(pf, priceMap) {
+  const ts = config.SCHEDULER.trailingStop;
+  if (!ts || !ts.enabled) return;
+
+  for (const pos of pf.positions) {
+    const live = priceMap[pos.code];
+    if (!live || live.price == null) continue;
+
+    const currentPrice = live.price;
+    const profitPct = (currentPrice - pos.avgCost) / pos.avgCost * 100;
+
+    // 更新最高价
+    if (currentPrice > pos.peakPrice) {
+      pos.peakPrice = currentPrice;
+    }
+
+    // 未激活：盈利不足 activationPct
+    if (profitPct < ts.activationPct) {
+      pos.trailingStopPrice = null;
+      continue;
+    }
+
+    // 根据盈利层级设置移动止盈价
+    const tiers = ts.tiers.sort((a, b) => b.profitPct - a.profitPct);
+    let trailOffset = null;
+    for (const tier of tiers) {
+      if (profitPct >= tier.profitPct) {
+        trailOffset = tier.trailOffset;
+        break;
+      }
+    }
+
+    if (trailOffset != null) {
+      const newStop = pos.peakPrice * (1 - trailOffset / 100);
+      // 移动止盈只升不降
+      if (pos.trailingStopPrice == null || newStop > pos.trailingStopPrice) {
+        pos.trailingStopPrice = Math.round(newStop * 100) / 100;
+      }
+    }
+  }
+  savePortfolio(pf);
+}
+
+// ---- Risk Threshold Check (风控检查) ----
+
+function checkRiskThresholds(pf, priceMap) {
+  const alerts = [];
+
+  for (const pos of pf.positions) {
+    const live = priceMap[pos.code];
+    if (!live || live.price == null) continue;
+
+    const currentPrice = live.price;
+    const pnlPct = (currentPrice - pos.avgCost) / pos.avgCost * 100;
+
+    // 1. 硬止损：-8%
+    if (pnlPct <= -8) {
+      alerts.push({
+        code: pos.code,
+        name: pos.name,
+        action: 'stop_loss',
+        priority: 'critical',
+        currentPrice,
+        pnlPct: Math.round(pnlPct * 100) / 100,
+        reason: '硬止损：亏损' + pnlPct.toFixed(1) + '%触发-8%止损线',
+      });
+      continue;
+    }
+
+    // 2. 移动止盈触发
+    if (pos.trailingStopPrice != null && currentPrice <= pos.trailingStopPrice) {
+      const peakProfit = ((pos.peakPrice - pos.avgCost) / pos.avgCost * 100);
+      alerts.push({
+        code: pos.code,
+        name: pos.name,
+        action: 'trailing_stop',
+        priority: 'high',
+        currentPrice,
+        pnlPct: Math.round(pnlPct * 100) / 100,
+        reason: '移动止盈：从最高+' + peakProfit.toFixed(1) + '%回撤，触发价¥' + pos.trailingStopPrice.toFixed(2),
+      });
+      continue;
+    }
+
+    // 3. 止盈：+25%触发
+    if (pnlPct > 25) {
+      alerts.push({
+        code: pos.code,
+        name: pos.name,
+        action: 'take_profit',
+        priority: 'medium',
+        currentPrice,
+        pnlPct: Math.round(pnlPct * 100) / 100,
+        reason: '止盈：盈利' + pnlPct.toFixed(1) + '%触发25%止盈线',
+      });
+      continue;
+    }
+
+    // 4. 接近止损预警（仅前端显示，不交易）
+    if (pnlPct <= -5 && pnlPct > -8) {
+      alerts.push({
+        code: pos.code,
+        name: pos.name,
+        action: 'warning',
+        priority: 'low',
+        currentPrice,
+        pnlPct: Math.round(pnlPct * 100) / 100,
+        reason: '预警：亏损' + pnlPct.toFixed(1) + '%，接近-8%止损线',
+      });
+    }
+  }
+
+  return alerts;
+}
+
+// ---- Execute Risk Trade (执行风控交易) ----
+
+function executeRiskTrade(pf, alert, priceMap) {
+  if (alert.action === 'warning') return null; // 预警不交易
+
+  const position = pf.positions.find(p => p.code === alert.code);
+  if (!position) return null;
+
+  const price = alert.currentPrice;
+  const amount = position.shares * price;
+  const commission = amount * config.SIMFOLIO.commissionRate;
+  const stampTax = amount * config.SIMFOLIO.stampTaxRate;
+  const transferFee = amount * config.SIMFOLIO.transferFeeRate;
+  const fee = commission + stampTax + transferFee;
+
+  pf.cash += amount - fee;
+  pf.positions = pf.positions.filter(p => p.code !== alert.code);
+
+  const pnl = amount - position.shares * position.avgCost - fee;
+  const pnlPct = (pnl / (position.shares * position.avgCost)) * 100;
+
+  const trade = {
+    date: new Date().toISOString().slice(0, 10),
+    time: new Date().toTimeString().slice(0, 8),
+    action: 'sell',
+    code: alert.code,
+    name: alert.name,
+    price: price,
+    shares: position.shares,
+    amount: amount,
+    fee: Math.round(fee * 100) / 100,
+    pnl: Math.round(pnl * 100) / 100,
+    pnlPct: Math.round(pnlPct * 100) / 100,
+    reason: alert.reason,
+    triggeredBy: alert.action,
+  };
+  pf.tradeHistory.push(trade);
+
+  // 记录每日净值
+  const today = new Date().toISOString().slice(0, 10);
+  const existing = pf.dailyNav.find(n => n.date === today);
+  const snap = getSnapshot(pf);
+  if (existing) {
+    existing.nav = snap.totalValue;
+    existing.return_ = snap.totalReturn;
+  } else {
+    pf.dailyNav.push({
+      date: today,
+      nav: snap.totalValue,
+      return_: snap.totalReturn,
+      benchmarkReturn: pf.dailyNav.length > 0 ? pf.dailyNav[pf.dailyNav.length - 1].benchmarkReturn : 0,
+    });
+  }
+
+  savePortfolio(pf);
+  return trade;
+}
+
 module.exports = {
   loadPortfolio,
   savePortfolio,
@@ -439,4 +652,9 @@ module.exports = {
   makeTradingDecisions,
   computeStats,
   resetPortfolio,
+  migratePortfolio,
+  updatePositionPrices,
+  updateTrailingStop,
+  checkRiskThresholds,
+  executeRiskTrade,
 };

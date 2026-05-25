@@ -84,6 +84,12 @@ function tencentPrefix(code) {
   return 'sz' + code;
 }
 
+function sinaPrefix(code) {
+  if (code.startsWith('6') || code.startsWith('68')) return 'sh' + code;
+  if (code.startsWith('0') || code.startsWith('3')) return 'sz' + code;
+  return 'sz' + code;
+}
+
 // ---- Tencent API (primary data source, provides PE) ----
 
 const TENCENT_BASE = 'http://qt.gtimg.cn/q=';
@@ -571,6 +577,41 @@ async function fetchAllStocks() {
   return fetchAllStocksSina();
 }
 
+// ---- Targeted fetch (持仓监控用) ----
+
+/**
+ * Fetch specific stock codes via Tencent API.
+ * Used by position monitor for fast price checks (~1-2s for 5 codes).
+ */
+async function fetchSpecificStocks(codes) {
+  if (!codes || codes.length === 0) return [];
+  const symbols = codes.map(tencentPrefix).join(',');
+  const url = TENCENT_BASE + symbols;
+
+  try {
+    const text = await fetchRaw(url, 'https://gu.qq.com/');
+    return parseTencentResponse(text);
+  } catch (e) {
+    throw e;
+  }
+}
+
+/**
+ * Fetch specific stock codes via Sina API (fallback).
+ */
+async function fetchSpecificStocksSina(codes) {
+  if (!codes || codes.length === 0) return [];
+  const symbols = codes.map(sinaPrefix).join(',');
+  const url = SINA_BASE + symbols;
+
+  try {
+    const text = await fetchRaw(url);
+    return parseSinaResponse(text);
+  } catch (e) {
+    throw e;
+  }
+}
+
 // ---- Screen ----
 
 /**
@@ -604,6 +645,8 @@ function screenStocks(allStocks, options = {}) {
 
 module.exports = {
   fetchAllStocks,
+  fetchSpecificStocks,
+  fetchSpecificStocksSina,
   fetchIndices,
   fetchKline,
   fetchStockDetail,

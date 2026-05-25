@@ -1,0 +1,604 @@
+/**
+ * scheduler.js — 全自动量化交易调度器
+ *
+ * A股交易时段状态机，驱动定时 Pipeline + 持仓监控 + 风控执行。
+ * 纯 Node.js 内置模块，零外部依赖。
+ */
+const fs = require('fs');
+const path = require('path');
+const { EventEmitter } = require('events');
+const config = require('./config');
+
+const STATE_FILE = path.join(config.DATA_DIR, 'simfolio', 'scheduler_state.json');
+const SC = config.SCHEDULER;
+
+class Scheduler extends EventEmitter {
+  constructor() {
+    super();
+    this._state = 'closed';
+    this._nextTickTimer = null;
+    this._opsRunning = false;       // 操作锁
+    this._todayDate = '';           // 当前交易日日期
+    this._events = [];              // 事件日志环形缓冲区
+    this._scheduledOps = new Set(); // 今日已执行的操作（防重复）
+    this._lastPipelineTime = null;
+    this._lastMidScanTime = null;
+    this._lastPositionCheck = null;
+    this._positionAlerts = [];      // 当前活跃的风控警报
+    this._positionCheckFailures = 0;// 连续失败计数
+  }
+
+  // ==================== 公开 API ====================
+
+  start() {
+    this._loadState();
+    const now = new Date();
+    this._todayDate = this._dateStr(now);
+    this._transition(this._determineState(now), 'boot');
+    this._scheduleNextTick();
+    this._logEvent('scheduler_start', { state: this._state, date: this._todayDate });
+  }
+
+  stop() {
+    if (this._nextTickTimer) clearTimeout(this._nextTickTimer);
+    this._nextTickTimer = null;
+    this._saveState();
+    this._logEvent('scheduler_stop', { state: this._state });
+  }
+
+  getStatus() {
+    const now = new Date();
+    return {
+      state: this._state,
+      today: this._todayDate,
+      isTradingDay: this._isTradingDay(now),
+      nextTickMs: this._nextTickTime ? Math.max(0, this._nextTickTime - Date.now()) : null,
+      opsRunning: this._opsRunning,
+      scheduledOps: Array.from(this._scheduledOps),
+      lastPipeline: this._lastPipelineTime,
+      lastMidScan: this._lastMidScanTime,
+      lastPositionCheck: this._lastPositionCheck,
+      positionAlerts: this._positionAlerts.slice(),
+      positionCheckFailures: this._positionCheckFailures,
+      todayEventCount: this._events.filter(e => e.date === this._todayDate).length,
+      totalEvents: this._events.length,
+    };
+  }
+
+  getEvents(limit) {
+    return this._events.slice(-(limit || 100));
+  }
+
+  // ==================== 时钟 ====================
+
+  _scheduleNextTick() {
+    if (this._nextTickTimer) clearTimeout(this._nextTickTimer);
+
+    const isActive = this._state === 'morning_session' || this._state === 'afternoon_session';
+    const interval = isActive ? SC.activeTickMs : SC.idleTickMs;
+
+    this._nextTickTime = Date.now() + interval;
+    this._nextTickTimer = setTimeout(() => this._tick(), interval);
+  }
+
+  _tick() {
+    const now = new Date();
+    const dateStr = this._dateStr(now);
+
+    // 日期切换
+    if (dateStr !== this._todayDate) {
+      this._todayDate = dateStr;
+      this._scheduledOps = new Set();
+      this._positionAlerts = [];
+      this._positionCheckFailures = 0;
+      this._logEvent('new_day', { date: dateStr });
+    }
+
+    const newState = this._determineState(now);
+    if (newState !== this._state) {
+      this._transition(newState, 'tick');
+    }
+
+    // 活跃时段：检查是否有操作到期
+    if (this._state === 'morning_session' || this._state === 'afternoon_session') {
+      this._checkScheduledOps(now);
+    }
+
+    // 收盘后：执行收盘总结
+    if (this._state === 'post_market' && !this._scheduledOps.has('post_market_wrapup_' + dateStr)) {
+      this._runPostMarketWrapup();
+    }
+
+    this._saveState();
+    this._scheduleNextTick();
+  }
+
+  // ==================== 状态机 ====================
+
+  _determineState(now) {
+    if (!this._isTradingDay(now)) return 'closed';
+
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const t = h * 60 + m;
+
+    const preStart = SC.preMarketStart.hour * 60 + SC.preMarketStart.minute;
+    const sessionStart = SC.morningSessionStart.hour * 60 + SC.morningSessionStart.minute;
+    const sessionEnd = SC.morningSessionEnd.hour * 60 + SC.morningSessionEnd.minute;
+    const afternoonStart = SC.afternoonSessionStart.hour * 60 + SC.afternoonSessionStart.minute;
+    const afternoonEnd = SC.afternoonSessionEnd.hour * 60 + SC.afternoonSessionEnd.minute;
+    const postEnd = SC.postMarketEnd.hour * 60 + SC.postMarketEnd.minute;
+
+    if (t < preStart) return 'closed';
+    if (t < sessionStart) return 'pre_market';
+    if (t < sessionEnd) return 'morning_session';
+    if (t < afternoonStart) return 'lunch_break';
+    if (t < afternoonEnd) return 'afternoon_session';
+    if (t < postEnd) return 'post_market';
+    return 'closed';
+  }
+
+  _isTradingDay(date) {
+    const d = date.getDay();
+    return d >= 1 && d <= 5;
+  }
+
+  _transition(newState, reason) {
+    const oldState = this._state;
+    this._state = newState;
+    this._logEvent('state_change', {
+      from: oldState,
+      to: newState,
+      reason: reason,
+    });
+
+    // 进入活跃时段：重置操作锁
+    if (newState === 'morning_session' || newState === 'afternoon_session') {
+      this._opsRunning = false;
+      this._positionCheckFailures = 0;
+    }
+
+    // 离开活跃时段：清除警报
+    if (oldState === 'morning_session' || oldState === 'afternoon_session') {
+      if (newState !== 'morning_session' && newState !== 'afternoon_session') {
+        this._positionAlerts = [];
+      }
+    }
+
+    this.emit('state_change', { from: oldState, to: newState });
+  }
+
+  // ==================== 调度检查 ====================
+
+  _checkScheduledOps(now) {
+    const dateStr = this._dateStr(now);
+    const h = now.getHours();
+    const m = now.getMinutes();
+
+    // Full Pipeline
+    for (const time of SC.fullPipelineTimes) {
+      const opKey = 'full_pipeline_' + dateStr + '_' + time.hour + ':' + time.minute;
+      if (!this._scheduledOps.has(opKey) && h === time.hour && m >= time.minute && m < time.minute + 5) {
+        this._scheduledOps.add(opKey);
+        this._runFullPipeline('scheduled_' + time.hour + ':' + String(time.minute).padStart(2, '0'));
+      }
+    }
+
+    // Mid-Day Scan
+    for (const time of SC.midDayScanTimes) {
+      const opKey = 'mid_scan_' + dateStr + '_' + time.hour + ':' + time.minute;
+      if (!this._scheduledOps.has(opKey) && h === time.hour && m >= time.minute && m < time.minute + 5) {
+        this._scheduledOps.add(opKey);
+        this._runMidDayScan();
+      }
+    }
+
+    // Position Monitor（每N分钟）
+    const interval = SC.positionMonitorIntervalMin;
+    const lastCheck = this._lastPositionCheck ? new Date(this._lastPositionCheck) : null;
+    const shouldCheck = !lastCheck || (now - lastCheck) >= interval * 60 * 1000;
+    if (shouldCheck && !this._opsRunning) {
+      this._lastPositionCheck = now.toISOString();
+      this._runPositionMonitor();
+    }
+  }
+
+  // ==================== 操作：Full Pipeline ====================
+
+  async _runFullPipeline(reason) {
+    if (this._opsRunning) {
+      this._logEvent('pipeline_skip', { reason: 'ops_running' });
+      return;
+    }
+
+    this._opsRunning = true;
+    this._logEvent('pipeline_start', { reason });
+
+    try {
+      const { Pipeline } = require('./pipeline');
+      const simfolio = require('./simfolio');
+
+      const pipeline = new Pipeline();
+      pipeline.on('progress', (p) => {
+        this.emit('pipeline_progress', p);
+      });
+
+      // 超时竞速
+      const result = await Promise.race([
+        pipeline.run(),
+        this._timeout(SC.fullPipelineTimeoutMs, 'Full Pipeline 超时'),
+      ]);
+
+      if (!result) {
+        this._logEvent('pipeline_timeout', { reason });
+        this._opsRunning = false;
+        return;
+      }
+
+      this._lastPipelineTime = new Date().toISOString();
+      this._logEvent('pipeline_complete', {
+        totalStocks: result.totalStocks,
+        candidates: result.candidates,
+        analyzed: result.analyzed,
+        top5: (result.top5 || []).map(s => s.code + ' ' + s.name + ' ' + s.compositeScore + '分'),
+        duration: result.duration,
+      });
+
+      // 自动交易
+      try {
+        const pf = simfolio.loadPortfolio();
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || []);
+        this._logEvent('trade_complete', {
+          decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
+          executed: tradeResult.executed ? tradeResult.executed.length : 0,
+          totalValue: tradeResult.snapshot ? tradeResult.snapshot.totalValue : null,
+        });
+
+        if (tradeResult.executed && tradeResult.executed.length > 0) {
+          for (const t of tradeResult.executed) {
+            this._logEvent('trade_executed', {
+              action: t.action,
+              code: t.code,
+              name: t.name,
+              price: t.price,
+              shares: t.shares,
+              reason: t.reason,
+            });
+          }
+          this.emit('trades_executed', tradeResult.executed);
+        }
+      } catch (tradeErr) {
+        this._logEvent('trade_error', { error: tradeErr.message });
+      }
+    } catch (err) {
+      this._logEvent('pipeline_error', { error: err.message, reason });
+    } finally {
+      this._opsRunning = false;
+    }
+  }
+
+  // ==================== 操作：Mid-Day Scan ====================
+
+  async _runMidDayScan() {
+    if (this._opsRunning) {
+      this._logEvent('midscan_skip', { reason: 'ops_running' });
+      return;
+    }
+
+    this._opsRunning = true;
+    this._logEvent('midscan_start', {});
+
+    try {
+      const marketData = require('./collectors/market_data');
+      const { computeHiddenSignals } = require('./factors/hidden_signals');
+      const { computeCompositeScore } = require('./factors/composite');
+      const simfolio = require('./simfolio');
+
+      // 获取全市场数据，按成交额排序取 Top N
+      const allStocks = await marketData.fetchAllStocks();
+      const candidates = marketData.screenStocks(allStocks);
+      const indices = await marketData.fetchIndices();
+      const marketDown = indices.length > 0 && indices[0].changePercent != null && indices[0].changePercent < -0.3;
+
+      // 按成交额排取 Top
+      const topByTurnover = candidates
+        .sort((a, b) => (b.turnover || 0) - (a.turnover || 0))
+        .slice(0, SC.midScanTopCount);
+
+      // 预评分
+      const preScored = topByTurnover.map(s => ({
+        ...s,
+        preScore: (s.pe && s.pe > 0 && s.pe < 20 ? 20 : 0) +
+                  (s.changePercent > 0 ? 10 : -5) +
+                  (s.turnover > 3e8 ? 15 : 0),
+      })).sort((a, b) => b.preScore - a.preScore);
+
+      // 对 Top N 进行深析
+      const deepList = preScored.slice(0, SC.midScanDeepAnalyze);
+      const results = [];
+
+      for (let i = 0; i < deepList.length; i++) {
+        const stock = deepList[i];
+        try {
+          const klines = await marketData.fetchKline(stock.code, 10);
+          const detail = await marketData.fetchStockDetail(stock.code);
+          const hiddenResult = computeHiddenSignals(stock, detail, klines, marketDown);
+          const compositeScore = computeCompositeScore(stock, detail, klines, hiddenResult, marketDown);
+
+          results.push({
+            ...stock,
+            klines,
+            detail,
+            hiddenSignals: hiddenResult.signals,
+            hasStrongSignal: hiddenResult.hasStrong,
+            compositeScore,
+            rating: compositeScore >= 85 ? 'S' : compositeScore >= 75 ? 'A' : compositeScore >= 60 ? 'B' : compositeScore >= 45 ? 'C' : 'D',
+          });
+        } catch (e) {
+          // skip individual stock errors in mid-scan
+        }
+        await this._sleep(config.API.rateLimitMs || 200);
+      }
+
+      this._lastMidScanTime = new Date().toISOString();
+      this._logEvent('midscan_complete', {
+        topCount: topByTurnover.length,
+        deepAnalyzed: results.length,
+      });
+
+      // 自动交易
+      if (results.length > 0) {
+        try {
+          const pf = simfolio.loadPortfolio();
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices);
+          if (tradeResult.executed && tradeResult.executed.length > 0) {
+            for (const t of tradeResult.executed) {
+              this._logEvent('trade_executed', {
+                action: t.action,
+                code: t.code,
+                name: t.name,
+                price: t.price,
+                shares: t.shares,
+                reason: t.reason,
+              });
+            }
+            this.emit('trades_executed', tradeResult.executed);
+          }
+        } catch (tradeErr) {
+          this._logEvent('trade_error', { error: tradeErr.message });
+        }
+      }
+    } catch (err) {
+      this._logEvent('midscan_error', { error: err.message });
+    } finally {
+      this._opsRunning = false;
+    }
+  }
+
+  // ==================== 操作：持仓监控 ====================
+
+  async _runPositionMonitor() {
+    try {
+      const marketData = require('./collectors/market_data');
+      const simfolio = require('./simfolio');
+
+      const pf = simfolio.loadPortfolio();
+      if (!pf.positions || pf.positions.length === 0) {
+        this._positionCheckFailures = 0;
+        return; // 没有持仓，跳过
+      }
+
+      const codes = pf.positions.map(p => p.code);
+
+      // 获取持仓股实时价格（带重试）
+      let priceMap = null;
+      try {
+        const stocks = await Promise.race([
+          marketData.fetchSpecificStocks(codes),
+          this._timeout(SC.positionMonitorTimeoutMs, '持仓价格查询超时'),
+        ]);
+        if (stocks && stocks.length > 0) {
+          priceMap = {};
+          for (const s of stocks) {
+            if (s && s.price != null) {
+              priceMap[s.code] = s;
+            }
+          }
+        }
+      } catch (e) {
+        // Tencent 失败，尝试 Sina 后备
+        try {
+          const sinaStocks = await Promise.race([
+            marketData.fetchSpecificStocksSina(codes),
+            this._timeout(SC.positionMonitorTimeoutMs, 'Sina持仓价格超时'),
+          ]);
+          if (sinaStocks && sinaStocks.length > 0) {
+            priceMap = {};
+            for (const s of sinaStocks) {
+              if (s && s.price != null) {
+                priceMap[s.code] = s;
+              }
+            }
+          }
+        } catch (e2) {
+          this._positionCheckFailures++;
+          this._logEvent('position_monitor_fetch_fail', {
+            error: e.message,
+            sinaError: e2.message,
+            failures: this._positionCheckFailures,
+          });
+          return;
+        }
+      }
+
+      if (!priceMap || Object.keys(priceMap).length === 0) {
+        this._positionCheckFailures++;
+        return;
+      }
+
+      this._positionCheckFailures = 0;
+
+      // 更新持仓现价
+      simfolio.updatePositionPrices(pf, priceMap);
+
+      // 更新移动止盈
+      simfolio.updateTrailingStop(pf, priceMap);
+
+      // 检查风控阈值
+      const alerts = simfolio.checkRiskThresholds(pf, priceMap);
+      this._positionAlerts = alerts;
+
+      // 执行风控交易
+      let executedCount = 0;
+      for (const alert of alerts) {
+        try {
+          const trade = simfolio.executeRiskTrade(pf, alert, priceMap);
+          if (trade) {
+            executedCount++;
+            this._logEvent('risk_trade', {
+              action: trade.action,
+              code: trade.code,
+              name: trade.name,
+              price: trade.price,
+              reason: trade.reason,
+              pnl: trade.pnl,
+              pnlPct: trade.pnlPct,
+            });
+          }
+        } catch (e) {
+          this._logEvent('risk_trade_error', { alert, error: e.message });
+        }
+      }
+
+      if (alerts.length > 0 || executedCount > 0) {
+        this.emit('risk_alerts', { alerts, executedCount });
+      }
+    } catch (err) {
+      this._logEvent('position_monitor_error', { error: err.message });
+    }
+  }
+
+  // ==================== 操作：收盘总结 ====================
+
+  _runPostMarketWrapup() {
+    const dateStr = this._todayDate;
+    this._scheduledOps.add('post_market_wrapup_' + dateStr);
+
+    try {
+      const simfolio = require('./simfolio');
+      const pf = simfolio.loadPortfolio();
+      const snap = simfolio.getSnapshot(pf);
+
+      this._logEvent('post_market_wrapup', {
+        totalValue: snap.totalValue,
+        totalReturn: snap.totalReturn,
+        cash: snap.cash,
+        positionCount: pf.positions.length,
+      });
+    } catch (err) {
+      this._logEvent('wrapup_error', { error: err.message });
+    }
+  }
+
+  // ==================== 事件日志 ====================
+
+  _logEvent(type, detail) {
+    const event = {
+      time: new Date().toISOString(),
+      date: this._todayDate,
+      state: this._state,
+      type,
+      detail,
+    };
+
+    this._events.push(event);
+    if (this._events.length > SC.eventLogMaxSize) {
+      this._events = this._events.slice(-SC.eventLogMaxSize);
+    }
+
+    this.emit('event', event);
+
+    // 重要事件也输出到控制台
+    const importantTypes = [
+      'pipeline_complete', 'pipeline_error', 'pipeline_timeout',
+      'trade_executed', 'risk_trade', 'trade_error',
+      'state_change', 'position_monitor_fetch_fail',
+      'scheduler_start', 'scheduler_stop',
+    ];
+    if (importantTypes.includes(type)) {
+      const ts = new Date().toTimeString().slice(0, 8);
+      console.log('  [Scheduler ' + ts + '] ' + type + ':', JSON.stringify(detail));
+    }
+  }
+
+  // ==================== 状态持久化 ====================
+
+  _saveState() {
+    try {
+      const dir = path.dirname(STATE_FILE);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const state = {
+        state: this._state,
+        todayDate: this._todayDate,
+        scheduledOps: Array.from(this._scheduledOps),
+        lastPipelineTime: this._lastPipelineTime,
+        lastMidScanTime: this._lastMidScanTime,
+        lastPositionCheck: this._lastPositionCheck,
+        positionCheckFailures: this._positionCheckFailures,
+        savedAt: new Date().toISOString(),
+      };
+
+      fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2), 'utf8');
+    } catch (e) {
+      // 静默失败，不影响运行
+    }
+  }
+
+  _loadState() {
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const raw = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+
+        // 只在同一天恢复上下文
+        const today = this._dateStr(new Date());
+        if (raw.todayDate === today) {
+          this._state = raw.state || 'closed';
+          this._scheduledOps = new Set(raw.scheduledOps || []);
+          this._lastPipelineTime = raw.lastPipelineTime || null;
+          this._lastMidScanTime = raw.lastMidScanTime || null;
+          this._lastPositionCheck = raw.lastPositionCheck || null;
+          this._positionCheckFailures = raw.positionCheckFailures || 0;
+        }
+
+        // 恢复后重新评估当前状态
+        const now = new Date();
+        const actualState = this._determineState(now);
+        if (actualState !== this._state) {
+          this._state = actualState;
+        }
+      }
+    } catch (e) {
+      // 文件损坏，从头开始
+      this._state = 'closed';
+    }
+  }
+
+  // ==================== 工具函数 ====================
+
+  _dateStr(date) {
+    return date.toISOString().slice(0, 10);
+  }
+
+  _timeout(ms, msg) {
+    return new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(msg)), ms);
+    });
+  }
+
+  _sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+}
+
+module.exports = { Scheduler };

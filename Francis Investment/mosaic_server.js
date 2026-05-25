@@ -1,13 +1,14 @@
 /**
- * Francis Investment · Mosaic Server v2.0.0
+ * Francis Investment · Mosaic Server v2.2.0
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
- * 内置量化分析 Pipeline。
+ * 内置量化分析 Pipeline + 全自动交易调度器。
  */
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { Pipeline } = require('./mosaic/pipeline');
 const simfolio = require('./mosaic/simfolio');
+const { Scheduler } = require('./mosaic/scheduler');
 
 const BASE_DIR = __dirname;
 const REPORT_ENGINE_DIR = path.join(BASE_DIR, 'report-engine');
@@ -16,6 +17,9 @@ const PORT = 8765;
 
 // Singleton pipeline instance
 let pipeline = null;
+
+// Scheduler instance
+let scheduler = null;
 
 // ---- Trading day detection ----
 
@@ -48,14 +52,16 @@ function apiStatus() {
   const today = new Date();
   const dStr = today.toISOString().slice(0, 10);
   const pStatus = pipeline ? pipeline.getStatus() : null;
+  const sStatus = scheduler ? scheduler.getStatus() : null;
   return {
     date: dStr,
     weekday: getWeekdayCN(today),
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '2.0.0',
+    version: '2.2.0',
     pipeline: pStatus,
+    scheduler: sStatus,
   };
 }
 
@@ -235,11 +241,12 @@ function jsonResponse(res, data, status) {
 function printBanner() {
   const today = new Date();
   const trading = isTradingDay(today);
+  const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v2.0.0       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v2.2.0       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
-  console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '                          ║');
+  console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
   console.log('  ╚══════════════════════════════════════════════════════╝');
   console.log();
@@ -282,6 +289,18 @@ const server = http.createServer(function(req, res) {
   if (pathname === '/api/simfolio/trade' && method === 'POST') return handleSimfolioTrade(res);
   if (pathname === '/api/simfolio/reset' && method === 'POST') return handleSimfolioReset(res);
 
+  // Scheduler endpoints
+  if (pathname === '/api/scheduler/status') {
+    return jsonResponse(res, scheduler ? scheduler.getStatus() : { state: 'stopped', error: '调度器未启动' });
+  }
+  if (pathname === '/api/scheduler/events') {
+    return jsonResponse(res, scheduler ? scheduler.getEvents(100) : []);
+  }
+  if (pathname === '/api/position/force-check' && method === 'POST') {
+    if (scheduler) scheduler._runPositionMonitor();
+    return jsonResponse(res, { ok: true, message: '已触发持仓检查' });
+  }
+
   // ---- Static file serving ----
   let filePath;
   if (pathname === '/') {
@@ -299,7 +318,20 @@ const server = http.createServer(function(req, res) {
 });
 
 server.listen(PORT, '127.0.0.1', function() {
+  // 启动全自动调度器
+  scheduler = new Scheduler();
+  scheduler.start();
+  scheduler.on('event', (evt) => {
+    // 重要事件自动输出到控制台（scheduler 内部已处理）
+  });
+  scheduler.on('trades_executed', (trades) => {
+    console.log('  [Server] Auto-trades executed:', trades.length);
+  });
+
   printBanner();
+  console.log('  Scheduler: ' + scheduler.getStatus().state + ' | next tick in ' +
+    Math.round((scheduler.getStatus().nextTickMs || 0) / 1000) + 's');
+  console.log();
 });
 
 server.on('error', function(err) {
@@ -315,4 +347,16 @@ server.on('error', function(err) {
     process.exit(1);
   }
   throw err;
+});
+
+// 优雅退出
+process.on('SIGINT', () => {
+  console.log('\n  Shutting down...');
+  if (scheduler) scheduler.stop();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  if (scheduler) scheduler.stop();
+  process.exit(0);
 });

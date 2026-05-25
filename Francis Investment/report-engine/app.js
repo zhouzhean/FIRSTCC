@@ -1,6 +1,6 @@
 // Francis Investment Report Engine — Dashboard Controller
 // Section-based navigation: click a section → see that content
-// v2.0 — integrated with Mosaic Flask server
+// v2.2 — simfolio-first layout, live countdown, merged report, AI status badge
 
 // -- State --
 var state = {
@@ -11,36 +11,41 @@ var state = {
   reportsIndex: [],
   reportsByDate: {},
   dirty: false,
-  activeSection: 'cover',       // currently selected section
-  activeMode: 'section',        // 'section' | 'full'
-  serverConnected: false,       // Mosaic server connection status
-  serverStatus: null,           // last /api/status response
+  activeSection: 'simfolio',    // default: simfolio first
+  activeMode: 'section',
+  serverConnected: false,
+  serverStatus: null,
+  schedulerStatus: null,
+  liveMode: false,
+  tradeNotifications: [],
+  lastSimfolioRefresh: null,
+  simfolioData: null,          // cached simfolio data for live rendering
+  countdownSec: 0,             // live countdown seconds
+  countdownInterval: null,     // countdown timer ref
 };
 
 // Calendar state
 var cal = {
   year: 2026,
   month: 5,
-  activeDate: '2026-05-15',
+  activeDate: '2026-05-25',
 };
 
-// Section definitions
+// Section definitions — v2.2: simfolio first, merged report, holdings greyed
 var SECTIONS = [
-  { id: 'cover',           label: '报告封面',     icon: '📋', render: function(d,m) { return renderCover(d,m); } },
-  { id: 'newsPolicy',      label: '时政要点',     icon: '📰', render: function(d,m) { return renderNewsPolicy(d,m); } },
-  { id: 'marketOverview',  label: '大盘综述',     icon: '📊', render: function(d,m) { return renderMarketOverview(d,m); } },
-  { id: 'holdingsAnalysis',label: '持仓分析',     icon: '💼', render: function(d,m) { return renderHoldingsAnalysis(d,m); } },
-  { id: 'sectorTracking',  label: '板块跟踪',     icon: '🔥', render: function(d,m) { return renderSectorTracking(d,m); } },
-  { id: 'lowPricePicks',   label: '潜力股推荐',   icon: '💎', render: function(d,m) { return renderLowPricePicks(d,m); } },
-  { id: 'top5Ranking',     label: 'TOP5 排行',    icon: '🏆', render: function(d,m) { return renderTop5Ranking(d,m); } },
-  { id: 'simfolio',        label: '模拟交易',     icon: '💰', render: function(d,m) { return renderSimfolioWrapper(d,m); } },
-  { id: 'riskMatrix',      label: '风险矩阵',     icon: '⚠️', render: function(d,m) { return renderRiskMatrix(d,m); } },
+  { id: 'simfolio',        label: '模拟交易',         icon: '💰', render: function(d,m) { return renderSimfolioLive(d,m); } },
+  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderNewsPolicy(d,m); } },
+  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradingReport(d,m); } },
+  { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderHoldingsUnavailable(d,m); } },
 ];
 
 // -- DOM refs --
-var $contentArea, $contentTitle, $btnSendPdf, $btnGenPDF, $btnRunAnalysis, $statusBar;
+var $contentArea, $contentTitle, $btnSendPdf, $btnGenPDF, $statusBar;
 var $calendarWidget, $reportListItems, $sectionNavList;
 var $toolbarDate, $pipelineProgress, $pipelineStep, $pipelineBar, $pipelinePct;
+var $liveIndicator;
+var $aiStatusBadge, $aiStatusDot, $aiStatusLabel;
+var $navSimfolioBadge;
 
 // -- Init --
 function initApp() {
@@ -48,7 +53,6 @@ function initApp() {
   $contentTitle    = document.getElementById('content-title');
   $btnSendPdf      = document.getElementById('btn-send-pdf');
   $btnGenPDF       = document.getElementById('btn-gen-pdf');
-  $btnRunAnalysis  = document.getElementById('btn-run-analysis');
   $statusBar       = document.getElementById('status-bar');
   $calendarWidget  = document.getElementById('calendar-widget');
   $reportListItems = document.getElementById('report-list-items');
@@ -58,6 +62,11 @@ function initApp() {
   $pipelineStep    = document.getElementById('pipeline-step');
   $pipelineBar     = document.getElementById('pipeline-bar');
   $pipelinePct     = document.getElementById('pipeline-pct');
+  $liveIndicator   = document.getElementById('live-indicator');
+  $aiStatusBadge   = document.getElementById('ai-status-badge');
+  $aiStatusDot     = document.getElementById('ai-status-dot');
+  $aiStatusLabel   = document.getElementById('ai-status-label');
+  $navSimfolioBadge = document.getElementById('nav-simfolio-badge');
 
   var today = new Date();
   cal.year = today.getFullYear();
@@ -65,27 +74,24 @@ function initApp() {
 
   // Check Mosaic server connection first
   checkServerStatus(function() {
-    // Then load reports index — auto-load latest report
     loadReportsIndex();
 
-    // Auto-start pipeline on trading days
-    if (state.serverStatus && state.serverStatus.isTradingDay) {
-      updateStatus('交易日 — 正在自动启动量化分析...');
-      setTimeout(function() {
-        onRunAnalysis();
-      }, 1000);
-    }
+    // Enter live monitoring mode
+    state.liveMode = true;
+    startLivePoll();
+    startCountdown();
   });
 
-  // Bind events
+  // Bind events - PDF & email buttons
   if ($btnSendPdf) $btnSendPdf.addEventListener('click', onSendPdf);
   if ($btnGenPDF) $btnGenPDF.addEventListener('click', onGenPDF);
-  if ($btnRunAnalysis) $btnRunAnalysis.addEventListener('click', onRunAnalysis);
 
   // Section nav delegation
   $sectionNavList.addEventListener('click', function(e) {
     var item = e.target.closest('.section-nav-item');
     if (!item) return;
+    // Ignore disabled sections
+    if (item.classList.contains('section-nav-disabled')) return;
     var sectionId = item.getAttribute('data-section');
     if (sectionId) {
       setActiveSection(sectionId);
@@ -101,7 +107,10 @@ function checkServerStatus(callback) {
     .then(function(data) {
       state.serverConnected = true;
       state.serverStatus = data;
-      updateStatus('Mosaic Server · ' + data.date + ' ' + data.weekday + ' · ' + (data.isTradingDay ? '🟢 交易日' : '⚫ 休市'));
+      state.schedulerStatus = data.scheduler || null;
+      if (!state.liveMode) {
+        updateStatus('Mosaic Server · ' + data.date + ' ' + data.weekday + ' · ' + (data.isTradingDay ? '🟢 交易日' : '⚫ 休市'));
+      }
       if (callback) callback();
     })
     .catch(function() {
@@ -112,82 +121,7 @@ function checkServerStatus(callback) {
     });
 }
 
-// ============ Pipeline / Run Analysis ============
-
-var _pipelinePollTimer = null;
-
-function onRunAnalysis() {
-  if (!state.serverConnected) {
-    updateStatus('未连接到 Mosaic Server，请确认服务器已启动');
-    return;
-  }
-
-  if (!state.serverStatus || !state.serverStatus.isTradingDay) {
-    updateStatus('今日休市，无需运行分析');
-    return;
-  }
-
-  // Disable button
-  if ($btnRunAnalysis) {
-    $btnRunAnalysis.disabled = true;
-    $btnRunAnalysis.textContent = '⏳ 运行中...';
-  }
-
-  // Show progress bar
-  if ($pipelineProgress) $pipelineProgress.style.display = 'block';
-  if ($pipelineStep) $pipelineStep.textContent = '正在启动分析...';
-  if ($pipelineBar) $pipelineBar.style.width = '0%';
-  if ($pipelinePct) $pipelinePct.textContent = '0%';
-
-  updateStatus('正在启动量化分析...');
-
-  // Call API to start pipeline
-  fetch('/api/pipeline/run', { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.ok) {
-        updateStatus('量化分析已启动 — 正在联网采集数据...');
-        startPipelinePoll();
-      } else {
-        updateStatus(data.message || '启动失败');
-        resetRunButton();
-      }
-    })
-    .catch(function(err) {
-      updateStatus('启动失败: ' + err.message);
-      resetRunButton();
-    });
-}
-
-function startPipelinePoll() {
-  if (_pipelinePollTimer) clearInterval(_pipelinePollTimer);
-  _pipelinePollTimer = setInterval(pollPipelineStatus, 1000);
-}
-
-// ---- Simfolio Section ----
-
-var _cachedSimfolioData = null;
-
-function renderSimfolioWrapper(data, mode) {
-  // Load simfolio data from API for app mode
-  if (mode === 'app' && state.serverConnected) {
-    fetchSimfolioData(function(sfData) {
-      _cachedSimfolioData = sfData;
-      // Re-render after data loaded
-      var sec = null;
-      for (var i = 0; i < SECTIONS.length; i++) {
-        if (SECTIONS[i].id === 'simfolio') { sec = SECTIONS[i]; break; }
-      }
-      if (sec && state.activeSection === 'simfolio') {
-        renderSimfolioSection();
-      }
-    });
-  }
-
-  // Use cached or empty data
-  var wrapper = { _simfolio: _cachedSimfolioData || {} };
-  return renderSimfolio(wrapper, mode);
-}
+// ============ Simfolio Live Section (v2.2) ============
 
 function fetchSimfolioData(callback) {
   fetch('/api/simfolio/status')
@@ -198,8 +132,8 @@ function fetchSimfolioData(callback) {
         stats: data.stats || {},
         tradeHistory: data.tradeHistory || [],
         dailyNav: [],
+        time: new Date().toISOString(),
       };
-      // Also fetch history for chart
       fetch('/api/simfolio/history')
         .then(function(r) { return r.json(); })
         .then(function(hist) {
@@ -208,46 +142,196 @@ function fetchSimfolioData(callback) {
         })
         .catch(function() { callback(sfData); });
     })
-    .catch(function() { callback({}); });
+    .catch(function() { callback(null); });
 }
 
-function renderSimfolioSection() {
-  if (!state.reportData) state.reportData = {};
-  var sfData = _cachedSimfolioData || {};
-  state.reportData._simfolio = sfData;
-
-  var sectionHTML = renderSimfolio(state.reportData, 'app');
-  var css = renderSoftwareCSS();
-  var wrapperHTML = '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><style>' + css + ' body { overflow-y: auto; }</style></head><body><div class="report-preview">' + sectionHTML + '</div><script>window.parent.postMessage("simfolio-ready","*");</' + 'script></body></html>';
-
-  $contentArea.innerHTML = '';
-  var iframe = document.createElement('iframe');
-  iframe.style.cssText = 'width:100%;height:100%;border:none;min-height:70vh;';
-  iframe.sandbox = 'allow-same-origin allow-scripts';
-  iframe.srcdoc = wrapperHTML;
-  $contentArea.appendChild(iframe);
+function renderSimfolioLive(data, mode) {
+  // In app mode, render live panel with countdown + activity feed
+  // The actual render goes through renderSimfolio template with enhanced wrapper
+  var sfData = state.simfolioData;
+  if (!sfData || !sfData.snapshot) {
+    return renderSimfolioEmpty();
+  }
+  return renderSimfolioLivePanel(sfData);
 }
 
-// ---- Auto-trade after pipeline ----
+function renderSimfolioEmpty() {
+  var html = '<div class="unavailable-placeholder">';
+  html += '<div class="lock-icon">📊</div>';
+  html += '<div class="lock-title">等待交易数据...</div>';
+  html += '<div class="lock-desc">AI 量化交易员正在后台运行，交易数据将在开盘后自动生成。请确保 Mosaic Server 已启动。</div>';
+  html += '</div>';
+  return html;
+}
 
-function triggerAutoTrade() {
-  updateStatus('分析完成 — 正在执行模拟交易...');
-  fetch('/api/simfolio/trade', { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.ok && data.executed) {
-        updateStatus('交易完成！执行 ' + data.executed.length + ' 笔交易 | 总资产 ¥' + formatMoneyCN(data.snapshot.totalValue));
-        // Refresh simfolio data
-        fetchSimfolioData(function(sfData) {
-          _cachedSimfolioData = sfData;
-        });
-      } else {
-        updateStatus(data.message || '交易决策完成');
+function renderSimfolioLivePanel(sfData) {
+  var snap = sfData.snapshot;
+  var stats = sfData.stats || {};
+  var trades = sfData.tradeHistory || [];
+  var sched = state.schedulerStatus || {};
+
+  // Build countdown bar
+  var countdownHTML = renderCountdownBar(sched);
+
+  // Build asset cards
+  var cardsHTML = renderSimfolioCards(snap, stats);
+
+  // Build trade activity feed
+  var feedHTML = renderTradeActivityFeed(trades);
+
+  // Build positions table (compact)
+  var posHTML = '';
+  if (snap.positions && snap.positions.length > 0) {
+    posHTML += '<h3 style="font-size:14px;color:#1e293b;margin:16px 16px 8px;">📌 当前持仓</h3>';
+    posHTML += renderCompactPositions(snap.positions);
+  }
+
+  // Build NAV chart if data available
+  var chartHTML = '';
+  if (sfData.dailyNav && sfData.dailyNav.length >= 2) {
+    chartHTML += '<div style="margin:0 16px 16px;">';
+    chartHTML += renderNavChart(sfData.dailyNav, false);
+    chartHTML += '</div>';
+  }
+
+  var html = countdownHTML + cardsHTML + feedHTML + posHTML + chartHTML;
+
+  // Wrap in a container
+  return '<div id="simfolio-live-panel">' + html + '</div>';
+}
+
+function renderCountdownBar(sched) {
+  var stateLabels = {
+    'closed': '⚫ 休市等待中',
+    'pre_market': '🌅 盘前准备',
+    'morning_session': '🟢 早盘交易中',
+    'lunch_break': '🍱 午间休市',
+    'afternoon_session': '🟢 午盘交易中',
+    'post_market': '🌇 盘后总结',
+  };
+  var label = stateLabels[sched.state] || sched.state;
+  var nextTickMs = sched.nextTickMs || 0;
+  var nextSec = Math.max(0, Math.round(nextTickMs / 1000));
+  var isActive = sched.state === 'morning_session' || sched.state === 'afternoon_session';
+
+  var html = '<div class="sf-countdown-bar' + (nextSec <= 10 && isActive ? ' flash-warn' : '') + '" id="sf-countdown-bar">';
+  html += '<span style="font-size:14px;">⏱</span>';
+  html += '<span>下次检查:</span>';
+  html += '<span class="countdown-num" id="sf-countdown-num">' + nextSec + '</span>';
+  html += '<span>秒</span>';
+  html += '<span style="flex:1;"></span>';
+  html += '<span>' + label + '</span>';
+  if (sched.lastPipeline) {
+    var ago = Math.round((Date.now() - new Date(sched.lastPipeline).getTime()) / 60000);
+    html += '<span style="font-size:10px;opacity:0.7;"> · 上次扫描:' + ago + '分钟前</span>';
+  }
+  if (sched.opsRunning) {
+    html += '<span style="font-size:11px;color:#f59e0b;"> · ⚙ 运行中...</span>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderSimfolioCards(snap, stats) {
+  var green = '#16a34a', red = '#dc2626', muted = '#64748b', text = '#1e293b';
+  var prevSnap = (state.simfolioData && state.simfolioData._prevSnapshot) ? state.simfolioData._prevSnapshot : null;
+
+  function flashClass(newVal, oldVal) {
+    if (!oldVal || newVal === oldVal) return '';
+    return newVal > oldVal ? ' flash-up' : ' flash-down';
+  }
+
+  var tvFlash = prevSnap ? flashClass(snap.totalValue, prevSnap.totalValue) : '';
+
+  var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:12px 16px;">';
+
+  html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
+  html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">总资产</div>';
+  html += '<div class="sf-card-value' + tvFlash + '" style="font-size:20px;font-weight:700;color:' + text + ';">¥' + formatMoneyCN(snap.totalValue) + '</div>';
+  html += '<div style="font-size:11px;color:' + (snap.totalReturn >= 0 ? green : red) + ';">' + (snap.totalReturn >= 0 ? '+' : '') + snap.totalReturn.toFixed(2) + '%</div>';
+  html += '</div>';
+
+  html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
+  html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">现金</div>';
+  html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + text + ';">¥' + formatMoneyCN(snap.cash) + '</div>';
+  html += '<div style="font-size:11px;color:' + muted + ';">' + (snap.totalValue > 0 ? (snap.cash / snap.totalValue * 100).toFixed(0) : '0') + '% 可用</div>';
+  html += '</div>';
+
+  html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
+  html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">超额收益 α</div>';
+  html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + (snap.alpha >= 0 ? green : red) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
+  html += '<div style="font-size:11px;color:' + muted + ';">基准: ' + (snap.benchmarkReturn >= 0 ? '+' : '') + snap.benchmarkReturn.toFixed(2) + '%</div>';
+  html += '</div>';
+
+  html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
+  html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">持仓 / 统计</div>';
+  html += '<div style="font-size:13px;color:' + text + ';line-height:1.7;">';
+  html += '<b>' + (snap.positions ? snap.positions.length : 0) + '</b> 只股票';
+  if (stats.winRate != null) html += ' · 胜率 <b style="color:' + (stats.winRate >= 50 ? green : red) + ';">' + stats.winRate + '%</b>';
+  if (stats.maxDrawdown != null) html += '<br>最大回撤 <b style="color:' + red + ';">' + stats.maxDrawdown.toFixed(2) + '%</b>';
+  if (stats.totalTrades) html += ' · ' + stats.totalTrades + '笔交易';
+  html += '</div>';
+  html += '</div>';
+
+  html += '</div>';
+  return html;
+}
+
+function renderTradeActivityFeed(trades) {
+  var html = '<div class="sf-trade-feed">';
+  html += '<div class="sf-trade-feed-header">📋 交易动态 <span style="font-weight:400;font-size:10px;margin-left:auto;" id="feed-update-time"></span></div>';
+
+  if (!trades || trades.length === 0) {
+    html += '<div class="sf-trade-feed-empty">暂无交易记录 — AI 交易员将在开盘后自动执行买卖</div>';
+  } else {
+    var recent = trades.slice(-8).reverse();
+    for (var i = 0; i < recent.length; i++) {
+      var t = recent[i];
+      var isBuy = t.action === 'buy';
+      var isAuto = !!t.triggeredBy;
+      var cls = isAuto ? 'auto' : (isBuy ? 'buy' : 'sell');
+      var icon = isAuto ? '🤖' : (isBuy ? '🔴' : '🟢');
+      var actionLabel = isBuy ? '买入' : '卖出';
+
+      html += '<div class="sf-trade-feed-item ' + cls + '">';
+      html += '<span>' + icon + '</span>';
+      html += '<span style="font-weight:600;color:' + (isBuy ? '#dc2626' : '#16a34a') + ';">' + actionLabel + '</span>';
+      html += '<span style="font-weight:600;">' + escHtml(t.name) + '</span>';
+      html += '<span style="color:#94a3b8;font-size:11px;">' + t.code + '</span>';
+      html += '<span>¥' + t.price.toFixed(2) + ' × ' + t.shares + '股</span>';
+      html += '<span style="font-weight:600;">¥' + formatMoneyCN(t.amount) + '</span>';
+      if (t.action === 'sell' && t.pnlPct != null) {
+        html += '<span style="color:' + (t.pnlPct >= 0 ? '#16a34a' : '#dc2626') + ';font-size:11px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>';
       }
-    })
-    .catch(function(err) {
-      updateStatus('模拟交易执行失败: ' + err.message);
-    });
+      html += '<span style="flex:1;"></span>';
+      html += '<span style="font-size:10px;color:#94a3b8;">' + (t.time || '') + '</span>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function renderCompactPositions(positions) {
+  var html = '<div style="margin:0 16px;border-radius:8px;overflow:hidden;border:1px solid #e2e5eb;">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
+  html += '<th style="padding:8px;text-align:left;">股票</th><th style="padding:8px;text-align:right;">成本</th><th style="padding:8px;text-align:right;">现价</th><th style="padding:8px;text-align:right;">股数</th><th style="padding:8px;text-align:right;">市值</th><th style="padding:8px;text-align:right;">盈亏</th></tr></thead><tbody>';
+
+  for (var i = 0; i < positions.length; i++) {
+    var p = positions[i];
+    var pnlColor = p.pnl >= 0 ? '#16a34a' : '#dc2626';
+    html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+    html += '<td style="padding:8px;"><b>' + escHtml(p.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + p.code + '</span></td>';
+    html += '<td style="padding:8px;text-align:right;">¥' + p.avgCost.toFixed(2) + '</td>';
+    html += '<td style="padding:8px;text-align:right;">¥' + p.currentPrice.toFixed(2) + '</td>';
+    html += '<td style="padding:8px;text-align:right;">' + p.shares + '</td>';
+    html += '<td style="padding:8px;text-align:right;">¥' + formatMoneyCN(p.marketValue) + '</td>';
+    html += '<td style="padding:8px;text-align:right;color:' + pnlColor + ';font-weight:600;">' + (p.pnl >= 0 ? '+' : '') + formatMoneyCN(p.pnl) + '<br><span style="font-size:10px;">' + (p.pnlPct >= 0 ? '+' : '') + p.pnlPct.toFixed(2) + '%</span></td>';
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return html;
 }
 
 function formatMoneyCN(val) {
@@ -255,62 +339,362 @@ function formatMoneyCN(val) {
   return val.toLocaleString('zh-CN', { maximumFractionDigits: 0 });
 }
 
-function pollPipelineStatus() {
-  fetch('/api/pipeline/status')
+// ============ Trading Report (Merged) ============
+
+function renderTradingReport(data, mode) {
+  // Merge: cover + marketOverview + sectorTracking + lowPricePicks + top5Ranking + riskMatrix
+  var sections = [
+    { title: '报告封面', html: renderCover(data, mode) },
+    { title: '大盘综述', html: renderMarketOverview(data, mode) },
+    { title: '板块跟踪', html: renderSectorTracking(data, mode) },
+    { title: '潜力股推荐', html: renderLowPricePicks(data, mode) },
+    { title: 'TOP5 排行', html: renderTop5Ranking(data, mode) },
+    { title: '风险矩阵', html: renderRiskMatrix(data, mode) },
+  ];
+
+  var html = '<div style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+  for (var i = 0; i < sections.length; i++) {
+    html += '<div style="margin-bottom:24px;">';
+    html += sections[i].html;
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+// ============ Holdings Unavailable ============
+
+function renderHoldingsUnavailable(data, mode) {
+  var html = '<div class="unavailable-placeholder">';
+  html += '<div class="lock-icon">🔒</div>';
+  html += '<div class="lock-title">持仓分析 — 暂不可用</div>';
+  html += '<div class="lock-desc">您当前的持仓策略是长期持有等待宇树科技上市后再清仓。持仓分析功能将在您准备进行下一步操作时重新开放。</div>';
+  html += '</div>';
+  return html;
+}
+
+// ============ Live Monitoring (v2.2) ============
+
+var _livePollTimer = null;
+var _lastNotifiedTradeTime = null;
+
+function startCountdown() {
+  if (state.countdownInterval) clearInterval(state.countdownInterval);
+  state.countdownInterval = setInterval(tickCountdown, 1000);
+}
+
+function tickCountdown() {
+  if (!state.schedulerStatus || state.schedulerStatus.nextTickMs == null) return;
+
+  var ms = state.schedulerStatus.nextTickMs - 1000;
+  if (ms < 0) ms = 0;
+  state.schedulerStatus.nextTickMs = ms;
+
+  var sec = Math.round(ms / 1000);
+  state.countdownSec = sec;
+
+  // Update countdown in simfolio panel
+  var countdownEl = document.getElementById('sf-countdown-num');
+  if (countdownEl) {
+    countdownEl.textContent = sec;
+    if (sec <= 10) {
+      countdownEl.style.color = '#ef4444';
+    } else if (sec <= 30) {
+      countdownEl.style.color = '#f59e0b';
+    } else {
+      countdownEl.style.color = '#d4a843';
+    }
+  }
+
+  // Flash the countdown bar when close to tick
+  var bar = document.getElementById('sf-countdown-bar');
+  if (bar) {
+    var isActive = state.schedulerStatus.state === 'morning_session' || state.schedulerStatus.state === 'afternoon_session';
+    if (sec <= 10 && isActive) {
+      bar.classList.add('flash-warn');
+    } else {
+      bar.classList.remove('flash-warn');
+    }
+  }
+
+}
+
+function startLivePoll() {
+  if (_livePollTimer) clearTimeout(_livePollTimer);
+  state.liveMode = true;
+  pollLiveStatus();
+  // Also refresh simfolio data periodically
+  refreshSimfolioPeriodic();
+}
+
+function stopLivePoll() {
+  state.liveMode = false;
+  if (_livePollTimer) { clearTimeout(_livePollTimer); _livePollTimer = null; }
+  if (state.countdownInterval) { clearInterval(state.countdownInterval); state.countdownInterval = null; }
+}
+
+function pollLiveStatus() {
+  if (!state.serverConnected) {
+    _livePollTimer = setTimeout(pollLiveStatus, 30000);
+    return;
+  }
+
+  // Fetch scheduler status
+  fetch('/api/scheduler/status')
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      // Update progress UI
-      if ($pipelineBar) $pipelineBar.style.width = data.progress + '%';
-      if ($pipelinePct) $pipelinePct.textContent = data.progress + '%';
-      if ($pipelineStep && data.step) $pipelineStep.textContent = data.step;
+      state.schedulerStatus = data;
 
-      if (data.status === 'done') {
-        // Analysis complete
-        clearInterval(_pipelinePollTimer);
-        _pipelinePollTimer = null;
-        updateStatus('分析完成！共分析 ' + (data.result ? data.result.analyzed : '?') + ' 只股票');
-        if ($pipelineStep) $pipelineStep.textContent = '分析完成！';
-        if ($pipelineProgress) setTimeout(function() { $pipelineProgress.style.display = 'none'; }, 5000);
-        resetRunButton();
+      // Fetch simfolio status for trade notifications
+      fetch('/api/simfolio/status')
+        .then(function(r) { return r.json(); })
+        .then(function(sfData) {
+          // Check for new auto-trades
+          var trades = sfData.tradeHistory || [];
+          for (var i = trades.length - 1; i >= 0; i--) {
+            var t = trades[i];
+            if (t.triggeredBy && t.time) {
+              var tradeId = t.date + 'T' + t.time + '_' + t.code;
+              if (_lastNotifiedTradeTime !== tradeId) {
+                _lastNotifiedTradeTime = tradeId;
+                showTradeNotification(t);
+                break;
+              }
+            }
+          }
+        })
+        .catch(function() {});
 
-        // Auto-trigger Simfolio trading
-        setTimeout(function() { triggerAutoTrade(); }, 500);
+      // Update AI status badge
+      updateAIStatusBadge(data);
+      // Update live status display
+      updateLiveStatusDisplay(data);
+      // Update nav simfolio badge
+      updateNavSimfolioBadge(data);
 
-        // Show summary
-        if (data.result) {
-          showAnalysisSummary(data.result);
-        }
-      } else if (data.status === 'error') {
-        clearInterval(_pipelinePollTimer);
-        _pipelinePollTimer = null;
-        updateStatus('分析出错: ' + (data.error || '未知错误'));
-        resetRunButton();
-      }
+      var isActive = data.state === 'morning_session' || data.state === 'afternoon_session';
+      var interval = isActive ? 5000 : 15000;
+      _livePollTimer = setTimeout(pollLiveStatus, interval);
     })
     .catch(function() {
-      // Server might be busy, keep polling
+      setAIStatusOffline();
+      _livePollTimer = setTimeout(pollLiveStatus, 30000);
     });
 }
 
-function resetRunButton() {
-  if ($btnRunAnalysis) {
-    $btnRunAnalysis.disabled = false;
-    $btnRunAnalysis.textContent = '⚡ 运行分析';
+function updateAIStatusBadge(sched) {
+  if (!$aiStatusBadge || !$aiStatusLabel) return;
+
+  var state = sched.state || 'closed';
+  var isTrading = state === 'morning_session' || state === 'afternoon_session';
+  var isPrePost = state === 'pre_market' || state === 'post_market';
+  var opsRunning = sched.opsRunning;
+
+  // Remove all state classes
+  $aiStatusBadge.classList.remove('live', 'trading', 'error');
+
+  if (opsRunning) {
+    $aiStatusBadge.classList.add('trading');
+    $aiStatusLabel.textContent = '量化交易 · 运行中';
+  } else if (isTrading) {
+    $aiStatusBadge.classList.add('trading');
+    $aiStatusLabel.textContent = '量化交易 · 进行中';
+  } else if (isPrePost) {
+    $aiStatusBadge.classList.add('live');
+    $aiStatusLabel.textContent = '量化交易 · ' + (state === 'pre_market' ? '盘前准备' : '盘后总结');
+  } else {
+    $aiStatusBadge.classList.add('live');
+    $aiStatusLabel.textContent = '量化交易 · 就绪';
   }
 }
 
-function showAnalysisSummary(result) {
-  if (!result || !result.top5) return;
+function setAIStatusOffline() {
+  if (!$aiStatusBadge || !$aiStatusLabel) return;
+  $aiStatusBadge.classList.remove('live', 'trading');
+  $aiStatusBadge.classList.add('error');
+  $aiStatusLabel.textContent = '量化交易 · 离线';
+}
 
-  var summary = '📊 量化分析完成！TOP5: ';
-  for (var i = 0; i < result.top5.length; i++) {
-    var s = result.top5[i];
-    summary += (i > 0 ? ', ' : '') + s.name + '(' + s.compositeScore + '分/' + s.rating + '级)';
+function updateNavSimfolioBadge(sched) {
+  if (!$navSimfolioBadge) return;
+  var isActive = sched.state === 'morning_session' || sched.state === 'afternoon_session';
+  if (isActive) {
+    $navSimfolioBadge.style.display = 'inline-block';
+    $navSimfolioBadge.textContent = 'LIVE';
+    $navSimfolioBadge.style.background = '#fef3c7';
+    $navSimfolioBadge.style.color = '#92400e';
+  } else if (sched.state === 'pre_market' || sched.state === 'post_market') {
+    $navSimfolioBadge.style.display = 'inline-block';
+    $navSimfolioBadge.textContent = '待命';
+    $navSimfolioBadge.style.background = '#f1f5f9';
+    $navSimfolioBadge.style.color = '#64748b';
+  } else {
+    $navSimfolioBadge.style.display = 'none';
   }
-  updateStatus(summary);
+}
 
-  // Reload page to show new data (for P1, just refresh the state)
-  // For now, the analysis results are available via API
+function updateLiveStatusDisplay(sched) {
+  if (!sched) return;
+
+  var stateLabels = {
+    'closed': '⚫ 休市',
+    'pre_market': '🌅 盘前准备',
+    'morning_session': '🟢 早盘交易中',
+    'lunch_break': '🍱 午休',
+    'afternoon_session': '🟢 午盘交易中',
+    'post_market': '🌇 盘后总结',
+  };
+
+  var label = stateLabels[sched.state] || sched.state;
+  var statusText = '📡 ' + label;
+
+  if (sched.nextTickMs != null && sched.nextTickMs > 0) {
+    var secs = Math.round(sched.nextTickMs / 1000);
+    statusText += ' · 下次检查: ' + secs + 's';
+  }
+
+  if (sched.positionAlerts && sched.positionAlerts.length > 0) {
+    var criticalCount = 0;
+    for (var i = 0; i < sched.positionAlerts.length; i++) {
+      if (sched.positionAlerts[i].priority === 'critical') criticalCount++;
+    }
+    if (criticalCount > 0) {
+      statusText += ' · ⚠️ ' + criticalCount + '个股触发止损';
+    }
+  }
+
+  if (sched.lastPipeline) {
+    var lastTime = new Date(sched.lastPipeline);
+    var minAgo = Math.round((Date.now() - lastTime) / 60000);
+    statusText += ' · 上次扫描: ' + minAgo + '分钟前';
+  }
+
+  updateStatus(statusText);
+
+  if ($liveIndicator) {
+    var isActive = sched.state === 'morning_session' || sched.state === 'afternoon_session';
+    $liveIndicator.textContent = isActive ? '🟢 LIVE' : '📡 ' + label;
+    $liveIndicator.style.color = isActive ? '#16a34a' : '#94a3b8';
+  }
+}
+
+// Separate periodic simfolio data refresh for the live panel
+function refreshSimfolioPeriodic() {
+  if (!state.serverConnected) {
+    setTimeout(refreshSimfolioPeriodic, 30000);
+    return;
+  }
+
+  var prevSnapshot = state.simfolioData ? state.simfolioData.snapshot : null;
+  var prevTradeCount = state.simfolioData ? (state.simfolioData.tradeHistory ? state.simfolioData.tradeHistory.length : 0) : 0;
+
+  fetchSimfolioData(function(sfData) {
+    if (sfData) {
+      sfData._prevSnapshot = prevSnapshot;
+      state.simfolioData = sfData;
+
+      // Only re-render if data changed meaningfully and simfolio is active
+      if (state.activeSection === 'simfolio') {
+        var newTotal = sfData.snapshot ? sfData.snapshot.totalValue : null;
+        var prevTotal = prevSnapshot ? prevSnapshot.totalValue : null;
+        var newTradeCount = sfData.tradeHistory ? sfData.tradeHistory.length : 0;
+
+        // Re-render if value changed or new trades
+        if (newTotal !== prevTotal || newTradeCount !== prevTradeCount) {
+          updateSimfolioDOM(sfData);
+        }
+        // Update feed timestamp
+        var timeEl = document.getElementById('feed-update-time');
+        if (timeEl) {
+          var now = new Date();
+          timeEl.textContent = now.toTimeString().slice(0, 8);
+        }
+      }
+    }
+    var isActive = state.schedulerStatus &&
+      (state.schedulerStatus.state === 'morning_session' || state.schedulerStatus.state === 'afternoon_session');
+    setTimeout(refreshSimfolioPeriodic, isActive ? 5000 : 30000);
+  });
+}
+
+// Lightweight DOM update without full re-render
+function updateSimfolioDOM(sfData) {
+  // Update the countdown bar (scheduler status may have changed)
+  if (state.schedulerStatus) {
+    var bar = document.getElementById('sf-countdown-bar');
+    if (bar) {
+      bar.outerHTML = renderCountdownBar(state.schedulerStatus);
+    }
+  }
+
+  // Update asset cards
+  var container = $contentArea.querySelector('.report-preview');
+  if (!container) return;
+
+  // Find and update card values
+  var cards = container.querySelectorAll('.sf-card-value');
+  var snap = sfData.snapshot;
+  if (snap && cards.length >= 4) {
+    cards[0].textContent = '¥' + formatMoneyCN(snap.totalValue);
+    cards[1].textContent = '¥' + formatMoneyCN(snap.cash);
+    cards[2].textContent = (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%';
+  }
+
+  // Update positions table if present
+  if (snap && snap.positions && snap.positions.length > 0) {
+    var posTable = container.querySelector('table');
+    // For now, if positions changed significantly, do full refresh
+    // Simple check: if table row count differs
+    if (posTable) {
+      var rows = posTable.querySelectorAll('tbody tr');
+      if (rows.length !== snap.positions.length) {
+        renderCurrentSection();
+      }
+    }
+  }
+}
+
+// ---- Trade Notification Toast ----
+
+function showTradeNotification(trade) {
+  var isBuy = trade.action === 'buy';
+  var isAuto = !!trade.triggeredBy;
+  var icon = isAuto ? '🤖' : (isBuy ? '🔴' : '🟢');
+  var actionLabel = isBuy ? '买入' : '卖出';
+  var autoLabel = isAuto ? '[自动] ' : '';
+  var pnlText = '';
+  if (!isBuy && trade.pnlPct != null) {
+    pnlText = ' | ' + (trade.pnl >= 0 ? '+' : '') + trade.pnlPct.toFixed(2) + '%';
+  }
+
+  var toast = document.createElement('div');
+  toast.className = 'trade-toast';
+  toast.style.cssText = 'position:fixed;top:70px;right:20px;z-index:10000;' +
+    'background:#1e293b;color:#e2e8f0;border-left:4px solid ' + (isAuto ? '#f59e0b' : (isBuy ? '#ef4444' : '#22c55e')) + ';' +
+    'border-radius:8px;padding:12px 18px;font-size:13px;max-width:360px;' +
+    'box-shadow:0 8px 32px rgba(0,0,0,0.4);animation:slideInRight 0.3s ease-out;' +
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+
+  toast.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + icon + ' ' + autoLabel + actionLabel + ' · ' + trade.name + ' (' + trade.code + ')</div>' +
+    '<div style="font-size:12px;opacity:0.8;">' +
+    '价格: ¥' + trade.price.toFixed(2) + ' · ' + trade.shares + '股 | 金额: ¥' + formatMoneyCN(trade.amount) + pnlText +
+    '</div>' +
+    '<div style="font-size:11px;opacity:0.6;margin-top:2px;">' + (trade.time || '') + ' ' + (trade.reason || '') + '</div>';
+
+  document.body.appendChild(toast);
+
+  // Remove after 8 seconds
+  setTimeout(function() {
+    toast.style.opacity = '0';
+    toast.style.transition = 'opacity 0.5s';
+    setTimeout(function() {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 500);
+  }, 8000);
+
+  // Store in state
+  state.tradeNotifications.unshift(trade);
+  if (state.tradeNotifications.length > 20) state.tradeNotifications.pop();
 }
 
 // ============ Reports Index ============
@@ -404,14 +788,25 @@ function setActiveSection(sectionId) {
 
   if ($contentTitle) {
     $contentTitle.textContent = sec ? sec.label : sectionId;
+    // Add simfolio accent class
+    if (sectionId === 'simfolio') {
+      $contentTitle.parentElement.classList.add('simfolio-header');
+    } else {
+      $contentTitle.parentElement.classList.remove('simfolio-header');
+    }
   }
 
   renderCurrentSection();
 }
 
 function renderCurrentSection() {
+  // For non-engine views, loadReportByMeta already handled content
   if (!state.reportData || state.currentViewMode !== 'engine') {
-    // For HTML/pdfs-only, loadReportByMeta already handled content
+    // But still allow simfolio to render without report data
+    if (state.activeSection === 'simfolio' && state.serverConnected) {
+      renderSimfolioDirect();
+      return;
+    }
     return;
   }
 
@@ -422,6 +817,12 @@ function renderCurrentSection() {
   }
 
   if (!sec) return;
+
+  // Simfolio renders directly (no iframe) for live DOM updates
+  if (sectionId === 'simfolio') {
+    renderSimfolioDirect();
+    return;
+  }
 
   try {
     var sectionHTML = sec.render(state.reportData, 'app');
@@ -441,6 +842,61 @@ function renderCurrentSection() {
   } catch (e) {
     $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#e74c3c;">渲染出错: ' + escHtml(e.message) + '</p></div>';
   }
+}
+
+// Direct render simfolio into content area (no iframe, allows live DOM updates)
+function renderSimfolioDirect() {
+  if (!state.simfolioData || !state.simfolioData.snapshot) {
+    // Need to load data first
+    fetchSimfolioData(function(sfData) {
+      if (sfData) {
+        state.simfolioData = sfData;
+      }
+      renderSimfolioDirectDOM();
+    });
+    return;
+  }
+  renderSimfolioDirectDOM();
+}
+
+function renderSimfolioDirectDOM() {
+  var sfData = state.simfolioData;
+  var sectionHTML = sfData && sfData.snapshot
+    ? renderSimfolioLivePanel(sfData)
+    : renderSimfolioEmpty();
+
+  var css = renderSoftwareCSS();
+
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;background:#f5f6fa;';
+
+  // Inject CSS
+  var styleEl = document.createElement('style');
+  styleEl.textContent = css;
+  container.appendChild(styleEl);
+
+  // Inject content
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'report-preview';
+  contentDiv.innerHTML = sectionHTML;
+  container.appendChild(contentDiv);
+
+  $contentArea.appendChild(container);
+
+  // Initialize countdown display
+  if (state.schedulerStatus) {
+    tickCountdown();
+  }
+
+  // Refresh simfolio data in background
+  fetchSimfolioData(function(freshData) {
+    if (freshData) {
+      var prevSnap = state.simfolioData ? state.simfolioData.snapshot : null;
+      freshData._prevSnapshot = prevSnap;
+      state.simfolioData = freshData;
+    }
+  });
 }
 
 // ============ Send PDF to Email ============
@@ -606,16 +1062,11 @@ function renderCalendar() {
   for (var day = 1; day <= daysInMonth; day++) {
     var dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
     var hasReport = state.reportsByDate[dateStr] !== undefined;
-    var reportCount = hasReport ? state.reportsByDate[dateStr].length : 0;
     var isToday = dateStr === todayStr;
     var isActive = dateStr === cal.activeDate;
 
     var cls = 'calendar-day current-month';
     if (isToday) cls += ' today';
-    if (hasReport) {
-      cls += ' has-report';
-      if (reportCount > 1) cls += ' multi';
-    }
     if (isActive) cls += ' active';
 
     var clickAttr = hasReport ? ' onclick="onDateClick(\'' + dateStr + '\')"' : '';
@@ -660,8 +1111,8 @@ function onDateClick(dateStr) {
   if (!best) best = reports[0];
 
   cal.activeDate = dateStr;
-  // Reset to cover when switching dates
-  state.activeSection = 'cover';
+  // Default to simfolio section
+  state.activeSection = 'simfolio';
   loadReportByMeta(best);
   renderCalendar();
   renderReportList();
@@ -720,7 +1171,7 @@ function onReportItemClick(dateStr, title) {
   if (!meta) meta = reports[0];
 
   cal.activeDate = dateStr;
-  state.activeSection = 'cover';
+  state.activeSection = 'simfolio';
   loadReportByMeta(meta);
   renderCalendar();
   renderReportList();
@@ -795,10 +1246,10 @@ function showRecommendationHistory() {
   // Save current section to restore later
   _historyPrevSection = state.activeSection;
 
-  // Highlight TOP5 nav item
+  // Highlight trading report nav item
   var items = $sectionNavList.querySelectorAll('.section-nav-item');
   items.forEach(function(item) {
-    item.classList.toggle('active', item.getAttribute('data-section') === 'top5Ranking');
+    item.classList.toggle('active', item.getAttribute('data-section') === 'tradingReport');
   });
 
   if ($contentTitle) {
@@ -826,7 +1277,7 @@ function closeRecommendationHistory() {
   if (_historyPrevSection) {
     setActiveSection(_historyPrevSection);
   } else {
-    setActiveSection('top5Ranking');
+    setActiveSection('simfolio');
   }
 }
 
@@ -834,13 +1285,15 @@ function closeRecommendationHistory() {
 window.showRecommendationHistory = showRecommendationHistory;
 window.closeRecommendationHistory = closeRecommendationHistory;
 
-// Periodic server status check (every 60s)
+// Periodic server status check (every 5 min, only when NOT in live mode)
 var _serverPollTimer = null;
 function startServerPoll() {
   if (_serverPollTimer) clearInterval(_serverPollTimer);
   _serverPollTimer = setInterval(function() {
-    checkServerStatus();
-  }, 60000);
+    if (!state.liveMode) {
+      checkServerStatus();
+    }
+  }, 300000); // 5 min when idle
 }
 
 // -- Start --

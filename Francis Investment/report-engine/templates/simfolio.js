@@ -115,7 +115,7 @@ function renderSimfolio(data, mode) {
     html += '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;">📋 交易记录（最近20条）</h3>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:11px;color:' + text + ';">';
     html += '<thead><tr style="border-bottom:2px solid ' + accent + ';">';
-    html += '<th style="padding:6px;text-align:left;">日期</th><th style="padding:6px;">方向</th><th style="padding:6px;text-align:left;">股票</th><th style="padding:6px;text-align:right;">价格</th><th style="padding:6px;text-align:right;">股数</th><th style="padding:6px;text-align:right;">金额</th><th style="padding:6px;text-align:right;">盈亏</th><th style="padding:6px;text-align:left;">原因</th>';
+    html += '<th style="padding:6px;text-align:left;">日期</th><th style="padding:6px;text-align:left;">时间</th><th style="padding:6px;">方向</th><th style="padding:6px;text-align:left;">股票</th><th style="padding:6px;text-align:right;">价格</th><th style="padding:6px;text-align:right;">股数</th><th style="padding:6px;text-align:right;">金额</th><th style="padding:6px;text-align:right;">盈亏</th><th style="padding:6px;text-align:left;">原因</th>';
     html += '</tr></thead><tbody>';
 
     var recent = tradeHistory.slice(-20).reverse();
@@ -124,6 +124,7 @@ function renderSimfolio(data, mode) {
       var isBuy = t.action === 'buy';
       html += '<tr style="border-bottom:1px solid ' + (isPDF ? '#1e3050' : '#eef0f4') + ';">';
       html += '<td style="padding:6px;">' + t.date + '</td>';
+      html += '<td style="padding:6px;color:' + muted + ';">' + (t.time || '--:--:--') + '</td>';
       html += '<td style="padding:6px;color:' + (isBuy ? red : green) + ';font-weight:600;">' + (isBuy ? '买入' : '卖出') + '</td>';
       html += '<td style="padding:6px;">' + escHtml(t.name) + ' <span style="color:' + muted + ';">' + t.code + '</span></td>';
       html += '<td style="padding:6px;text-align:right;">¥' + t.price.toFixed(2) + '</td>';

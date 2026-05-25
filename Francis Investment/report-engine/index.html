@@ -31,10 +31,14 @@
       <span class="toolbar-title">Francis <span class="accent">Investment</span></span>
       <span class="toolbar-divider">|</span>
       <span id="toolbar-date" class="toolbar-date">2026年5月15日</span>
+      <span id="live-indicator" style="margin-left:12px;font-size:11px;font-weight:600;color:#94a3b8;"></span>
     </div>
     <div class="toolbar-right">
-      <button id="btn-run-analysis" class="btn btn-accent" title="自动联网采集数据，量化分析，推荐股票">⚡ 运行分析</button>
-      <button id="btn-gen-pdf" class="btn btn-outline" title="生成PDF报告（含学术格式）" style="color:var(--accent);border-color:var(--accent);">生成PDF</button>
+      <div id="ai-status-badge" style="display:flex;align-items:center;gap:8px;padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;white-space:nowrap;">
+        <span id="ai-status-dot" style="width:8px;height:8px;border-radius:50%;background:#16a34a;animation:pulse-dot 2s infinite;"></span>
+        <span id="ai-status-label">量化交易 · 就绪</span>
+      </div>
+      <button id="btn-gen-pdf" class="btn btn-outline" title="生成PDF报告" style="color:var(--accent);border-color:var(--accent);">生成PDF</button>
       <button id="btn-send-pdf" class="btn btn-primary" title="发送PDF报告至邮箱">发送PDF至邮箱</button>
     </div>
   </div>
@@ -60,43 +64,25 @@
 
       <!-- Section Navigation -->
       <div id="section-nav">
-        <div class="section-nav-title">报告板块</div>
+        <div class="section-nav-title">核心面板</div>
         <div class="section-nav-list" id="section-nav-list">
-          <div class="section-nav-item active" data-section="cover">
-            <span class="section-nav-icon">📋</span>
-            <span class="section-nav-label">报告封面</span>
+          <div class="section-nav-item active" data-section="simfolio">
+            <span class="section-nav-icon">💰</span>
+            <span class="section-nav-label">模拟交易</span>
+            <span id="nav-simfolio-badge" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;background:#fef3c7;color:#92400e;display:none;">LIVE</span>
           </div>
           <div class="section-nav-item" data-section="newsPolicy">
             <span class="section-nav-icon">📰</span>
             <span class="section-nav-label">时政要点</span>
           </div>
-          <div class="section-nav-item" data-section="marketOverview">
+          <div class="section-nav-item" data-section="tradingReport">
             <span class="section-nav-icon">📊</span>
-            <span class="section-nav-label">大盘综述</span>
+            <span class="section-nav-label">交易分析与报告</span>
           </div>
-          <div class="section-nav-item" data-section="holdingsAnalysis">
+          <div class="section-nav-item section-nav-disabled" data-section="holdingsAnalysis">
             <span class="section-nav-icon">💼</span>
             <span class="section-nav-label">持仓分析</span>
-          </div>
-          <div class="section-nav-item" data-section="sectorTracking">
-            <span class="section-nav-icon">🔥</span>
-            <span class="section-nav-label">板块跟踪</span>
-          </div>
-          <div class="section-nav-item" data-section="lowPricePicks">
-            <span class="section-nav-icon">💎</span>
-            <span class="section-nav-label">潜力股推荐</span>
-          </div>
-          <div class="section-nav-item" data-section="top5Ranking">
-            <span class="section-nav-icon">🏆</span>
-            <span class="section-nav-label">TOP5 排行</span>
-          </div>
-          <div class="section-nav-item" data-section="simfolio">
-            <span class="section-nav-icon">💰</span>
-            <span class="section-nav-label">模拟交易</span>
-          </div>
-          <div class="section-nav-item" data-section="riskMatrix">
-            <span class="section-nav-icon">⚠️</span>
-            <span class="section-nav-label">风险矩阵</span>
+            <span style="margin-left:auto;font-size:10px;padding:2px 6px;border-radius:8px;background:#f1f5f9;color:#94a3b8;">暂不可用</span>
           </div>
         </div>
       </div>
@@ -111,7 +97,7 @@
     <!-- ====== CONTENT AREA ====== -->
     <div id="content-panel">
       <div class="content-header">
-        <span id="content-title">报告封面</span>
+        <span id="content-title">模拟交易</span>
       </div>
       <div id="content-area">
         <div class="content-placeholder">
