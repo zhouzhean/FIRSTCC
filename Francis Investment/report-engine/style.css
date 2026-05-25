@@ -89,6 +89,10 @@ body {
 .btn-outline.active { color: var(--accent); border-color: var(--accent); background: var(--accent-light); font-weight: 600; }
 .btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
 .btn-primary:hover { background: var(--accent-dark); border-color: var(--accent-dark); box-shadow: var(--shadow); }
+.btn-accent { background: linear-gradient(135deg, #0a1628, #162d50); color: #b8942c; border-color: #b8942c; font-weight: 600; font-size: 12px; padding: 5px 14px; }
+.btn-accent:hover { background: linear-gradient(135deg, #162d50, #1e4070); box-shadow: 0 0 12px rgba(184,148,44,0.3); }
+.btn-accent:disabled { opacity: 0.5; cursor: not-allowed; }
+#pipeline-progress { transition: all 0.3s; }
 
 /* Status bar */
 #status-bar {

@@ -1,0 +1,120 @@
+{
+  "meta": {
+    "initialCapital": 100000,
+    "startDate": "2026-05-24",
+    "lastUpdated": "2026-05-25T12:07:43.944Z"
+  },
+  "cash": 53842.00204000001,
+  "positions": [
+    {
+      "code": "600021",
+      "name": "上海电力",
+      "shares": 500,
+      "avgCost": 18.54,
+      "currentPrice": 18.54,
+      "entryDate": "2026-05-25",
+      "entryReason": "试探买入：72分/B级"
+    },
+    {
+      "code": "600172",
+      "name": "黄河旋风",
+      "shares": 800,
+      "avgCost": 12.09,
+      "currentPrice": 12.09,
+      "entryDate": "2026-05-25",
+      "entryReason": "试探买入：72分/B级"
+    },
+    {
+      "code": "600186",
+      "name": "莲花控股",
+      "shares": 700,
+      "avgCost": 12.93,
+      "currentPrice": 12.93,
+      "entryDate": "2026-05-25",
+      "entryReason": "试探买入：72分/B级"
+    },
+    {
+      "code": "600203",
+      "name": "福日电子",
+      "shares": 700,
+      "avgCost": 13.17,
+      "currentPrice": 13.17,
+      "entryDate": "2026-05-25",
+      "entryReason": "试探买入：72分/B级"
+    },
+    {
+      "code": "600292",
+      "name": "电投水电",
+      "shares": 600,
+      "avgCost": 14.89,
+      "currentPrice": 14.89,
+      "entryDate": "2026-05-25",
+      "entryReason": "试探买入：72分/B级"
+    }
+  ],
+  "tradeHistory": [
+    {
+      "date": "2026-05-25",
+      "action": "buy",
+      "code": "600021",
+      "name": "上海电力",
+      "price": 18.54,
+      "shares": 500,
+      "amount": 9270,
+      "fee": 2.41,
+      "reason": "试探买入：72分/B级"
+    },
+    {
+      "date": "2026-05-25",
+      "action": "buy",
+      "code": "600172",
+      "name": "黄河旋风",
+      "price": 12.09,
+      "shares": 800,
+      "amount": 9672,
+      "fee": 2.51,
+      "reason": "试探买入：72分/B级"
+    },
+    {
+      "date": "2026-05-25",
+      "action": "buy",
+      "code": "600186",
+      "name": "莲花控股",
+      "price": 12.93,
+      "shares": 700,
+      "amount": 9051,
+      "fee": 2.35,
+      "reason": "试探买入：72分/B级"
+    },
+    {
+      "date": "2026-05-25",
+      "action": "buy",
+      "code": "600203",
+      "name": "福日电子",
+      "price": 13.17,
+      "shares": 700,
+      "amount": 9219,
+      "fee": 2.4,
+      "reason": "试探买入：72分/B级"
+    },
+    {
+      "date": "2026-05-25",
+      "action": "buy",
+      "code": "600292",
+      "name": "电投水电",
+      "price": 14.89,
+      "shares": 600,
+      "amount": 8934,
+      "fee": 2.32,
+      "reason": "试探买入：72分/B级"
+    }
+  ],
+  "dailyNav": [
+    {
+      "date": "2026-05-25",
+      "nav": 99988.00204,
+      "return_": -0.01,
+      "benchmarkReturn": 0
+    }
+  ]
+}
