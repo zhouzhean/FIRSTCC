@@ -35,18 +35,71 @@ var cal = {
 };
 
 // Section definitions — v2.2: simfolio first, merged report, holdings greyed
+// v2.4: time-aware sections — show status based on market hours
+function getMarketTimeState() {
+  var now = new Date();
+  var h = now.getHours();
+  var m = now.getMinutes();
+  var t = h * 60 + m;
+  var day = now.getDay();
+  var isTradingDay = day >= 1 && day <= 5;
+
+  if (!isTradingDay) return 'closed';
+
+  // Market sessions: 9:30-11:30, 13:00-15:00
+  var inMorningSession = t >= 9*60+30 && t < 11*60+30;
+  var inAfternoonSession = t >= 13*60 && t < 15*60;
+
+  if (inMorningSession || inAfternoonSession) return 'trading';      // 交易中 → 暂不可用
+  if (t >= 15*60 && t < 16*60) return 'generating';                   // 15:00-16:00 → 正在生成
+  if (t >= 16*60 || (t >= 0 && t < 9*60+30)) return 'ready';         // 16:00后 → 可查看总结
+  return 'closed';
+}
+
+function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
+  var timeState = getMarketTimeState();
+  var html = '';
+
+  if (timeState === 'trading') {
+    html += '<div class="unavailable-placeholder">';
+    html += '<div class="lock-icon">⏳</div>';
+    html += '<div class="lock-title">' + sectionLabel + ' — 暂不可用</div>';
+    html += '<div class="lock-desc">市场交易中，AI 量化交易员正在实时监控。盘后总结报告将于每日16:00自动生成，届时可在此查看完整分析。</div>';
+    html += '</div>';
+  } else if (timeState === 'generating') {
+    html += '<div class="unavailable-placeholder" style="border:2px dashed #f59e0b;">';
+    html += '<div class="lock-icon">🔄</div>';
+    html += '<div class="lock-title">正在分析并生成中...</div>';
+    html += '<div class="lock-desc">市场已收盘，AI 正在汇总今日交易数据、量化评分、资金流向和板块动态，预计16:00前完成。请稍后再来查看。</div>';
+    html += '</div>';
+  } else if (timeState === 'ready') {
+    // Try to load daily summary
+    html += '<div id="daily-summary-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+    html += '<div style="text-align:center;padding:40px;color:#64748b;">';
+    html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+    html += '<div style="font-size:16px;font-weight:600;">正在加载今日总结...</div>';
+    html += '</div></div>';
+    // Async load
+    setTimeout(function() { loadDailySummaryIntoDOM(); }, 100);
+  } else {
+    // closed / non-trading day — use original report data
+    html = reportRenderer(data, mode);
+  }
+
+  return html;
+}
+
 var SECTIONS = [
   { id: 'simfolio',        label: '模拟交易',         icon: '💰', render: function(d,m) { return renderSimfolioLive(d,m); } },
-  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderNewsPolicy(d,m); } },
-  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradingReport(d,m); } },
-  { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderHoldingsUnavailable(d,m); } },
+  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderSectionByTime(d, m, renderNewsPolicy, '时政要点'); } },
+  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderSectionByTime(d, m, renderTradingReport, '交易分析与报告'); } },
+  { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
 ];
 
 // -- DOM refs --
 var $contentArea, $contentTitle, $btnSendPdf, $btnGenPDF, $statusBar;
 var $calendarWidget, $reportListItems, $sectionNavList;
 var $toolbarDate, $pipelineProgress, $pipelineStep, $pipelineBar, $pipelinePct;
-var $liveIndicator;
 var $aiStatusBadge, $aiStatusDot, $aiStatusLabel;
 var $navSimfolioBadge;
 
@@ -65,7 +118,6 @@ function initApp() {
   $pipelineStep    = document.getElementById('pipeline-step');
   $pipelineBar     = document.getElementById('pipeline-bar');
   $pipelinePct     = document.getElementById('pipeline-pct');
-  $liveIndicator   = document.getElementById('live-indicator');
   $aiStatusBadge   = document.getElementById('ai-status-badge');
   $aiStatusDot     = document.getElementById('ai-status-dot');
   $aiStatusLabel   = document.getElementById('ai-status-label');
@@ -312,7 +364,7 @@ function renderTradeActivityFeed(trades) {
         html += '<span style="color:' + (t.pnlPct >= 0 ? UP_COLOR : DOWN_COLOR) + ';font-size:11px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>';
       }
       html += '<span style="flex:1;"></span>';
-      html += '<span style="font-size:10px;color:#94a3b8;">' + (t.time || '') + '</span>';
+      html += '<span style="font-size:10px;color:#94a3b8;">' + (t.date || '') + ' ' + (t.time || '') + '</span>';
       html += '</div>';
     }
   }
@@ -367,6 +419,170 @@ function renderTradingReport(data, mode) {
     html += '</div>';
   }
   html += '</div>';
+  return html;
+}
+
+// ============ Daily Summary Loader (v2.4) ============
+
+function loadDailySummaryIntoDOM() {
+  var container = document.getElementById('daily-summary-container');
+  if (!container) return;
+
+  fetch('/api/daily-summary/latest')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok) {
+        container.innerHTML = '<div class="unavailable-placeholder">' +
+          '<div class="lock-icon">📊</div>' +
+          '<div class="lock-title">今日总结尚未生成</div>' +
+          '<div class="lock-desc">' + (data.message || '请于16:00后查看') + '</div>' +
+          '</div>';
+        return;
+      }
+      container.innerHTML = renderDailySummary(data);
+    })
+    .catch(function() {
+      container.innerHTML = '<div class="unavailable-placeholder">' +
+        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-title">加载失败</div>' +
+        '<div class="lock-desc">无法连接到服务器，请检查 Mosaic Server 是否运行。</div>' +
+        '</div>';
+    });
+}
+
+function renderDailySummary(s) {
+  var html = '';
+
+  // Title
+  html += '<div style="text-align:center;margin-bottom:24px;">';
+  html += '<h2 style="font-size:22px;color:#1e293b;margin:0 0 4px;">📋 ' + (s.date || '') + ' 盘后总结报告</h2>';
+  html += '<p style="font-size:12px;color:#94a3b8;">生成时间: ' + new Date(s.generatedAt).toTimeString().slice(0,8) + ' · Mosaic AI 量化引擎自动生成</p>';
+  html += '</div>';
+
+  // Market Overview
+  if (s.market && s.market.indices && s.market.indices.length > 0) {
+    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📈 大盘行情</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">';
+    for (var i = 0; i < s.market.indices.length; i++) {
+      var idx = s.market.indices[i];
+      var changeColor = (idx.changePercent || 0) >= 0 ? UP_COLOR : DOWN_COLOR;
+      var changeSign = (idx.changePercent || 0) >= 0 ? '+' : '';
+      html += '<div style="background:#f8fafc;border-radius:6px;padding:10px 14px;">';
+      html += '<div style="font-size:13px;font-weight:600;color:#1e293b;">' + escHtml(idx.name) + '</div>';
+      html += '<div style="font-size:18px;font-weight:700;margin:4px 0;">' + (idx.price || '--') + '</div>';
+      html += '<div style="font-size:12px;color:' + changeColor + ';">' + changeSign + (idx.changePercent || 0).toFixed(2) + '%</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  // Portfolio Summary
+  if (s.portfolio) {
+    var p = s.portfolio;
+    var retColor = p.totalReturn >= 0 ? UP_COLOR : DOWN_COLOR;
+    var alphaColor = p.alpha >= 0 ? UP_COLOR : DOWN_COLOR;
+    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">💰 模拟交易总结</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">总资产</div><div style="font-size:18px;font-weight:700;">¥' + formatMoneyCN(p.totalValue) + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">总收益</div><div style="font-size:18px;font-weight:700;color:' + retColor + ';">' + (p.totalReturn >= 0 ? '+' : '') + p.totalReturn.toFixed(2) + '%</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">超额收益 α</div><div style="font-size:18px;font-weight:700;color:' + alphaColor + ';">' + (p.alpha >= 0 ? '+' : '') + p.alpha.toFixed(2) + '%</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">可用现金</div><div style="font-size:18px;font-weight:700;">¥' + formatMoneyCN(p.cash) + '</div></div>';
+    html += '</div>';
+
+    // Positions
+    if (p.positions && p.positions.length > 0) {
+      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+      html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
+      html += '<th style="padding:8px;text-align:left;">股票</th><th style="padding:8px;text-align:right;">成本</th><th style="padding:8px;text-align:right;">现价</th><th style="padding:8px;text-align:right;">盈亏</th></tr></thead><tbody>';
+      for (var j = 0; j < p.positions.length; j++) {
+        var pos = p.positions[j];
+        var pnlColor = pos.pnl >= 0 ? UP_COLOR : DOWN_COLOR;
+        html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+        html += '<td style="padding:8px;"><b>' + escHtml(pos.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + pos.code + '</span></td>';
+        html += '<td style="padding:8px;text-align:right;">¥' + pos.avgCost.toFixed(2) + '</td>';
+        html += '<td style="padding:8px;text-align:right;">¥' + pos.currentPrice.toFixed(2) + '</td>';
+        html += '<td style="padding:8px;text-align:right;color:' + pnlColor + ';font-weight:600;">' + (pos.pnl >= 0 ? '+' : '') + pos.pnlPct.toFixed(2) + '%</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table>';
+    }
+    html += '</div>';
+  }
+
+  // Today's Trades
+  if (s.todayTrades && s.todayTrades.length > 0) {
+    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 今日交易记录 (' + s.todayTrades.length + '笔)</h3>';
+    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+    html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
+    html += '<th style="padding:8px;">时间</th><th style="padding:8px;">操作</th><th style="padding:8px;">股票</th><th style="padding:8px;text-align:right;">价格</th><th style="padding:8px;text-align:right;">数量</th><th style="padding:8px;text-align:right;">金额</th><th style="padding:8px;">原因</th></tr></thead><tbody>';
+    for (var k = 0; k < s.todayTrades.length; k++) {
+      var tr = s.todayTrades[k];
+      var isBuy = tr.action === 'buy';
+      var actionLabel = isBuy ? '🔴 买入' : '🟢 卖出';
+      html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+      html += '<td style="padding:8px;font-size:11px;">' + (tr.date||'') + ' ' + (tr.time||'') + '</td>';
+      html += '<td style="padding:8px;font-weight:600;color:' + (isBuy ? UP_COLOR : DOWN_COLOR) + ';">' + actionLabel + '</td>';
+      html += '<td style="padding:8px;"><b>' + escHtml(tr.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + tr.code + '</span></td>';
+      html += '<td style="padding:8px;text-align:right;">¥' + tr.price.toFixed(2) + '</td>';
+      html += '<td style="padding:8px;text-align:right;">' + tr.shares + '股</td>';
+      html += '<td style="padding:8px;text-align:right;">¥' + formatMoneyCN(tr.amount) + '</td>';
+      html += '<td style="padding:8px;font-size:11px;color:#64748b;">' + escHtml(tr.reason || '') + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+  }
+
+  // Pipeline Summary
+  if (s.pipeline) {
+    var pl = s.pipeline;
+    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔬 量化分析总结</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">扫描类型</div><div style="font-size:16px;font-weight:600;">' + (pl.type === 'full' ? '全量扫描' : '盘中扫描') + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">深度分析</div><div style="font-size:16px;font-weight:600;">' + (pl.analyzed || 0) + ' 只</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">平均分</div><div style="font-size:16px;font-weight:600;">' + (pl.avgScore || 0) + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最高分</div><div style="font-size:16px;font-weight:600;color:#f59e0b;">' + (pl.maxScore || 0) + '</div></div>';
+    html += '</div>';
+
+    if (pl.top5 && pl.top5.length > 0) {
+      html += '<div style="font-size:12px;color:#64748b;margin-bottom:4px;">TOP5 推荐:</div>';
+      for (var ti = 0; ti < pl.top5.length; ti++) {
+        var top = pl.top5[ti];
+        html += '<div style="padding:4px 0;font-size:13px;border-bottom:1px solid #f1f5f9;">';
+        html += '<span style="font-weight:600;color:#1e293b;">#' + (ti+1) + ' ' + escHtml(top.name) + '</span> ';
+        html += '<span style="color:#94a3b8;">' + top.code + '</span> ';
+        html += '<span style="color:#f59e0b;font-weight:600;">' + top.score + '分</span> ';
+        html += '<span style="color:#94a3b8;">' + (top.rating || '') + '</span>';
+        html += '</div>';
+      }
+    }
+    html += '</div>';
+  }
+
+  // Stats
+  if (s.stats) {
+    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📊 账户统计</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">胜率</div><div style="font-size:16px;font-weight:600;">' + (s.stats.winRate != null ? s.stats.winRate + '%' : '--') + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最大回撤</div><div style="font-size:16px;font-weight:600;color:#dc2626;">' + (s.stats.maxDrawdown || 0).toFixed(2) + '%</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">夏普比率</div><div style="font-size:16px;font-weight:600;">' + (s.stats.sharpeRatio || '--') + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">总交易</div><div style="font-size:16px;font-weight:600;">' + (s.stats.totalTrades || 0) + ' 笔</div></div>';
+    html += '</div></div>';
+  }
+
+  // Activity summary
+  html += '<div style="background:#fff;border-radius:8px;padding:16px;border:1px solid #e2e5eb;">';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">📡 今日活动</h3>';
+  html += '<div style="font-size:13px;color:#64748b;line-height:1.8;">';
+  html += '<div>🔍 量化扫描: <b>' + (s.scanCount || 0) + '</b> 次</div>';
+  html += '<div>💹 交易执行: <b>' + (s.tradeCount || 0) + '</b> 笔</div>';
+  html += '<div>📝 事件记录: <b>' + (s.eventCount || 0) + '</b> 条</div>';
+  html += '</div></div>';
+
   return html;
 }
 
@@ -578,12 +794,6 @@ function updateLiveStatusDisplay(sched) {
   }
 
   updateStatus(statusText);
-
-  if ($liveIndicator) {
-    var isActive = sched.state === 'morning_session' || sched.state === 'afternoon_session';
-    $liveIndicator.textContent = isActive ? '🟢 LIVE' : '📡 ' + label;
-    $liveIndicator.style.color = isActive ? '#16a34a' : '#94a3b8';
-  }
 }
 
 // Separate periodic simfolio data refresh for the live panel
@@ -687,7 +897,7 @@ function showTradeNotification(trade) {
     '<div style="font-size:12px;opacity:0.8;">' +
     '价格: ¥' + trade.price.toFixed(2) + ' · ' + trade.shares + '股 | 金额: ¥' + formatMoneyCN(trade.amount) + pnlText +
     '</div>' +
-    '<div style="font-size:11px;opacity:0.6;margin-top:2px;">' + (trade.time || '') + ' ' + (trade.reason || '') + '</div>';
+    '<div style="font-size:11px;opacity:0.6;margin-top:2px;">' + (trade.date || '') + ' ' + (trade.time || '') + ' ' + (trade.reason || '') + '</div>';
 
   document.body.appendChild(toast);
 
@@ -832,6 +1042,13 @@ function renderCurrentSection() {
     return;
   }
 
+  // Time-aware sections may need async loading, render directly
+  var timeState = getMarketTimeState();
+  if (sectionId !== 'simfolio' && (timeState === 'trading' || timeState === 'generating' || timeState === 'ready')) {
+    renderTimeAwareSectionDirect(sectionId);
+    return;
+  }
+
   try {
     var sectionHTML = sec.render(state.reportData, 'app');
     var css = renderSoftwareCSS();
@@ -847,6 +1064,37 @@ function renderCurrentSection() {
     iframe.sandbox = 'allow-same-origin allow-scripts';
     iframe.srcdoc = wrapperHTML;
     $contentArea.appendChild(iframe);
+  } catch (e) {
+    $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#e74c3c;">渲染出错: ' + escHtml(e.message) + '</p></div>';
+  }
+}
+
+// Direct render time-aware section into content area (no iframe, allows async loading)
+function renderTimeAwareSectionDirect(sectionId) {
+  var sec = null;
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === sectionId) { sec = SECTIONS[i]; break; }
+  }
+  if (!sec) return;
+
+  try {
+    var sectionHTML = sec.render(state.reportData, 'app');
+    var css = renderSoftwareCSS();
+
+    $contentArea.innerHTML = '';
+    var container = document.createElement('div');
+    container.style.cssText = 'height:100%;overflow-y:auto;background:#f5f6fa;';
+
+    var styleEl = document.createElement('style');
+    styleEl.textContent = css;
+    container.appendChild(styleEl);
+
+    var contentDiv = document.createElement('div');
+    contentDiv.className = 'report-preview';
+    contentDiv.innerHTML = sectionHTML;
+    container.appendChild(contentDiv);
+
+    $contentArea.appendChild(container);
   } catch (e) {
     $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#e74c3c;">渲染出错: ' + escHtml(e.message) + '</p></div>';
   }

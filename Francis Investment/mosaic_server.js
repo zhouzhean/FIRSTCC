@@ -82,6 +82,48 @@ function saveLastPipelineResult(result, type) {
   } catch (e) { /* silent */ }
 }
 
+// ---- Daily Events Log (persisted by date) ----
+
+function saveDailyEvent(event) {
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const eventsDir = path.join(DATA_DIR, 'events');
+    if (!fs.existsSync(eventsDir)) fs.mkdirSync(eventsDir, { recursive: true });
+    const filePath = path.join(eventsDir, today + '.json');
+    let events = [];
+    if (fs.existsSync(filePath)) {
+      try { events = JSON.parse(fs.readFileSync(filePath, 'utf8')); } catch (e) {}
+    }
+    events.push(event);
+    // Keep max 500 events per day
+    if (events.length > 500) events = events.slice(-500);
+    fs.writeFileSync(filePath, JSON.stringify(events, null, 2), 'utf8');
+  } catch (e) { /* silent */ }
+}
+
+function loadDailyEvents(dateStr) {
+  try {
+    const filePath = path.join(DATA_DIR, 'events', dateStr + '.json');
+    if (fs.existsSync(filePath)) {
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    }
+  } catch (e) { /* silent */ }
+  return [];
+}
+
+function listEventDates() {
+  try {
+    const eventsDir = path.join(DATA_DIR, 'events');
+    if (!fs.existsSync(eventsDir)) return [];
+    return fs.readdirSync(eventsDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => f.replace('.json', ''))
+      .sort()
+      .reverse()
+      .slice(0, 60); // last 60 days
+  } catch (e) { return []; }
+}
+
 function getNextScanTime() {
   const now = new Date();
   for (const s of SCAN_SCHEDULE) {
@@ -411,6 +453,34 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: true, message: '已触发持仓检查' });
   }
 
+  // Daily events log
+  if (pathname === '/api/events/dates') {
+    return jsonResponse(res, { ok: true, dates: listEventDates() });
+  }
+  const eventsDateMatch = pathname.match(/^\/api\/events\/(\d{4}-\d{2}-\d{2})$/);
+  if (eventsDateMatch) {
+    const events = loadDailyEvents(eventsDateMatch[1]);
+    return jsonResponse(res, { ok: true, date: eventsDateMatch[1], events: events });
+  }
+
+  // Daily summary report
+  if (pathname === '/api/daily-summary/latest') {
+    const today = new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    if (fs.existsSync(summaryPath)) {
+      return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(summaryPath, 'utf8')) });
+    }
+    return jsonResponse(res, { ok: false, message: '今日总结尚未生成，请于16:00后查看' });
+  }
+  const summaryDateMatch = pathname.match(/^\/api\/daily-summary\/(\d{4}-\d{2}-\d{2})$/);
+  if (summaryDateMatch) {
+    const summaryPath = path.join(DATA_DIR, 'summaries', summaryDateMatch[1] + '.json');
+    if (fs.existsSync(summaryPath)) {
+      return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(summaryPath, 'utf8')) });
+    }
+    return jsonResponse(res, { ok: false, message: '该日期的总结不存在' });
+  }
+
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
     const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
@@ -434,6 +504,11 @@ const server = http.createServer(function(req, res) {
         data.lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
       } catch (e) { /* ignore */ }
     }
+    // Include today's events
+    const todayStr2 = new Date().toISOString().slice(0, 10);
+    data.todayEvents = loadDailyEvents(todayStr2);
+    data.eventDates = listEventDates();
+
     // Include position snapshot
     try {
       const pf = simfolio.loadPortfolio();
@@ -479,6 +554,13 @@ const server = http.createServer(function(req, res) {
       const events = scheduler.getEvents(50);
       if (events.length > 0) {
         res.write('event: history\ndata: ' + JSON.stringify({ events }) + '\n\n');
+      }
+
+      // Send today's persisted events (more complete than scheduler in-memory)
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const dailyEvents = loadDailyEvents(todayStr);
+      if (dailyEvents.length > 0) {
+        res.write('event: daily_events\ndata: ' + JSON.stringify({ date: todayStr, events: dailyEvents }) + '\n\n');
       }
 
       // Send position snapshot
@@ -533,9 +615,10 @@ server.listen(PORT, '0.0.0.0', function() {
   scheduler = new Scheduler();
   scheduler.start();
 
-  // Wire scheduler events to console
+  // Wire scheduler events to console AND daily log
   scheduler.on('event', (evt) => {
-    // Important events already logged by scheduler internally
+    // Save all important events to daily log for think-tank timeline
+    saveDailyEvent(evt);
   });
   scheduler.on('trades_executed', (trades) => {
     console.log('  [Server] Auto-trades executed:', trades.length);

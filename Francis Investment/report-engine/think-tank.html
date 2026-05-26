@@ -289,10 +289,65 @@
   .top5-code { color: var(--dim); font-size: 10px; }
   .top5-score { font-weight: bold; color: var(--amber); }
 
-  /* Responsive */
+  /* Responsive — Tablet */
   @media (max-width: 900px) {
     .main-grid { grid-template-columns: 1fr; }
     .thought-stream { grid-row: span 1; }
+    .header { flex-wrap: wrap; gap: 10px; }
+    .header-stats { margin-left: 0; gap: 10px; }
+    .header-clock { font-size: 18px; }
+  }
+
+  /* Responsive — Phone */
+  @media (max-width: 600px) {
+    .app { padding: 4px 6px; }
+    .header {
+      flex-direction: column; align-items: flex-start; gap: 6px;
+      padding: 8px 12px;
+    }
+    .header-logo { font-size: 14px; }
+    .header-stats {
+      margin-left: 0; gap: 8px; flex-wrap: wrap;
+    }
+    .header-stat .val { font-size: 13px; }
+    .header-stat .lbl { font-size: 9px; }
+    .header-clock { font-size: 16px; margin-left: 0; }
+    .header-date { font-size: 10px; }
+    .main-grid { grid-template-columns: 1fr; gap: 6px; }
+    .thought-stream { grid-row: span 1; }
+    .panel { padding: 8px 10px; }
+    .panel-header { font-size: 10px; }
+    .thought-current { min-height: 40px; padding: 8px 10px; }
+    .thought-current .thinking-content { font-size: 12px; }
+    .thought-log { max-height: 200px; }
+    .factor-label { width: 60px; font-size: 9px; }
+    .timeline-scroll { max-height: 150px; }
+    .tl-entry { font-size: 10px; padding: 3px 4px; }
+    .tl-entry .tl-time { min-width: 55px; font-size: 9px; }
+    .tl-entry .tl-tag { font-size: 9px; min-width: 40px; padding: 0 4px; }
+    .position-bar {
+      flex-direction: column; align-items: flex-start; gap: 6px;
+      padding: 8px 12px;
+    }
+    .pos-item { font-size: 10px; padding: 3px 6px; }
+    .pos-cash { margin-left: 0; }
+    .top5-row { font-size: 10px; }
+    .top5-code { font-size: 9px; }
+    .dist-label { width: 40px; font-size: 9px; }
+    .dist-pct { width: 35px; font-size: 10px; }
+    .enrich-item { font-size: 10px; }
+    .header-state { font-size: 10px; padding: 2px 8px; }
+  }
+
+  /* Responsive — Small phone */
+  @media (max-width: 380px) {
+    .header-stats { gap: 4px; }
+    .header-stat { min-width: 40px; }
+    .header-stat .val { font-size: 11px; }
+    .header-clock { font-size: 14px; }
+    .factor-label { width: 48px; font-size: 8px; }
+    .factor-count { width: 28px; font-size: 10px; }
+    .tl-entry .tl-time { min-width: 45px; font-size: 8px; }
   }
 
   /* Idle state overlay */
@@ -375,7 +430,13 @@
 
   <!-- Event Timeline -->
   <div class="panel timeline">
-    <div class="panel-header"><span class="icon">&#9776;</span><span class="title">事件时间线</span><span style="margin-left:auto;font-size:10px;color:var(--dim)" id="eventCount">0 事件</span></div>
+    <div class="panel-header">
+      <span class="icon">&#9776;</span><span class="title">事件时间线</span>
+      <select id="eventDateSelect" style="margin-left:12px;background:var(--panel);color:var(--text-bright);border:1px solid var(--border);border-radius:4px;padding:2px 8px;font-size:11px;font-family:inherit;cursor:pointer;" onchange="onEventDateChange(this.value)">
+        <option value="today">今天</option>
+      </select>
+      <span style="margin-left:auto;font-size:10px;color:var(--dim)" id="eventCount">0 事件</span>
+    </div>
     <div class="timeline-scroll" id="timeline">
       <div class="tl-entry"><span class="tl-time">--:--:--</span><span class="tl-tag state">系统</span><span class="tl-msg">等待事件...</span></div>
     </div>
@@ -552,9 +613,14 @@ function clearThoughtLog() {
 
 // ---- Timeline ----
 let eventEntries = [];
-const MAX_EVENTS = 100;
+const MAX_EVENTS = 200;
+let currentEventDate = 'today'; // 'today' or a date string
+let availableEventDates = [];
 
 function addTimelineEntry(time, tag, tagClass, msg) {
+  // If viewing a historical date, don't add live events
+  if (currentEventDate !== 'today') return;
+
   eventEntries.unshift(
     '<div class="tl-entry"><span class="tl-time">' + time + '</span>' +
     '<span class="tl-tag ' + tagClass + '">' + tag + '</span>' +
@@ -563,6 +629,98 @@ function addTimelineEntry(time, tag, tagClass, msg) {
   if (eventEntries.length > MAX_EVENTS) eventEntries.pop();
   const container = document.getElementById('timeline');
   container.innerHTML = eventEntries.join('');
+  document.getElementById('eventCount').textContent = eventEntries.length + ' 事件';
+}
+
+function onEventDateChange(value) {
+  currentEventDate = value;
+  if (value === 'today') {
+    // Restore today's events from the in-memory array
+    renderTimelineFromArray(eventEntries);
+    document.getElementById('eventCount').textContent = eventEntries.length + ' 事件';
+  } else {
+    // Load historical events from server
+    loadEventsForDate(value);
+  }
+}
+
+function loadEventsForDate(dateStr) {
+  var tl = document.getElementById('timeline');
+  tl.innerHTML = '<div class="tl-entry"><span class="tl-time">--:--:--</span><span class="tl-tag state">加载</span><span class="tl-msg">加载中...</span></div>';
+
+  fetch('/api/events/' + dateStr)
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.events || data.events.length === 0) {
+        tl.innerHTML = '<div class="tl-entry"><span class="tl-time">--:--:--</span><span class="tl-tag state">系统</span><span class="tl-msg">该日期无事件记录</span></div>';
+        document.getElementById('eventCount').textContent = '0 事件';
+        return;
+      }
+      var entries = [];
+      for (var i = data.events.length - 1; i >= 0; i--) {
+        var evt = data.events[i];
+        var time = isoToLocalTime(evt.time);
+        var tag = mapEventTag(evt.type);
+        var tagClass = mapEventClass(evt.type);
+        var msg = formatEventMsg(evt);
+        entries.push(
+          '<div class="tl-entry"><span class="tl-time">' + time + '</span>' +
+          '<span class="tl-tag ' + tagClass + '">' + tag + '</span>' +
+          '<span class="tl-msg">' + msg + '</span></div>'
+        );
+      }
+      tl.innerHTML = entries.join('');
+      document.getElementById('eventCount').textContent = data.events.length + ' 事件';
+      document.getElementById('eventDateSelect').value = dateStr;
+    })
+    .catch(function() {
+      tl.innerHTML = '<div class="tl-entry"><span class="tl-time">--:--:--</span><span class="tl-tag alert">错误</span><span class="tl-msg">加载失败</span></div>';
+    });
+}
+
+function renderTimelineFromArray(entries) {
+  var tl = document.getElementById('timeline');
+  if (entries.length === 0) {
+    tl.innerHTML = '<div class="tl-entry"><span class="tl-time">--:--:--</span><span class="tl-tag state">系统</span><span class="tl-msg">等待事件...</span></div>';
+  } else {
+    tl.innerHTML = entries.join('');
+  }
+}
+
+function populateEventDates(dates) {
+  availableEventDates = dates || [];
+  var select = document.getElementById('eventDateSelect');
+  // Keep the "today" option
+  select.innerHTML = '<option value="today">今天</option>';
+  for (var i = 0; i < availableEventDates.length; i++) {
+    var d = availableEventDates[i];
+    var selected = (currentEventDate === d) ? ' selected' : '';
+    select.innerHTML += '<option value="' + d + '"' + selected + '>' + d + '</option>';
+  }
+}
+
+function populateTimelineFromEvents(events) {
+  eventEntries = [];
+  if (!events || events.length === 0) {
+    renderTimelineFromArray([]);
+    document.getElementById('eventCount').textContent = '0 事件';
+    return;
+  }
+  for (var i = events.length - 1; i >= 0; i--) {
+    var evt = events[i];
+    var time = isoToLocalTime(evt.time);
+    var tag = mapEventTag(evt.type);
+    var tagClass = mapEventClass(evt.type);
+    var msg = formatEventMsg(evt);
+    eventEntries.push(
+      '<div class="tl-entry"><span class="tl-time">' + time + '</span>' +
+      '<span class="tl-tag ' + tagClass + '">' + tag + '</span>' +
+      '<span class="tl-msg">' + msg + '</span></div>'
+    );
+  }
+  // Reverse for chronological display (newest first)
+  eventEntries.reverse();
+  renderTimelineFromArray(eventEntries);
   document.getElementById('eventCount').textContent = eventEntries.length + ' 事件';
 }
 
@@ -615,15 +773,20 @@ function connectSSE() {
 
   es.addEventListener('connected', function(e) {
     thoughtEntries = [];
-    eventEntries = [];
     nextScanInfo = null;
+    // Don't clear eventEntries if already loaded from REST — they get refreshed by daily_events SSE
+    if (!initialDataLoaded) {
+      eventEntries = [];
+    }
     // Don't clear lastResult — keep stale data until fresh data arrives
     var msg = initialDataLoaded
       ? '<div class="msg" style="color:var(--green)">已重新连接到 Mosaic AI 引擎</div>'
       : '<div class="msg" style="color:var(--green)">已连接到 Mosaic AI 引擎</div>';
     addThoughtEntry('<div class="idle-overlay"><div class="big-icon" style="color:var(--green)">&#9678;</div>' +
       msg + '<div class="sub">等待分析事件...</div></div>');
-    addTimelineEntry(new Date().toTimeString().slice(0,8), '连接', 'state', 'SSE 已连接到 Mosaic 服务器');
+    if (!initialDataLoaded) {
+      addTimelineEntry(new Date().toTimeString().slice(0,8), '连接', 'state', 'SSE 已连接到 Mosaic 服务器');
+    }
     updateIdleDisplay();
   });
 
@@ -656,6 +819,25 @@ function connectSSE() {
 
   es.addEventListener('position_snapshot', function(e) {
     try { updatePositionBar(JSON.parse(e.data)); } catch(ex) {}
+  });
+
+  // daily_events: persisted events sent on connect
+  es.addEventListener('daily_events', function(e) {
+    try {
+      var d = JSON.parse(e.data);
+      if (d.events && currentEventDate === 'today') {
+        populateTimelineFromEvents(d.events);
+      }
+      if (d.date) {
+        // Update event dates list if needed
+        fetch('/api/events/dates')
+          .then(function(r) { return r.json(); })
+          .then(function(data) {
+            if (data.dates) populateEventDates(data.dates);
+          })
+          .catch(function() {});
+      }
+    } catch(ex) {}
   });
 
   // last_result: persisted pipeline result sent on connect
@@ -716,6 +898,14 @@ function connectSSE() {
         document.getElementById('thinkingContent').textContent =
           '启动量化扫描... 原因: ' + (d.reason || 'scheduled');
         addTimelineEntry(new Date().toTimeString().slice(0,8), '扫描', 'scan', '扫描启动: ' + (d.reason || ''));
+      } else if (d.type === 'daily_summary') {
+        document.getElementById('thinkingLabel').textContent = '📋 盘后总结已生成';
+        document.getElementById('thinkingContent').innerHTML =
+          '<span style="color:var(--green)">今日盘后总结报告已生成！</span><br>' +
+          '<span style="color:var(--dim)">可在 Francis Investment 主面板查看完整报告</span>';
+        addTimelineEntry(new Date().toTimeString().slice(0,8), '总结', 'scan',
+          '盘后总结已生成: 资产¥' + ((d.summary && d.summary.portfolio) ? d.summary.portfolio.totalValue.toLocaleString() : '--') +
+          ' | 交易' + ((d.summary && d.summary.tradeCount) || 0) + '笔');
       } else if (d.type === 'scan_complete') {
         document.getElementById('thoughtProgress').style.display = 'none';
         document.getElementById('thinkingLabel').textContent = '◆ 扫描完成';
@@ -875,8 +1065,8 @@ function connectSSE() {
           escHtml(d.name) + '(' + d.code + ') ' +
           d.shares + '股 @' + fmtPrice(d.price) +
           (d.reason ? ' <span style="color:var(--dim)">' + escHtml(d.reason) + '</span>' : '');
-        addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
-          actionLabel, 'trade',
+        var tradeTime2 = d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8);
+        addTimelineEntry(tradeTime2, actionLabel, 'trade',
           actionLabel + ' ' + escHtml(d.name) + '(' + d.code + ') ' + d.shares + '股 @' + fmtPrice(d.price) +
           (d.reason ? ' — ' + d.reason : ''));
       } else if (d.type === 'trade_skip') {
@@ -1008,6 +1198,14 @@ function loadInitialData() {
           (data.lastResult.analyzed||'?') + '深析 | 均分' + (data.lastResult.avgScore||0));
       }
 
+      // Populate event dates and today's events
+      if (data.eventDates) {
+        populateEventDates(data.eventDates);
+      }
+      if (data.todayEvents) {
+        populateTimelineFromEvents(data.todayEvents);
+      }
+
       // Populate position bar
       if (data.positions) {
         updatePositionBar(data.positions);
@@ -1030,12 +1228,15 @@ document.addEventListener('visibilitychange', function() {
 // ---- Helpers for history events ----
 function mapEventTag(type) {
   const m = {
-    pipeline_start: '扫描', pipeline_complete: '扫描', pipeline_error: '扫描',
-    midscan_start: '扫描', midscan_complete: '扫描',
-    trade_executed: '交易', trade_complete: '交易', trade_skip: '跳过',
-    state_change: '状态', risk_trade: '风控',
+    pipeline_start: '扫描', pipeline_complete: '扫描', pipeline_error: '扫描', pipeline_timeout: '超时', pipeline_skip: '跳过',
+    midscan_start: '扫描', midscan_complete: '扫描', midscan_error: '扫描', midscan_skip: '跳过',
+    trade_executed: '交易', trade_complete: '交易', trade_skip: '跳过', trade_error: '错误',
+    state_change: '状态', risk_trade: '风控', risk_trade_error: '错误',
     scheduler_start: '系统', scheduler_stop: '系统',
-    position_monitor_fetch_fail: '警报',
+    position_monitor_fetch_fail: '警报', position_monitor_error: '错误',
+    position_refresh: '刷新', post_market_wrapup: '收盘', wrapup_error: '错误',
+    daily_summary_start: '总结', daily_summary_complete: '总结', daily_summary_error: '错误',
+    new_day: '新日',
   };
   return m[type] || '信息';
 }
@@ -1043,8 +1244,9 @@ function mapEventTag(type) {
 function mapEventClass(type) {
   if (type.includes('trade')) return 'trade';
   if (type.includes('scan') || type.includes('pipeline')) return 'scan';
-  if (type.includes('risk') || type.includes('alert')) return 'alert';
-  if (type.includes('state') || type.includes('position')) return 'state';
+  if (type.includes('risk') || type.includes('alert') || type.includes('error')) return 'alert';
+  if (type.includes('summary') || type.includes('wrapup')) return 'scan';
+  if (type.includes('state') || type.includes('position') || type.includes('new_day')) return 'state';
   return 'state';
 }
 
@@ -1071,6 +1273,16 @@ function formatEventMsg(evt) {
       return '风控执行: ' + (d.name||'') + ' ' + (d.reason||'');
     case 'scheduler_start':
       return '调度器启动: ' + (d.state||'') + ' ' + (d.date||'');
+    case 'post_market_wrapup':
+      return '收盘总结: 总资产¥' + (d.totalValue||0) + ' 收益' + (d.totalReturn||0) + '%';
+    case 'daily_summary_start':
+      return '开始生成盘后总结报告...';
+    case 'daily_summary_complete':
+      return '盘后总结生成完毕: 交易' + (d.tradeCount||0) + '笔 最高分' + (d.topScore||0);
+    case 'new_day':
+      return '新交易日开始: ' + (d.date||'');
+    case 'position_refresh':
+      return '持仓价格刷新: ' + ((d.codes||[]).length||0) + '只股票 (' + (d.reason||'') + ')';
     default:
       return JSON.stringify(d).slice(0, 100);
   }

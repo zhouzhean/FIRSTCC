@@ -115,6 +115,15 @@ class Scheduler extends EventEmitter {
       this._runPostMarketWrapup();
     }
 
+    // 16:00 后：生成每日盘后总结报告
+    const hourNow = now.getHours();
+    const isAfter4pm = hourNow >= 16;
+    const summaryKey = 'daily_summary_' + dateStr;
+    if (isAfter4pm && !this._scheduledOps.has(summaryKey)) {
+      this._scheduledOps.add(summaryKey);
+      this._runDailySummary();
+    }
+
     this._saveState();
     this._scheduleNextTick();
   }
@@ -690,6 +699,120 @@ class Scheduler extends EventEmitter {
       });
     } catch (err) {
       this._logEvent('wrapup_error', { error: err.message });
+    }
+  }
+
+  // ==================== 操作：每日盘后总结报告（16:00） ====================
+
+  async _runDailySummary() {
+    const dateStr = this._todayDate;
+    this._logEvent('daily_summary_start', { date: dateStr });
+
+    try {
+      const simfolio = require('./simfolio');
+      const marketData = require('./collectors/market_data');
+
+      const pf = simfolio.loadPortfolio();
+      const snap = simfolio.getSnapshot(pf);
+      const stats = simfolio.computeStats(pf);
+
+      // Get today's trades
+      const todayTrades = pf.tradeHistory.filter(t => t.date === dateStr);
+
+      // Get index data
+      let indices = [];
+      try {
+        indices = await Promise.race([
+          marketData.fetchIndices(),
+          this._timeout(30000, '指数获取超时'),
+        ]);
+      } catch (e) { /* silent */ }
+
+      // Get last pipeline result
+      let lastResult = null;
+      try {
+        const resultPath = path.join(config.DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        if (fs.existsSync(resultPath)) {
+          lastResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
+        }
+      } catch (e) { /* silent */ }
+
+      // Get today's events
+      let todayEvents = [];
+      try {
+        const eventsPath = path.join(config.DATA_DIR, 'events', dateStr + '.json');
+        if (fs.existsSync(eventsPath)) {
+          todayEvents = JSON.parse(fs.readFileSync(eventsPath, 'utf8'));
+        }
+      } catch (e) { /* silent */ }
+
+      const summary = {
+        date: dateStr,
+        generatedAt: new Date().toISOString(),
+        market: {
+          indices: indices.map(i => ({
+            name: i.name, code: i.code,
+            price: i.price, changePercent: i.changePercent,
+          })),
+        },
+        portfolio: {
+          totalValue: snap.totalValue,
+          totalReturn: snap.totalReturn,
+          cash: snap.cash,
+          positionValue: snap.positionValue,
+          benchmarkReturn: snap.benchmarkReturn,
+          alpha: snap.alpha,
+          positions: snap.positions.map(p => ({
+            code: p.code, name: p.name, shares: p.shares,
+            avgCost: p.avgCost, currentPrice: p.currentPrice,
+            pnl: p.pnl, pnlPct: p.pnlPct,
+          })),
+        },
+        stats: {
+          winRate: stats.winRate,
+          maxDrawdown: stats.maxDrawdown,
+          sharpeRatio: stats.sharpeRatio,
+          totalTrades: stats.totalTrades,
+        },
+        todayTrades: todayTrades.map(t => ({
+          action: t.action, code: t.code, name: t.name,
+          price: t.price, shares: t.shares, amount: t.amount,
+          reason: t.reason, time: t.time, date: t.date,
+          pnl: t.pnl, pnlPct: t.pnlPct,
+        })),
+        pipeline: lastResult ? {
+          type: lastResult.type,
+          analyzed: lastResult.analyzed,
+          avgScore: lastResult.avgScore,
+          maxScore: lastResult.maxScore,
+          top5: lastResult.top5 || [],
+          scoreDistribution: lastResult.scoreDistribution,
+        } : null,
+        eventCount: todayEvents.length,
+        scanCount: todayEvents.filter(e => e.type === 'pipeline_complete' || e.type === 'midscan_complete').length,
+        tradeCount: todayTrades.length,
+      };
+
+      // Save summary
+      const summaryDir = path.join(config.DATA_DIR, 'summaries');
+      if (!fs.existsSync(summaryDir)) fs.mkdirSync(summaryDir, { recursive: true });
+      const summaryPath = path.join(summaryDir, dateStr + '.json');
+      fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf8');
+
+      this._logEvent('daily_summary_complete', {
+        totalValue: snap.totalValue,
+        tradeCount: todayTrades.length,
+        topScore: lastResult ? lastResult.maxScore : null,
+      });
+
+      // 广播到 SSE 客户端
+      this.emit('think_scan', {
+        type: 'daily_summary',
+        summary: summary,
+        time: new Date().toISOString(),
+      });
+    } catch (err) {
+      this._logEvent('daily_summary_error', { error: err.message });
     }
   }
 
