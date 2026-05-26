@@ -825,7 +825,13 @@ class Scheduler extends EventEmitter {
         scanCount: todayEvents.filter(e => e.type === 'pipeline_complete' || e.type === 'midscan_complete').length,
         tradeCount: todayTrades.length,
         // === NEW fields ===
-        news: newsData || { items: [], count: 0, generatedAt: null },
+        news: (function() {
+          var n = newsData || { items: [], count: 0, generatedAt: null };
+          if (analysisData && analysisData.newsImpact) {
+            n.impact = analysisData.newsImpact;
+          }
+          return n;
+        })(),
         tradeAnalysis: analysisData || { date: dateStr, generatedAt: null },
       };
 

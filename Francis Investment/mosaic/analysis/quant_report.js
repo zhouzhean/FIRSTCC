@@ -421,6 +421,167 @@ function generateForwardPrediction(indices, pipelineResult, priorKnowledge) {
   return { shortTermOutlook: outlook, keyWatch, riskFactors };
 }
 
+// ---- News Impact Prediction ----
+
+function generateNewsImpactPrediction(newsItems, indices) {
+  if (!newsItems || newsItems.length === 0) {
+    return { overallSentiment: 'neutral', impactScore: 50, keyThemes: [], sectorImpact: {}, shortTermPrediction: '今日无重大财经新闻，市场预计维持现有趋势。', riskEvents: [], generatedAt: new Date().toISOString() };
+  }
+
+  // Sentiment keywords (Chinese financial terms)
+  var positiveKW = ['利好', '增长', '突破', '上涨', '反弹', '回暖', '复苏', '扩张', '降息', '降准', '宽松', '刺激', '扶持', '补贴', '盈利', '超预期', '创新高', '获批', '签约', '投资', '融资', 'IPO', '解冻', '改善'];
+  var negativeKW = ['下跌', '暴跌', '亏损', '下滑', '萎缩', '衰退', '违约', '暴雷', '处罚', '调查', '制裁', '关税', '贸易战', '冲突', '危机', '收紧', '加息', '通胀', '滞胀', '退市', 'ST', '警示', '冻结', '限售', '解禁', '减持', '抛售'];
+  var uncertaintyKW = ['不确定性', '风险', '波动', '谨慎', '观望', '博弈', '谈判', '或有', '待定', '可能', '预计'];
+
+  var positiveCount = 0, negativeCount = 0, neutralCount = 0;
+  var keyThemes = [];
+  var sectorImpact = {};
+  var riskEvents = [];
+  var allKeywords = [];
+
+  // Analyze each news item
+  for (var i = 0; i < newsItems.length; i++) {
+    var item = newsItems[i];
+    var title = item.title || '';
+    var summary = item.summary || '';
+    var fullText = title + summary;
+    var sentiment = 'neutral';
+
+    var posHits = 0, negHits = 0, uncHits = 0;
+
+    for (var p = 0; p < positiveKW.length; p++) {
+      if (fullText.indexOf(positiveKW[p]) >= 0) posHits++;
+    }
+    for (var n = 0; n < negativeKW.length; n++) {
+      if (fullText.indexOf(negativeKW[n]) >= 0) negHits++;
+    }
+    for (var u = 0; u < uncertaintyKW.length; u++) {
+      if (fullText.indexOf(uncertaintyKW[u]) >= 0) uncHits++;
+    }
+
+    if (posHits > negHits + 1) { sentiment = 'positive'; positiveCount++; }
+    else if (negHits > posHits + 1) { sentiment = 'negative'; negativeCount++; }
+    else { neutralCount++; }
+
+    // Collect keywords for theme extraction
+    if (posHits + negHits + uncHits > 0) {
+      allKeywords.push({ title: title, sentiment: sentiment, category: item.category, source: item.source });
+    }
+
+    // Track sector-level impact
+    if (item.category === 'sector' || item.category === 'policy') {
+      var sectorNames = {
+        '半导体': 'semiconductor', '芯片': 'semiconductor', 'AI': 'ai', '人工智能': 'ai',
+        '新能源': 'newEnergy', '光伏': 'newEnergy', '锂电': 'newEnergy', '电池': 'newEnergy',
+        '医药': 'pharma', '医疗': 'pharma', '生物': 'pharma',
+        '银行': 'bank', '金融': 'finance', '证券': 'finance', '保险': 'finance',
+        '地产': 'realEstate', '房地产': 'realEstate',
+        '消费': 'consumer', '食品': 'consumer', '饮料': 'consumer', '白酒': 'consumer',
+        '汽车': 'auto', '新能源车': 'auto',
+        '军工': 'defense', '国防': 'defense',
+        '钢铁': 'steel', '有色': 'metal', '铝': 'metal', '铜': 'metal',
+        '煤炭': 'coal', '石油': 'energy', '天然气': 'energy',
+        '量子': 'quantum', '计算': 'tech', '软件': 'tech', '互联网': 'tech',
+      };
+      for (var s in sectorNames) {
+        if (title.indexOf(s) >= 0) {
+          var secKey = sectorNames[s];
+          if (!sectorImpact[secKey]) sectorImpact[secKey] = { name: s, sentiment: sentiment, count: 0 };
+          sectorImpact[secKey].count++;
+          if (sentiment === 'positive' || sentiment === 'negative') sectorImpact[secKey].sentiment = sentiment;
+        }
+      }
+    }
+  }
+
+  // Determine overall sentiment
+  var total = positiveCount + negativeCount + neutralCount;
+  var overallSentiment = 'neutral';
+  if (total > 0) {
+    var posRatio = positiveCount / total;
+    var negRatio = negativeCount / total;
+    if (posRatio > 0.4 && posRatio > negRatio) overallSentiment = 'positive';
+    else if (negRatio > 0.4 && negRatio > posRatio) overallSentiment = 'negative';
+  }
+
+  // Compute impact score (0-100, 50 = neutral)
+  var impactScore = 50;
+  if (total > 0) {
+    impactScore = Math.round(50 + (positiveCount - negativeCount) / total * 40);
+    impactScore = Math.max(0, Math.min(100, impactScore));
+  }
+
+  // Extract key themes (top impactful news)
+  var topItems = allKeywords.filter(function(k) { return k.sentiment !== 'neutral'; }).slice(0, 8);
+  var seenThemes = {};
+  for (var ti = 0; ti < topItems.length; ti++) {
+    var kw = topItems[ti];
+    var theme = kw.title.slice(0, 30);
+    if (!seenThemes[theme]) {
+      seenThemes[theme] = true;
+      keyThemes.push({
+        theme: kw.title,
+        impact: kw.sentiment,
+        category: kw.category,
+        description: kw.title,
+      });
+    }
+  }
+
+  // Sector predictions
+  var sectorPredictions = [];
+  for (var sk in sectorImpact) {
+    var si = sectorImpact[sk];
+    var pred = si.sentiment === 'positive' ? '偏多，相关板块或受提振' : (si.sentiment === 'negative' ? '偏空，相关板块承压' : '中性，板块维持震荡');
+    sectorPredictions.push({ sector: si.name, sentiment: si.sentiment, prediction: pred, newsCount: si.count });
+  }
+
+  // Generate short-term prediction
+  var predictionText = '';
+  var sentimentLabels = { positive: '偏多', negative: '偏空', neutral: '中性' };
+  predictionText += '综合今日' + total + '条财经新闻分析，市场情绪' + sentimentLabels[overallSentiment] + '。';
+
+  if (overallSentiment === 'positive') {
+    predictionText += '正面消息占比' + Math.round(positiveCount / total * 100) + '%，利好因素较多，短期市场有上行支撑。';
+    if (Object.keys(sectorImpact).length > 0) {
+      var positiveSectors = Object.keys(sectorImpact).filter(function(k) { return sectorImpact[k].sentiment === 'positive'; });
+      if (positiveSectors.length > 0) {
+        predictionText += '重点关注：' + positiveSectors.map(function(k) { return sectorImpact[k].name; }).join('、') + '等板块。';
+      }
+    }
+  } else if (overallSentiment === 'negative') {
+    predictionText += '负面/不确定性消息较多（' + Math.round((negativeCount + neutralCount * 0.3) / total * 100) + '%），短期市场情绪承压，建议控制仓位。';
+    for (var ri = 0; ri < Math.min(3, keyThemes.length); ri++) {
+      riskEvents.push(keyThemes[ri].theme);
+    }
+  } else {
+    predictionText += '多空消息交织，市场缺乏明确方向，预计维持震荡格局。建议观望为主，等待新的催化因素。';
+  }
+
+  // Risk events from negative and uncertainty news
+  if (riskEvents.length === 0) {
+    var negItems = allKeywords.filter(function(k) { return k.sentiment === 'negative'; }).slice(0, 3);
+    for (var ni2 = 0; ni2 < negItems.length; ni2++) {
+      riskEvents.push(negItems[ni2].title);
+    }
+    var uncertainItems = allKeywords.filter(function(k) { return k.sentiment === 'neutral'; }).slice(0, 2);
+    for (var ui = 0; ui < uncertainItems.length; ui++) {
+      if (riskEvents.indexOf(uncertainItems[ui].title) < 0) riskEvents.push(uncertainItems[ui].title);
+    }
+  }
+
+  return {
+    overallSentiment: overallSentiment,
+    impactScore: impactScore,
+    stats: { total: total, positive: positiveCount, negative: negativeCount, neutral: neutralCount },
+    keyThemes: keyThemes.slice(0, 6),
+    sectorPredictions: sectorPredictions.slice(0, 8),
+    shortTermPrediction: predictionText,
+    riskEvents: riskEvents.slice(0, 4),
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 // ---- Main: Build Trade Analysis ----
 
 function buildTradeAnalysis(date, pf, pipelineResult, todayTrades, indices, events, newsItems, priorKnowledge) {
@@ -443,6 +604,7 @@ function buildTradeAnalysis(date, pf, pipelineResult, todayTrades, indices, even
   var marketNarrative = generateMarketNarrative(indices, events || [], newsItems || []);
   var factorSummary = generateFactorAttributionSummary(pipelineResult);
   var forwardPredictions = generateForwardPrediction(indices, pipelineResult, priorKnowledge || []);
+  var newsImpact = generateNewsImpactPrediction(newsItems || [], indices);
 
   return {
     date: date,
@@ -451,6 +613,7 @@ function buildTradeAnalysis(date, pf, pipelineResult, todayTrades, indices, even
     tradesAnalysis: tradesAnalysis,
     factorSummary: factorSummary,
     forwardPredictions: forwardPredictions,
+    newsImpact: newsImpact,
   };
 }
 
@@ -460,4 +623,5 @@ module.exports = {
   generateTradeDeepDive,
   generateFactorAttributionSummary,
   generateForwardPrediction,
+  generateNewsImpactPrediction,
 };

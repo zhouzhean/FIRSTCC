@@ -94,6 +94,7 @@ var SECTIONS = [
   { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderNewsPolicySection(d,m); } },
   { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
+  { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '🧠', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
 
 // -- DOM refs --
@@ -529,6 +530,74 @@ function renderNewsDigest(news, date) {
     html += '<div style="text-align:center;padding:40px;color:#94a3b8;">📭 今日暂无重大财经新闻</div>';
   }
 
+  // News Impact Prediction
+  if (news.impact && news.impact.keyThemes && news.impact.keyThemes.length > 0) {
+    var imp = news.impact;
+    var sentColors = { positive: '#dc2626', negative: '#16a34a', neutral: '#64748b' };
+    var sentIcons = { positive: '📈', negative: '📉', neutral: '➡️' };
+    var sentLabels = { positive: '偏多', negative: '偏空', neutral: '中性' };
+
+    html += '<div style="background:linear-gradient(135deg,#fef3c7,#fef9e7);border-radius:10px;padding:20px;margin-top:20px;border:1px solid #f59e0b;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔮 AI 新闻影响预测</h3>';
+
+    // Overall sentiment bar
+    var scoreWidth = imp.impactScore || 50;
+    var scoreColor = scoreWidth > 60 ? UP_COLOR : (scoreWidth < 40 ? DOWN_COLOR : '#f59e0b');
+    html += '<div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">';
+    html += '<div style="font-size:12px;color:#64748b;">市场情绪</div>';
+    html += '<div style="flex:1;height:8px;background:#e5e7eb;border-radius:4px;position:relative;">';
+    html += '<div style="width:' + scoreWidth + '%;height:100%;background:' + scoreColor + ';border-radius:4px;"></div>';
+    html += '</div>';
+    html += '<div style="font-size:12px;font-weight:700;color:' + scoreColor + ';">' + sentLabels[imp.overallSentiment] + ' (' + scoreWidth + '分)</div>';
+    html += '</div>';
+
+    // Stats
+    if (imp.stats) {
+      html += '<div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;">';
+      html += '<span style="color:#dc2626;">📈 利好 ' + (imp.stats.positive || 0) + '条</span>';
+      html += '<span style="color:#16a34a;">📉 利空 ' + (imp.stats.negative || 0) + '条</span>';
+      html += '<span style="color:#64748b;">➡️ 中性 ' + (imp.stats.neutral || 0) + '条</span>';
+      html += '</div>';
+    }
+
+    // Prediction text
+    html += '<p style="font-size:13px;line-height:1.8;color:#334155;margin:0 0 12px;">' + escHtml(imp.shortTermPrediction || '') + '</p>';
+
+    // Key themes
+    if (imp.keyThemes && imp.keyThemes.length > 0) {
+      html += '<div style="margin-bottom:10px;font-size:12px;color:#64748b;font-weight:600;">关键主题</div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">';
+      for (var kt = 0; kt < imp.keyThemes.length; kt++) {
+        var theme = imp.keyThemes[kt];
+        var tc = theme.impact === 'positive' ? '#dc2626' : (theme.impact === 'negative' ? '#16a34a' : '#64748b');
+        html += '<span style="padding:4px 10px;background:#fff;border-radius:14px;font-size:11px;color:' + tc + ';border:1px solid #e2e5eb;max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escHtml(theme.theme || '') + '">' + escHtml((theme.theme || '').slice(0, 40)) + '</span>';
+      }
+      html += '</div>';
+    }
+
+    // Sector predictions
+    if (imp.sectorPredictions && imp.sectorPredictions.length > 0) {
+      html += '<div style="margin-bottom:10px;font-size:12px;color:#64748b;font-weight:600;">板块影响</div>';
+      html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px;margin-bottom:12px;">';
+      for (var sp = 0; sp < imp.sectorPredictions.length; sp++) {
+        var sec = imp.sectorPredictions[sp];
+        var sc = sec.sentiment === 'positive' ? '#dc2626' : (sec.sentiment === 'negative' ? '#16a34a' : '#64748b');
+        html += '<div style="background:#fff;padding:8px 10px;border-radius:6px;font-size:11px;">';
+        html += '<b style="color:#1e293b;">' + escHtml(sec.sector) + '</b> ';
+        html += '<span style="color:' + sc + ';">' + escHtml(sec.prediction || '') + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Risk events
+    if (imp.riskEvents && imp.riskEvents.length > 0) {
+      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">⚠ 风险关注: ' + imp.riskEvents.map(function(r) { return escHtml(r).slice(0,50); }).join(' · ') + '</div>';
+    }
+
+    html += '</div>'; // end impact card
+  }
+
   return html;
 }
 
@@ -584,7 +653,12 @@ function loadTradeAnalysisIntoDOM() {
           '</div>';
         return;
       }
-      container.innerHTML = renderQuantAnalysisReport(data.tradeAnalysis, data.date);
+      var html = renderQuantAnalysisReport(data.tradeAnalysis, data.date);
+      // Add knowledge base placeholder for async loading
+      html += '<div id="knowledge-base-container" style="max-width:960px;margin:0 auto;padding:0 0 20px;"></div>';
+      container.innerHTML = html;
+      // Load knowledge base after analysis renders
+      setTimeout(function() { loadKnowledgeBaseIntoDOM(); }, 200);
     })
     .catch(function() {
       container.innerHTML = '<div class="unavailable-placeholder">' +
@@ -593,6 +667,81 @@ function loadTradeAnalysisIntoDOM() {
         '<div class="lock-desc">无法获取分析数据，请检查 Mosaic Server 是否运行。</div>' +
         '</div>';
     });
+}
+
+function loadKnowledgeBaseIntoDOM() {
+  var kbContainer = document.getElementById('knowledge-base-container');
+  if (!kbContainer) return;
+  fetch('/api/knowledge/summary')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.factorTracker || !data.factorTracker.factors) {
+        kbContainer.innerHTML = '';
+        return;
+      }
+      kbContainer.innerHTML = renderKnowledgeBaseCard(data);
+    })
+    .catch(function() {
+      kbContainer.innerHTML = ''; // Silent fail - knowledge base is optional
+    });
+}
+
+function renderKnowledgeBaseCard(kb) {
+  var html = '';
+  html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-top:16px;border:2px solid #b8942c;">';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 4px;">🧠 AI 自我成长知识库</h3>';
+  html += '<p style="font-size:11px;color:#94a3b8;margin:0 0 16px;">累计学习 ' + (kb.totalDays || 0) + ' 天 · 追踪 ' + (kb.factorTracker.factors ? kb.factorTracker.factors.length : 0) + ' 个因子 · 总触发 ' + (kb.factorTracker.totalTriggers || 0) + ' 次 · 更新于 ' + new Date(kb.lastUpdated).toLocaleString('zh-CN') + '</p>';
+
+  // Factor performance ranking
+  var factors = kb.factorTracker.factors || [];
+  if (factors.length > 0) {
+    // Sort by triggerCount descending
+    var sorted = factors.slice().sort(function(a, b) { return b.triggerCount - a.triggerCount; });
+    var maxTrigger = Math.max(1, sorted[0].triggerCount || 0);
+
+    html += '<div style="font-size:12px;color:#64748b;margin-bottom:8px;font-weight:600;">因子触发排行榜</div>';
+    html += '<div style="display:grid;grid-template-columns:1fr;gap:6px;margin-bottom:16px;">';
+    for (var i = 0; i < sorted.length; i++) {
+      var f = sorted[i];
+      var barW = Math.max(2, Math.round((f.triggerCount || 0) / maxTrigger * 100));
+      var isActive = f.triggerCount > 0;
+      var barColor = isActive ? '#b8942c' : '#e5e7eb';
+      html += '<div style="display:flex;align-items:center;gap:10px;font-size:12px;">';
+      html += '<span style="width:30px;text-align:right;color:#94a3b8;">' + (i + 1) + '</span>';
+      html += '<span style="width:90px;font-weight:600;color:#1e293b;">' + f.id + ' ' + f.name + '</span>';
+      html += '<div style="flex:1;height:6px;background:#f1f5f9;border-radius:3px;">';
+      html += '<div style="height:100%;width:' + barW + '%;background:' + barColor + ';border-radius:3px;"></div></div>';
+      html += '<span style="width:50px;text-align:right;font-weight:600;' + (isActive ? 'color:#1e293b;' : 'color:#cbd5e1;') + '">' + (f.triggerCount || 0) + '次</span>';
+      if (f.avgContribution > 0) {
+        html += '<span style="width:60px;text-align:right;color:#b8942c;font-size:11px;">贡献' + f.avgContribution + '%</span>';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Summary stats
+    var activeFactors = sorted.filter(function(f) { return f.triggerCount > 0; });
+    if (activeFactors.length > 0) {
+      html += '<div style="background:#fef9e7;border-radius:6px;padding:14px;font-size:12px;line-height:1.8;">';
+      html += '<b style="color:#1e293b;">📊 学习总结</b><br>';
+      html += '<span style="color:#64748b;">过去 ' + kb.totalDays + ' 个交易日中，共触发了 ' + kb.factorTracker.totalTriggers + ' 次因子信号。<br>';
+      if (activeFactors.length > 0) {
+        var topF = activeFactors[0];
+        html += '最活跃因子：<b style="color:#b8942c;">' + topF.id + ' ' + topF.name + '</b>（触发' + topF.triggerCount + '次';
+        if (topF.avgContribution > 0) html += '，平均贡献' + topF.avgContribution + '%';
+        html += '）。<br>';
+      }
+      if (activeFactors.length >= 2) {
+        var secondF = activeFactors[1];
+        html += '次活跃因子：<b>' + secondF.id + ' ' + secondF.name + '</b>（触发' + secondF.triggerCount + '次）。<br>';
+      }
+      html += '因子追踪器持续学习市场规律，累积数据越多，预测越准确。</span>';
+      html += '</div>';
+    }
+  }
+
+  html += '</div>'; // end knowledge base card
+  return html;
 }
 
 function renderQuantAnalysisReport(anal, date) {
@@ -735,6 +884,138 @@ function renderQuantAnalysisReport(anal, date) {
     html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
     html += '<div style="font-size:14px;font-weight:600;">暂无交易分析数据</div>';
     html += '<div style="font-size:12px;margin-top:4px;">今日无交易发生或分析尚未生成</div></div>';
+  }
+
+  return html;
+}
+
+// ============ Knowledge Base Section (always available) ============
+
+function renderKnowledgeBaseSection(data, mode) {
+  var html = '<div id="knowledge-base-section-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
+  html += '<div style="font-size:32px;margin-bottom:12px;">🧠</div>';
+  html += '<div>正在加载 AI 知识库...</div>';
+  html += '</div></div>';
+  setTimeout(function() { loadKnowledgeBaseSection(); }, 100);
+  return html;
+}
+
+function loadKnowledgeBaseSection() {
+  var container = document.getElementById('knowledge-base-section-container');
+  if (!container) return;
+  fetch('/api/knowledge/summary')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.factorTracker) {
+        container.innerHTML = '<div class="unavailable-placeholder">' +
+          '<div class="lock-icon">🧠</div>' +
+          '<div class="lock-title">知识库数据暂不可用</div>' +
+          '<div class="lock-desc">知识库需要至少一个交易日的分析数据才能激活。请等待今日盘后总结生成。</div>' +
+          '</div>';
+        return;
+      }
+      container.innerHTML = renderKnowledgeBaseFull(data);
+    })
+    .catch(function() {
+      container.innerHTML = '<div class="unavailable-placeholder">' +
+        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-title">加载失败</div>' +
+        '<div class="lock-desc">无法连接知识库服务，请检查 Mosaic Server 是否运行。</div>' +
+        '</div>';
+    });
+}
+
+function renderKnowledgeBaseFull(kb) {
+  var html = '';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">🧠 AI 自我成长知识库</h2>';
+  html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">量化因子追踪 · 模式学习 · 交易复盘 · 知识累积</p>';
+
+  // Overview card
+  html += '<div style="background:linear-gradient(135deg,#1e293b,#334155);border-radius:10px;padding:20px;margin-bottom:16px;color:#fff;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:16px;text-align:center;">';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.totalDays || 0) + '</div><div style="font-size:11px;color:#94a3b8;">学习天数</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker.factors ? kb.factorTracker.factors.length : 0) + '</div><div style="font-size:11px;color:#94a3b8;">追踪因子</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker.totalTriggers || 0) + '</div><div style="font-size:11px;color:#94a3b8;">累计触发</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + new Date(kb.lastUpdated).toLocaleDateString('zh-CN') + '</div><div style="font-size:11px;color:#94a3b8;">最后更新</div></div>';
+  html += '</div></div>';
+
+  // Factor rankings
+  var factors = kb.factorTracker.factors || [];
+  if (factors.length > 0) {
+    var sorted = factors.slice().sort(function(a, b) { return b.triggerCount - a.triggerCount; });
+    var maxTrigger = Math.max(1, sorted[0].triggerCount || 0);
+    var activeFactors = sorted.filter(function(f) { return f.triggerCount > 0; });
+    var inactiveFactors = sorted.filter(function(f) { return f.triggerCount === 0; });
+
+    // Active factors
+    if (activeFactors.length > 0) {
+      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+      html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔥 活跃因子排行</h3>';
+      for (var i = 0; i < activeFactors.length; i++) {
+        var f = activeFactors[i];
+        var barW = Math.max(3, Math.round(f.triggerCount / maxTrigger * 100));
+        var daysActive = f.lastTriggered ? '最近触发: ' + f.lastTriggered : '未触发';
+        html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px;">';
+        html += '<span style="width:24px;text-align:right;color:#b8942c;font-weight:700;">' + (i + 1) + '</span>';
+        html += '<span style="width:100px;font-weight:600;color:#1e293b;">' + f.id + ' ' + f.name + '</span>';
+        html += '<div style="flex:1;height:8px;background:#f1f5f9;border-radius:4px;">';
+        html += '<div style="height:100%;width:' + barW + '%;background:linear-gradient(90deg,#b8942c,#f59e0b);border-radius:4px;"></div></div>';
+        html += '<span style="width:40px;text-align:right;font-weight:700;color:#1e293b;">' + f.triggerCount + '次</span>';
+        html += '<span style="width:80px;text-align:right;color:#94a3b8;font-size:10px;">' + daysActive + '</span>';
+        html += '</div>';
+      }
+      html += '</div>';
+    }
+
+    // Dormant factors
+    if (inactiveFactors.length > 0) {
+      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+      html += '<h3 style="font-size:14px;color:#94a3b8;margin:0 0 12px;">💤 待激活因子</h3>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+      for (var di = 0; di < inactiveFactors.length; di++) {
+        html += '<span style="padding:4px 12px;background:#f8fafc;border-radius:12px;font-size:11px;color:#94a3b8;border:1px solid #e5e7eb;">' + inactiveFactors[di].id + ' ' + inactiveFactors[di].name + '</span>';
+      }
+      html += '</div>';
+      html += '<p style="font-size:11px;color:#cbd5e1;margin-top:8px;">这些因子尚未被市场触发，随着扫描数据累积，它们将在合适的市场环境下激活。</p>';
+      html += '</div>';
+    }
+
+    // Factor details table
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 因子详细数据</h3>';
+    html += '<div style="overflow-x:auto;">';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+    html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
+    html += '<th style="padding:8px;color:#64748b;">因子</th><th style="padding:8px;color:#64748b;">名称</th><th style="padding:8px;color:#64748b;text-align:right;">触发次数</th><th style="padding:8px;color:#64748b;text-align:right;">Top日数</th><th style="padding:8px;color:#64748b;text-align:right;">平均贡献</th><th style="padding:8px;color:#64748b;">最近触发</th></tr></thead>';
+    html += '<tbody>';
+    for (var ti = 0; ti < sorted.length; ti++) {
+      var row = sorted[ti];
+      var isActiveRow = row.triggerCount > 0;
+      html += '<tr style="border-bottom:1px solid #f1f5f9;' + (isActiveRow ? '' : 'color:#cbd5e1;') + '">';
+      html += '<td style="padding:8px;font-weight:600;">' + row.id + '</td>';
+      html += '<td style="padding:8px;">' + row.name + '</td>';
+      html += '<td style="padding:8px;text-align:right;font-weight:600;">' + row.triggerCount + '</td>';
+      html += '<td style="padding:8px;text-align:right;">' + (row.daysTopSignal || 0) + '</td>';
+      html += '<td style="padding:8px;text-align:right;">' + (row.avgContribution > 0 ? row.avgContribution + '%' : '--') + '</td>';
+      html += '<td style="padding:8px;font-size:11px;">' + (row.lastTriggered || '--') + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table></div></div>';
+
+    // Learning insight
+    html += '<div style="background:#fef9e7;border-radius:8px;padding:16px;border:1px solid #f59e0b;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">💡 系统学习洞察</h3>';
+    html += '<ul style="font-size:12px;color:#64748b;line-height:1.9;margin:0;padding-left:18px;">';
+    html += '<li>知识库已运行 <b>' + kb.totalDays + ' 天</b>，累计追踪了 ' + kb.factorTracker.factors.length + ' 个量化因子</li>';
+    if (activeFactors.length > 0) {
+      html += '<li>目前 <b>' + activeFactors.length + ' 个因子</b>已被市场触发，' + inactiveFactors.length + ' 个因子等待激活</li>';
+      var topFactor = activeFactors[0];
+      html += '<li>最强因子 <b>' + topFactor.id + ' ' + topFactor.name + '</b> 共触发 ' + topFactor.triggerCount + ' 次，平均贡献度 ' + (topFactor.avgContribution || 0) + '%</li>';
+    }
+    html += '<li>随着交易日累积，系统将自动学习因子间的协同模式，提升交易决策质量</li>';
+    html += '<li>当数据积累到 20+ 交易日时，将启用历史模式匹配功能，提供更精准的前瞻预测</li>';
+    html += '</ul></div>';
   }
 
   return html;
@@ -1370,9 +1651,9 @@ function renderCurrentSection() {
     return;
   }
 
-  // News Policy & Trade Analysis: always render directly via time-aware section
-  // These sections handle all time states internally (trading/generating/ready/closed)
-  if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis') {
+  // News Policy, Trade Analysis, Knowledge Base: always render directly
+  // These sections handle all states internally
+  if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis' || sectionId === 'knowledgeBase') {
     renderTimeAwareSectionDirect(sectionId);
     return;
   }
