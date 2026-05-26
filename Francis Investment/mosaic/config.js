@@ -127,4 +127,18 @@ module.exports = {
     pageSize: 500,
     maxDetailFetches: 30,
   },
+
+  // ---- 新闻采集 ----
+  NEWS: {
+    sinaLids: [2509, 2519, 2516], // 国内财经, 证券/股市, 宏观
+    maxItemsPerSource: 30,
+    fetchTimeoutMs: 15000,
+  },
+
+  // ---- 量化分析生成 ----
+  ANALYSIS: {
+    generationTimeoutMs: 30000,
+    knowledgeBaseDays: 30,
+    similarityThreshold: 0.6,
+  },
 };

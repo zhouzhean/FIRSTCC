@@ -1,0 +1,354 @@
+{
+  "analysis": {
+    "date": "2026-05-26",
+    "generatedAt": "2026-05-26T10:21:34.409Z",
+    "marketNarrative": {
+      "narrative": "今日上证指数窄幅震荡-0.17%，收于4145.37点。成交额约14617亿。政策面：欧洲央行首席经济学家：下月将调整通胀与经济增长预期。政策面：江阴银行：独立董事周凯任期届满辞职。政策面：年入10亿，香料供应商格林生物冲刺创业板。",
+      "keyDrivers": [
+        {
+          "driver": "欧洲央行首席经济学家：下月将调整通胀与经济增长预期",
+          "impact": "positive",
+          "strength": 0.5
+        },
+        {
+          "driver": "江阴银行：独立董事周凯任期届满辞职",
+          "impact": "positive",
+          "strength": 0.5
+        },
+        {
+          "driver": "年入10亿，香料供应商格林生物冲刺创业板",
+          "impact": "positive",
+          "strength": 0.5
+        },
+        {
+          "driver": "伊朗强调美伊谅解备忘录公布时应解冻120亿美元资产",
+          "impact": "neutral",
+          "strength": 0.4
+        },
+        {
+          "driver": "华安基金：美债收益率冲高回落，美伊局势再现曙光",
+          "impact": "neutral",
+          "strength": 0.4
+        }
+      ],
+      "sentimentBias": "neutral"
+    },
+    "tradesAnalysis": [
+      {
+        "tradeId": "buy_000100_112542",
+        "action": "buy",
+        "stock": {
+          "code": "000100",
+          "name": "TCL科技",
+          "price": 4.59
+        },
+        "deepReason": "TCL科技（000100）以81分/A级触发强买入信号。关键驱动因子：逆势抗跌（medium）。",
+        "factorAttribution": [
+          {
+            "factorId": "H3",
+            "factorName": "逆势抗跌",
+            "contributionPercent": 100,
+            "signalLevel": "medium",
+            "detail": ""
+          }
+        ],
+        "dimensionBreakdown": [
+          {
+            "dimension": "财务报表",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "K线技术面",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "公司治理",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "产业逻辑",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "机构态度",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "资金面",
+            "score": 0,
+            "verdict": "--"
+          }
+        ],
+        "riskAssessment": "低风险：评分81分属全市场顶尖水平，信号强度高，但需关注行业轮动风险",
+        "prediction": "短期目标价¥4.96（+8%），建议设置移动止盈保护"
+      },
+      {
+        "tradeId": "buy_600219_112542",
+        "action": "buy",
+        "stock": {
+          "code": "600219",
+          "name": "南山铝业",
+          "price": 5.42
+        },
+        "deepReason": "南山铝业（600219）以81分/A级触发强买入信号。关键驱动因子：逆势抗跌（medium）。",
+        "factorAttribution": [
+          {
+            "factorId": "H3",
+            "factorName": "逆势抗跌",
+            "contributionPercent": 100,
+            "signalLevel": "medium",
+            "detail": ""
+          }
+        ],
+        "dimensionBreakdown": [
+          {
+            "dimension": "财务报表",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "K线技术面",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "公司治理",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "产业逻辑",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "机构态度",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "资金面",
+            "score": 0,
+            "verdict": "--"
+          }
+        ],
+        "riskAssessment": "低风险：评分81分属全市场顶尖水平，信号强度高，但需关注行业轮动风险",
+        "prediction": "短期目标价¥5.85（+8%），建议设置移动止盈保护"
+      },
+      {
+        "tradeId": "buy_601600_112542",
+        "action": "buy",
+        "stock": {
+          "code": "601600",
+          "name": "中国铝业",
+          "price": 11.72
+        },
+        "deepReason": "中国铝业（601600）以79分/A级触发买入信号。该标的在全市场扫描中位列前茅，综合量化评分表现突出。",
+        "factorAttribution": [],
+        "dimensionBreakdown": [
+          {
+            "dimension": "财务报表",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "K线技术面",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "公司治理",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "产业逻辑",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "机构态度",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "资金面",
+            "score": 0,
+            "verdict": "--"
+          }
+        ],
+        "riskAssessment": "中等风险：评分79分，信号质量良好。建议仓位控制在总资产15%以内",
+        "prediction": "关注¥11.13支撑位，跌破建议减仓"
+      },
+      {
+        "tradeId": "buy_600909_112542",
+        "action": "buy",
+        "stock": {
+          "code": "600909",
+          "name": "华安证券",
+          "price": 7.62
+        },
+        "deepReason": "华安证券（600909）以79分/A级触发买入信号。该标的在全市场扫描中位列前茅，综合量化评分表现突出。",
+        "factorAttribution": [],
+        "dimensionBreakdown": [
+          {
+            "dimension": "财务报表",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "K线技术面",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "公司治理",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "产业逻辑",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "机构态度",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "资金面",
+            "score": 0,
+            "verdict": "--"
+          }
+        ],
+        "riskAssessment": "中等风险：评分79分，信号质量良好。建议仓位控制在总资产15%以内",
+        "prediction": "关注¥7.24支撑位，跌破建议减仓"
+      },
+      {
+        "tradeId": "buy_600352_130049",
+        "action": "buy",
+        "stock": {
+          "code": "600352",
+          "name": "浙江龙盛",
+          "price": 11.62
+        },
+        "deepReason": "浙江龙盛（600352）以76分/A级触发买入信号。该标的在全市场扫描中位列前茅，综合量化评分表现突出。",
+        "factorAttribution": [],
+        "dimensionBreakdown": [
+          {
+            "dimension": "财务报表",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "K线技术面",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "公司治理",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "产业逻辑",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "机构态度",
+            "score": 0,
+            "verdict": "--"
+          },
+          {
+            "dimension": "资金面",
+            "score": 0,
+            "verdict": "--"
+          }
+        ],
+        "riskAssessment": "中等风险：评分76分，信号质量良好。建议仓位控制在总资产15%以内",
+        "prediction": "关注¥11.04支撑位，跌破建议减仓"
+      }
+    ],
+    "factorSummary": {
+      "topSignals": [
+        {
+          "id": "H6",
+          "name": "现金流健康",
+          "count": 9,
+          "avgLevel": "occasional"
+        },
+        {
+          "id": "H4",
+          "name": "PE低估",
+          "count": 5,
+          "avgLevel": "occasional"
+        },
+        {
+          "id": "H7",
+          "name": "低换手蓄力",
+          "count": 2,
+          "avgLevel": "occasional"
+        }
+      ],
+      "scoreDistribution": {
+        "lt50": 0,
+        "r50_60": 0,
+        "r60_70": 15,
+        "r70_80": 0,
+        "gt80": 0
+      },
+      "dimensionRankings": [
+        {
+          "dimension": "资金面",
+          "avgScore": 66
+        },
+        {
+          "dimension": "隐藏信号",
+          "avgScore": 61
+        },
+        {
+          "dimension": "技术面",
+          "avgScore": 56
+        },
+        {
+          "dimension": "基本面",
+          "avgScore": 51
+        },
+        {
+          "dimension": "事件驱动",
+          "avgScore": 50
+        }
+      ]
+    },
+    "forwardPredictions": {
+      "shortTermOutlook": "市场短期维持震荡格局，方向性不明确，等待新的催化因素。平均评分66分，整体质量尚可。参考历史模式，当前信号分布与近期交易日相似，需密切关注盘面变化。",
+      "keyWatch": [
+        "TCL科技(000100) 评分64分 — 重点关注",
+        "中国铝业(601600) — 次选观察",
+        "上证指数关键支撑/压力位",
+        "北向资金流向变化",
+        "两市成交量能是否维持万亿以上"
+      ],
+      "riskFactors": [
+        "政策面突发事件可能改变市场方向",
+        "外围市场波动传导风险",
+        "月末/季末流动性可能偏紧"
+      ]
+    }
+  },
+  "summary": {
+    "totalValue": 101417.87557999999,
+    "totalReturn": 1.42,
+    "tradeCount": 5,
+    "maxScore": 69,
+    "avgScore": 66
+  },
+  "savedAt": "2026-05-26T10:21:34.410Z"
+}

@@ -1,119 +1,134 @@
 {
   "meta": {
     "initialCapital": 100000,
-    "startDate": "2026-05-24",
-    "lastUpdated": "2026-05-25T12:07:43.944Z"
+    "startDate": "2026-05-26",
+    "lastUpdated": "2026-05-26T10:16:33.468Z"
   },
-  "cash": 53842.00204000001,
+  "cash": 37966.87558,
   "positions": [
     {
-      "code": "600021",
-      "name": "上海电力",
-      "shares": 500,
-      "avgCost": 18.54,
-      "currentPrice": 18.54,
-      "entryDate": "2026-05-25",
-      "entryReason": "试探买入：72分/B级"
+      "code": "000100",
+      "name": "TCL科技",
+      "shares": 4300,
+      "avgCost": 4.59,
+      "currentPrice": 4.65,
+      "peakPrice": 4.7,
+      "trailingStopPrice": null,
+      "entryDate": "2026-05-26",
+      "entryReason": "强买入：81分/A级（Top 10%） + 逆势抗跌"
     },
     {
-      "code": "600172",
-      "name": "黄河旋风",
+      "code": "600219",
+      "name": "南山铝业",
+      "shares": 3600,
+      "avgCost": 5.42,
+      "currentPrice": 5.68,
+      "peakPrice": 5.72,
+      "trailingStopPrice": 5.55,
+      "entryDate": "2026-05-26",
+      "entryReason": "强买入：81分/A级（Top 10%） + 逆势抗跌"
+    },
+    {
+      "code": "601600",
+      "name": "中国铝业",
       "shares": 800,
-      "avgCost": 12.09,
+      "avgCost": 11.72,
       "currentPrice": 12.09,
-      "entryDate": "2026-05-25",
-      "entryReason": "试探买入：72分/B级"
+      "peakPrice": 12.09,
+      "trailingStopPrice": null,
+      "entryDate": "2026-05-26",
+      "entryReason": "买入：79分/A级（Top 20%）"
     },
     {
-      "code": "600186",
-      "name": "莲花控股",
-      "shares": 700,
-      "avgCost": 12.93,
-      "currentPrice": 12.93,
-      "entryDate": "2026-05-25",
-      "entryReason": "试探买入：72分/B级"
+      "code": "600909",
+      "name": "华安证券",
+      "shares": 1300,
+      "avgCost": 7.62,
+      "currentPrice": 7.57,
+      "peakPrice": 7.62,
+      "trailingStopPrice": null,
+      "entryDate": "2026-05-26",
+      "entryReason": "买入：79分/A级（Top 20%）"
     },
     {
-      "code": "600203",
-      "name": "福日电子",
-      "shares": 700,
-      "avgCost": 13.17,
-      "currentPrice": 13.17,
-      "entryDate": "2026-05-25",
-      "entryReason": "试探买入：72分/B级"
-    },
-    {
-      "code": "600292",
-      "name": "电投水电",
-      "shares": 600,
-      "avgCost": 14.89,
-      "currentPrice": 14.89,
-      "entryDate": "2026-05-25",
-      "entryReason": "试探买入：72分/B级"
+      "code": "600352",
+      "name": "浙江龙盛",
+      "shares": 300,
+      "avgCost": 11.62,
+      "currentPrice": 11.65,
+      "peakPrice": 11.71,
+      "trailingStopPrice": null,
+      "entryDate": "2026-05-26",
+      "entryReason": "买入：76分/A级（Top 20%）"
     }
   ],
   "tradeHistory": [
     {
-      "date": "2026-05-25",
+      "date": "2026-05-26",
+      "time": "11:25:42",
       "action": "buy",
-      "code": "600021",
-      "name": "上海电力",
-      "price": 18.54,
-      "shares": 500,
-      "amount": 9270,
-      "fee": 2.41,
-      "reason": "试探买入：72分/B级"
+      "code": "000100",
+      "name": "TCL科技",
+      "price": 4.59,
+      "shares": 4300,
+      "amount": 19737,
+      "fee": 5.13,
+      "reason": "强买入：81分/A级（Top 10%） + 逆势抗跌"
     },
     {
-      "date": "2026-05-25",
+      "date": "2026-05-26",
+      "time": "11:25:42",
       "action": "buy",
-      "code": "600172",
-      "name": "黄河旋风",
-      "price": 12.09,
+      "code": "600219",
+      "name": "南山铝业",
+      "price": 5.42,
+      "shares": 3600,
+      "amount": 19512,
+      "fee": 5.07,
+      "reason": "强买入：81分/A级（Top 10%） + 逆势抗跌"
+    },
+    {
+      "date": "2026-05-26",
+      "time": "11:25:42",
+      "action": "buy",
+      "code": "601600",
+      "name": "中国铝业",
+      "price": 11.72,
       "shares": 800,
-      "amount": 9672,
-      "fee": 2.51,
-      "reason": "试探买入：72分/B级"
+      "amount": 9376,
+      "fee": 2.44,
+      "reason": "买入：79分/A级（Top 20%）"
     },
     {
-      "date": "2026-05-25",
+      "date": "2026-05-26",
+      "time": "11:25:42",
       "action": "buy",
-      "code": "600186",
-      "name": "莲花控股",
-      "price": 12.93,
-      "shares": 700,
-      "amount": 9051,
-      "fee": 2.35,
-      "reason": "试探买入：72分/B级"
+      "code": "600909",
+      "name": "华安证券",
+      "price": 7.62,
+      "shares": 1300,
+      "amount": 9906,
+      "fee": 2.58,
+      "reason": "买入：79分/A级（Top 20%）"
     },
     {
-      "date": "2026-05-25",
+      "date": "2026-05-26",
+      "time": "13:00:49",
       "action": "buy",
-      "code": "600203",
-      "name": "福日电子",
-      "price": 13.17,
-      "shares": 700,
-      "amount": 9219,
-      "fee": 2.4,
-      "reason": "试探买入：72分/B级"
-    },
-    {
-      "date": "2026-05-25",
-      "action": "buy",
-      "code": "600292",
-      "name": "电投水电",
-      "price": 14.89,
-      "shares": 600,
-      "amount": 8934,
-      "fee": 2.32,
-      "reason": "试探买入：72分/B级"
+      "code": "600352",
+      "name": "浙江龙盛",
+      "price": 11.62,
+      "shares": 300,
+      "amount": 3485.9999999999995,
+      "fee": 0.91,
+      "reason": "买入：76分/A级（Top 20%）"
     }
   ],
   "dailyNav": [
     {
-      "date": "2026-05-25",
-      "nav": 99988.00204,
-      "return_": -0.01,
+      "date": "2026-05-26",
+      "nav": 101191.87557999999,
+      "return_": 1.19,
       "benchmarkReturn": 0
     }
   ]

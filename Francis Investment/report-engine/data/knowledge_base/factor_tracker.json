@@ -1,0 +1,88 @@
+{
+  "factors": {
+    "H1": {
+      "name": "缩量止跌",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H2": {
+      "name": "底部放量",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H3": {
+      "name": "逆势抗跌",
+      "triggerCount": 2,
+      "daysTopSignal": 1,
+      "avgContribution": 100,
+      "totalContribution": 200,
+      "contributionCount": 2,
+      "lastTriggered": "2026-05-26"
+    },
+    "H4": {
+      "name": "PE低估",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H5": {
+      "name": "高ROE低PB",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H6": {
+      "name": "现金流健康",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H7": {
+      "name": "低换手蓄力",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H8": {
+      "name": "短期反转",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    },
+    "H9": {
+      "name": "量价背离",
+      "triggerCount": 0,
+      "daysTopSignal": 0,
+      "avgContribution": 0,
+      "totalContribution": 0,
+      "contributionCount": 0,
+      "lastTriggered": null
+    }
+  },
+  "signalCombos": [],
+  "lastUpdated": "2026-05-26T10:21:34.411Z",
+  "totalDays": 2
+}

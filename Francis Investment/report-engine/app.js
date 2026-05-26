@@ -91,8 +91,8 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
 
 var SECTIONS = [
   { id: 'simfolio',        label: '模拟交易',         icon: '💰', render: function(d,m) { return renderSimfolioLive(d,m); } },
-  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderSectionByTime(d, m, renderNewsPolicy, '时政要点'); } },
-  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderSectionByTime(d, m, renderTradingReport, '交易分析与报告'); } },
+  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderNewsPolicySection(d,m); } },
+  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
 ];
 
@@ -426,7 +426,342 @@ function renderTradingReport(data, mode) {
   return html;
 }
 
-// ============ Daily Summary Loader (v2.4) ============
+// ============ News Policy Section (v2.5 — dedicated daily news) ============
+
+function renderNewsPolicySection(data, mode) {
+  var timeState = getMarketTimeState();
+  if (timeState === 'trading') {
+    return renderPlaceholder('时政要点', 'trading');
+  }
+  if (timeState === 'generating') {
+    return renderPlaceholder('时政要点', 'generating');
+  }
+  if (timeState === 'closed') {
+    return renderPlaceholder('时政要点', 'closed');
+  }
+  // timeState === 'ready': load news from API
+  var html = '<div id="news-policy-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
+  html += '<div style="font-size:32px;margin-bottom:12px;">📰</div>';
+  html += '<div>正在加载时政要点...</div>';
+  html += '</div></div>';
+  setTimeout(function() { loadNewsIntoDOM(); }, 100);
+  return html;
+}
+
+function loadNewsIntoDOM() {
+  var container = document.getElementById('news-policy-container');
+  if (!container) return;
+  fetch('/api/news/latest')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.news || !data.news.items || data.news.items.length === 0) {
+        container.innerHTML = '<div class="unavailable-placeholder">' +
+          '<div class="lock-icon">📭</div>' +
+          '<div class="lock-title">暂无重大财经新闻</div>' +
+          '<div class="lock-desc">新闻采集API可能暂时不可用或今日暂无重要新闻，请稍后刷新重试。</div>' +
+          '</div>';
+        return;
+      }
+      container.innerHTML = renderNewsDigest(data.news, data.date);
+    })
+    .catch(function() {
+      container.innerHTML = '<div class="unavailable-placeholder">' +
+        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-title">加载失败</div>' +
+        '<div class="lock-desc">无法获取新闻数据，请检查 Mosaic Server 是否运行。</div>' +
+        '</div>';
+    });
+}
+
+function renderNewsDigest(news, date) {
+  var html = '';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📰 ' + date + ' 时政要点</h2>';
+  html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 16px;">共 ' + news.count + ' 条新闻 · 由 Mosaic AI 自动采集自新浪财经</p>';
+
+  // Category counts
+  var catCounts = { policy: 0, sector: 0, company: 0, macro: 0 };
+  for (var i = 0; i < news.items.length; i++) {
+    var c = news.items[i].category;
+    if (c && catCounts[c] != null) catCounts[c]++;
+  }
+
+  // Filter tabs
+  var cats = [
+    { key: 'all', label: '全部', count: news.count },
+    { key: 'policy', label: '政策', count: catCounts.policy },
+    { key: 'sector', label: '板块', count: catCounts.sector },
+    { key: 'company', label: '公司', count: catCounts.company },
+    { key: 'macro', label: '宏观', count: catCounts.macro },
+  ];
+  html += '<div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;" id="news-category-tabs">';
+  for (var ci = 0; ci < cats.length; ci++) {
+    var cat = cats[ci];
+    var activeStyle = cat.key === 'all' ? 'background:#1e293b;color:#fff;border-color:#1e293b;' : 'background:#fff;color:#475569;border:1px solid #e2e5eb;';
+    html += '<button class="news-tab-btn" data-cat="' + cat.key + '" style="padding:5px 12px;border-radius:14px;font-size:12px;cursor:pointer;' + activeStyle + '" onclick="filterNewsCategory(\'' + cat.key + '\')">';
+    html += cat.label + ' (' + cat.count + ')';
+    html += '</button>';
+  }
+  html += '</div>';
+
+  // News timeline
+  html += '<div id="news-timeline">';
+  for (var j = 0; j < news.items.length; j++) {
+    var item = news.items[j];
+    var catColors = { policy: '#7c3aed', sector: '#059669', company: '#d97706', macro: '#dc2626' };
+    var catColor = catColors[item.category] || '#64748b';
+    var timeHHMM = item.time ? new Date(item.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
+
+    html += '<div class="news-item" data-category="' + item.category + '" style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid #f1f5f9;">';
+    html += '<div style="min-width:48px;font-size:11px;color:#94a3b8;padding-top:2px;">' + timeHHMM + '</div>';
+    html += '<div style="flex:1;">';
+    html += '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;color:#fff;background:' + catColor + ';margin-right:6px;">' + item.category + '</span>';
+    html += '<a href="' + (item.url || '#') + '" target="_blank" style="font-size:13px;color:#1e293b;text-decoration:none;font-weight:500;" onmouseover="this.style.color=\'#b8942c\'" onmouseout="this.style.color=\'#1e293b\'">' + escHtml(item.title) + '</a>';
+    html += '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">来源: ' + escHtml(item.source) + '</div>';
+    if (item.summary) {
+      html += '<div style="font-size:12px;color:#64748b;margin-top:4px;line-height:1.5;">' + escHtml(item.summary) + '</div>';
+    }
+    html += '</div></div>';
+  }
+  html += '</div>';
+
+  if (news.items.length === 0) {
+    html += '<div style="text-align:center;padding:40px;color:#94a3b8;">📭 今日暂无重大财经新闻</div>';
+  }
+
+  return html;
+}
+
+// Expose filter function globally
+window.filterNewsCategory = function(cat) {
+  var btns = document.querySelectorAll('.news-tab-btn');
+  btns.forEach(function(btn) {
+    if (btn.getAttribute('data-cat') === cat) {
+      btn.style.background = '#1e293b'; btn.style.color = '#fff'; btn.style.borderColor = '#1e293b';
+    } else {
+      btn.style.background = '#fff'; btn.style.color = '#475569'; btn.style.border = '1px solid #e2e5eb';
+    }
+  });
+  var items = document.querySelectorAll('.news-item');
+  items.forEach(function(item) {
+    item.style.display = (cat === 'all' || item.getAttribute('data-category') === cat) ? '' : 'none';
+  });
+};
+
+// ============ Trade Analysis Section (v2.5 — dedicated quant report) ============
+
+function renderTradeAnalysisSection(data, mode) {
+  var timeState = getMarketTimeState();
+  if (timeState === 'trading') {
+    return renderPlaceholder('交易分析与报告', 'trading');
+  }
+  if (timeState === 'generating') {
+    return renderPlaceholder('交易分析与报告', 'generating');
+  }
+  if (timeState === 'closed') {
+    return renderPlaceholder('交易分析与报告', 'closed');
+  }
+  var html = '<div id="trade-analysis-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
+  html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+  html += '<div>正在加载交易分析...</div>';
+  html += '</div></div>';
+  setTimeout(function() { loadTradeAnalysisIntoDOM(); }, 100);
+  return html;
+}
+
+function loadTradeAnalysisIntoDOM() {
+  var container = document.getElementById('trade-analysis-container');
+  if (!container) return;
+  fetch('/api/analysis/latest')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.tradeAnalysis) {
+        container.innerHTML = '<div class="unavailable-placeholder">' +
+          '<div class="lock-icon">📊</div>' +
+          '<div class="lock-title">暂无交易分析</div>' +
+          '<div class="lock-desc">今日无交易发生或分析尚未生成，请于16:00后查看。</div>' +
+          '</div>';
+        return;
+      }
+      container.innerHTML = renderQuantAnalysisReport(data.tradeAnalysis, data.date);
+    })
+    .catch(function() {
+      container.innerHTML = '<div class="unavailable-placeholder">' +
+        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-title">加载失败</div>' +
+        '<div class="lock-desc">无法获取分析数据，请检查 Mosaic Server 是否运行。</div>' +
+        '</div>';
+    });
+}
+
+function renderQuantAnalysisReport(anal, date) {
+  var html = '';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📊 ' + date + ' 交易分析与报告</h2>';
+  html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">Mosaic AI 量化引擎自动生成 · ' + new Date(anal.generatedAt).toTimeString().slice(0,8) + '</p>';
+
+  // 1. Market Narrative
+  if (anal.marketNarrative && anal.marketNarrative.narrative) {
+    var mn = anal.marketNarrative;
+    var sentimentColors = { bullish: '#dc2626', bearish: '#16a34a', neutral: '#64748b' };
+    var sentimentLabels = { bullish: '偏多 ↑', bearish: '偏空 ↓', neutral: '中性 →' };
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border-left:4px solid #b8942c;">';
+    html += '<h3 style="margin:0 0 12px;font-size:14px;">🏛 市场叙事</h3>';
+    html += '<p style="font-size:14px;line-height:1.9;color:#334155;margin:0;">' + escHtml(mn.narrative) + '</p>';
+    if (mn.keyDrivers && mn.keyDrivers.length > 0) {
+      html += '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">';
+      for (var d = 0; d < mn.keyDrivers.length; d++) {
+        var drv = mn.keyDrivers[d];
+        var drvColor = drv.impact === 'positive' ? UP_COLOR : (drv.impact === 'negative' ? DOWN_COLOR : MUTED_COLOR);
+        html += '<span style="padding:4px 10px;background:#f8fafc;border-radius:12px;font-size:11px;color:' + drvColor + ';border:1px solid #e2e5eb;">' + escHtml(drv.driver) + '</span>';
+      }
+      html += '</div>';
+    }
+    if (mn.sentimentBias) {
+      html += '<div style="margin-top:10px;font-size:12px;color:' + (sentimentColors[mn.sentimentBias] || MUTED_COLOR) + ';font-weight:600;">市场情绪: ' + (sentimentLabels[mn.sentimentBias] || mn.sentimentBias) + '</div>';
+    }
+    html += '</div>';
+  }
+
+  // 2. Per-Trade Deep Analysis
+  if (anal.tradesAnalysis && anal.tradesAnalysis.length > 0) {
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:20px 0 12px;">📋 交易决策深度解析 (' + anal.tradesAnalysis.length + '笔)</h3>';
+    for (var t = 0; t < anal.tradesAnalysis.length; t++) {
+      var ta = anal.tradesAnalysis[t];
+      var isBuy = ta.action === 'buy';
+      var actionColor = isBuy ? UP_COLOR : DOWN_COLOR;
+      var actionIcon = isBuy ? '🔴 买入' : '🟢 卖出';
+      var stock = ta.stock || {};
+
+      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+      // Header
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+      html += '<div><span style="color:' + actionColor + ';font-weight:700;font-size:14px;">' + actionIcon + '</span> ';
+      html += '<b style="font-size:14px;">' + escHtml(stock.name || '') + '</b> ';
+      html += '<span style="color:#94a3b8;font-size:12px;">' + (stock.code || '') + '</span> ';
+      html += '<span style="font-size:14px;font-weight:600;">¥' + (stock.price || 0).toFixed(2) + '</span></div>';
+      html += '</div>';
+
+      // Deep reason
+      html += '<p style="font-size:13px;line-height:1.8;color:#334155;margin:0 0 14px;">' + escHtml(ta.deepReason || '') + '</p>';
+
+      // Factor attribution bars
+      if (ta.factorAttribution && ta.factorAttribution.length > 0) {
+        html += '<div style="margin-bottom:12px;">';
+        html += '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">因子贡献归因</div>';
+        for (var f = 0; f < ta.factorAttribution.length; f++) {
+          var fa = ta.factorAttribution[f];
+          var barColor = fa.signalLevel === 'strong' ? '#dc2626' : (fa.signalLevel === 'medium' ? '#f59e0b' : '#94a3b8');
+          html += '<div style="display:flex;align-items:center;margin-bottom:4px;font-size:12px;">';
+          html += '<span style="width:100px;color:#1e293b;font-weight:500;">' + fa.factorId + ' ' + fa.factorName + '</span>';
+          html += '<div style="flex:1;height:6px;background:#f1f5f9;border-radius:3px;margin:0 8px;">';
+          html += '<div style="height:100%;width:' + fa.contributionPercent + '%;background:' + barColor + ';border-radius:3px;"></div></div>';
+          html += '<span style="width:36px;text-align:right;font-weight:600;color:' + barColor + ';">' + fa.contributionPercent + '%</span></div>';
+          if (fa.detail) {
+            html += '<div style="margin-left:100px;font-size:10px;color:#94a3b8;margin-bottom:6px;">' + escHtml(fa.detail) + '</div>';
+          }
+        }
+        html += '</div>';
+      }
+
+      // Dimension stars
+      if (ta.dimensionBreakdown && ta.dimensionBreakdown.length > 0) {
+        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">';
+        for (var dim = 0; dim < ta.dimensionBreakdown.length; dim++) {
+          var db = ta.dimensionBreakdown[dim];
+          var stars = '';
+          for (var s = 0; s < 5; s++) stars += s < Math.floor(db.score) ? '★' : '☆';
+          html += '<div style="background:#f8fafc;padding:8px;border-radius:6px;text-align:center;font-size:11px;">';
+          html += '<div style="color:#64748b;">' + db.dimension + '</div>';
+          html += '<div style="color:#f59e0b;font-size:13px;">' + stars + '</div>';
+          html += '<div style="color:#94a3b8;">' + (db.verdict || '') + '</div></div>';
+        }
+        html += '</div>';
+      }
+
+      // Risk + Prediction
+      html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
+      html += '<div style="background:#fef3c7;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b>⚠ 风险评估</b><br><span style="color:#64748b;">' + escHtml(ta.riskAssessment || '') + '</span></div>';
+      html += '<div style="background:#dbeafe;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b>📈 预测</b><br><span style="color:#64748b;">' + escHtml(ta.prediction || '') + '</span></div>';
+      html += '</div>';
+
+      html += '</div>'; // end trade card
+    }
+  }
+
+  // 3. Factor Summary
+  if (anal.factorSummary && anal.factorSummary.topSignals && anal.factorSummary.topSignals.length > 0) {
+    var fs = anal.factorSummary;
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;margin:0 0 12px;">🔬 全市场因子触发汇总</h3>';
+    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">';
+    for (var si = 0; si < fs.topSignals.length; si++) {
+      var sig = fs.topSignals[si];
+      html += '<div style="background:#f8fafc;padding:12px;border-radius:6px;text-align:center;">';
+      html += '<div style="font-weight:600;color:#1e293b;font-size:12px;">' + sig.id + ' ' + sig.name + '</div>';
+      html += '<div style="font-size:22px;font-weight:700;color:#1e293b;margin:4px 0;">' + sig.count + '</div>';
+      html += '<div style="font-size:10px;color:#94a3b8;">次触发</div></div>';
+    }
+    html += '</div></div>';
+  }
+
+  // 4. Forward Predictions
+  if (anal.forwardPredictions) {
+    var fp = anal.forwardPredictions;
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;margin:0 0 12px;">🔮 前瞻展望</h3>';
+    if (fp.shortTermOutlook) {
+      html += '<p style="font-size:14px;line-height:1.9;color:#334155;margin:0 0 12px;">' + escHtml(fp.shortTermOutlook) + '</p>';
+    }
+    if (fp.keyWatch && fp.keyWatch.length > 0) {
+      html += '<div style="margin-bottom:8px;"><b style="font-size:12px;color:#1e293b;">关注要点:</b></div>';
+      html += '<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">';
+      for (var w = 0; w < fp.keyWatch.length; w++) {
+        html += '<span style="padding:4px 10px;background:#dbeafe;border-radius:6px;font-size:11px;color:#1e40af;">' + escHtml(fp.keyWatch[w]) + '</span>';
+      }
+      html += '</div>';
+    }
+    if (fp.riskFactors && fp.riskFactors.length > 0) {
+      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">⚠ 风险因素: ' + fp.riskFactors.map(function(rf) { return escHtml(rf); }).join(' · ') + '</div>';
+    }
+    html += '</div>';
+  }
+
+  // Empty state
+  var hasContent = (anal.marketNarrative && anal.marketNarrative.narrative) ||
+    (anal.tradesAnalysis && anal.tradesAnalysis.length > 0);
+  if (!hasContent) {
+    html += '<div style="text-align:center;padding:40px;color:#94a3b8;background:#fff;border-radius:8px;">';
+    html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+    html += '<div style="font-size:14px;font-weight:600;">暂无交易分析数据</div>';
+    html += '<div style="font-size:12px;margin-top:4px;">今日无交易发生或分析尚未生成</div></div>';
+  }
+
+  return html;
+}
+
+// ============ Placeholder Helper ============
+
+function renderPlaceholder(label, phase) {
+  var html = '<div class="unavailable-placeholder';
+  if (phase === 'generating') html += ' style="border:2px dashed #f59e0b;"';
+  html += '">';
+  if (phase === 'trading') {
+    html += '<div class="lock-icon">⏳</div>';
+    html += '<div class="lock-title">' + label + ' — 暂不可用</div>';
+    html += '<div class="lock-desc">市场交易中，AI 量化交易员正在实时监控。盘后总结报告将于每日16:00自动生成，届时可在此查看完整内容。</div>';
+  } else if (phase === 'generating') {
+    html += '<div class="lock-icon">🔄</div>';
+    html += '<div class="lock-title">正在分析并生成中...</div>';
+    html += '<div class="lock-desc">市场已收盘，AI 正在汇总今日数据，预计16:00前完成，请稍后再来查看。</div>';
+  } else if (phase === 'closed') {
+    html += '<div class="lock-icon">🔒</div>';
+    html += '<div class="lock-title">' + label + ' — 休市</div>';
+    html += '<div class="lock-desc">今日非交易日，请在下一个交易日16:00后查看盘后总结。</div>';
+  }
+  html += '</div>';
+  return html;
+}
 
 function loadDailySummaryIntoDOM() {
   var container = document.getElementById('daily-summary-container');
@@ -1022,34 +1357,28 @@ function setActiveSection(sectionId) {
 }
 
 function renderCurrentSection() {
-  // For non-engine views, loadReportByMeta already handled content
-  if (!state.reportData || state.currentViewMode !== 'engine') {
-    // But still allow simfolio to render without report data
-    if (state.activeSection === 'simfolio' && state.serverConnected) {
-      renderSimfolioDirect();
-      return;
-    }
-    return;
-  }
-
   var sectionId = state.activeSection;
   var sec = null;
   for (var i = 0; i < SECTIONS.length; i++) {
     if (SECTIONS[i].id === sectionId) { sec = SECTIONS[i]; break; }
   }
-
   if (!sec) return;
 
-  // Simfolio renders directly (no iframe) for live DOM updates
+  // Simfolio: always render directly (no iframe, works without report data)
   if (sectionId === 'simfolio') {
     renderSimfolioDirect();
     return;
   }
 
-  // Time-aware sections may need async loading, render directly
-  var timeState = getMarketTimeState();
-  if (sectionId !== 'simfolio' && (timeState === 'trading' || timeState === 'generating' || timeState === 'ready')) {
+  // News Policy & Trade Analysis: always render directly via time-aware section
+  // These sections handle all time states internally (trading/generating/ready/closed)
+  if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis') {
     renderTimeAwareSectionDirect(sectionId);
+    return;
+  }
+
+  // For non-engine views, loadReportByMeta already handled content
+  if (!state.reportData || state.currentViewMode !== 'engine') {
     return;
   }
 

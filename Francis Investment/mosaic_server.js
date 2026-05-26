@@ -481,6 +481,56 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: false, message: '该日期的总结不存在' });
   }
 
+  // News API — daily financial news feed
+  if (pathname === '/api/news/latest') {
+    const today = new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    if (fs.existsSync(summaryPath)) {
+      const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+      return jsonResponse(res, { ok: true, date: today, news: s.news || null });
+    }
+    return jsonResponse(res, { ok: false, message: '今日新闻尚未生成' });
+  }
+  const newsDateMatch = pathname.match(/^\/api\/news\/(\d{4}-\d{2}-\d{2})$/);
+  if (newsDateMatch) {
+    const summaryPath = path.join(DATA_DIR, 'summaries', newsDateMatch[1] + '.json');
+    if (fs.existsSync(summaryPath)) {
+      const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+      return jsonResponse(res, { ok: true, date: newsDateMatch[1], news: s.news || null });
+    }
+    return jsonResponse(res, { ok: false, message: '该日期新闻不存在' });
+  }
+
+  // Trade Analysis API — quant analysis report
+  if (pathname === '/api/analysis/latest') {
+    const today = new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    if (fs.existsSync(summaryPath)) {
+      const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+      return jsonResponse(res, { ok: true, date: today, tradeAnalysis: s.tradeAnalysis || null });
+    }
+    return jsonResponse(res, { ok: false, message: '今日分析尚未生成' });
+  }
+  const analysisDateMatch = pathname.match(/^\/api\/analysis\/(\d{4}-\d{2}-\d{2})$/);
+  if (analysisDateMatch) {
+    const summaryPath = path.join(DATA_DIR, 'summaries', analysisDateMatch[1] + '.json');
+    if (fs.existsSync(summaryPath)) {
+      const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
+      return jsonResponse(res, { ok: true, date: analysisDateMatch[1], tradeAnalysis: s.tradeAnalysis || null });
+    }
+    return jsonResponse(res, { ok: false, message: '该日期分析不存在' });
+  }
+
+  // Knowledge Base API
+  if (pathname === '/api/knowledge/summary') {
+    try {
+      const kb = require('./mosaic/analysis/knowledge_base');
+      return jsonResponse(res, { ok: true, ...kb.getKnowledgeSummary() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: '知识库未初始化' });
+    }
+  }
+
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
     const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');

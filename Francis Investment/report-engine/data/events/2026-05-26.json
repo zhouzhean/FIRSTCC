@@ -1,0 +1,85 @@
+[
+  {
+    "time": "2026-05-26T08:22:03.989Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "position_refresh",
+    "detail": {
+      "codes": [
+        "600219",
+        "600352",
+        "600909",
+        "601600",
+        "000100"
+      ],
+      "reason": "closed_boot"
+    }
+  },
+  {
+    "time": "2026-05-26T08:27:02.400Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "daily_summary_start",
+    "detail": {
+      "date": "2026-05-26"
+    }
+  },
+  {
+    "time": "2026-05-26T08:27:03.124Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "daily_summary_complete",
+    "detail": {
+      "totalValue": 101417.87557999999,
+      "tradeCount": 5,
+      "topScore": 69
+    }
+  },
+  {
+    "time": "2026-05-26T10:16:33.469Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "position_refresh",
+    "detail": {
+      "codes": [
+        "600219",
+        "600352",
+        "600909",
+        "601600",
+        "000100"
+      ],
+      "reason": "closed_boot"
+    }
+  },
+  {
+    "time": "2026-05-26T10:21:33.386Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "daily_summary_start",
+    "detail": {
+      "date": "2026-05-26"
+    }
+  },
+  {
+    "time": "2026-05-26T10:21:34.411Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "knowledge_saved",
+    "detail": {
+      "date": "2026-05-26"
+    }
+  },
+  {
+    "time": "2026-05-26T10:21:34.411Z",
+    "date": "2026-05-26",
+    "state": "closed",
+    "type": "daily_summary_complete",
+    "detail": {
+      "totalValue": 101417.87557999999,
+      "tradeCount": 5,
+      "topScore": 69,
+      "newsCount": 51,
+      "analysisGenerated": true
+    }
+  }
+]

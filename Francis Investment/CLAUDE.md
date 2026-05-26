@@ -14,10 +14,13 @@ Francis Investment 经历了三个阶段的演进：
 | **v2**（Mosaic 量化） | Node.js HTTP 服务器 (localhost:8765)，Chrome --app 模式 | 腾讯+Sina+Eastmoney 三源自动采集 |
 | **v2.3**（2026-05-26） | 专业量化升级：百分位阈值+5维评分+主力资金流+龙虎榜+北向 | 五数据源（+datacenter-web+push2his） |
 | **v2.4**（2026-05-26） | 阿里云 ECS 24/7 部署 + 移动端适配 + 三端同步（电脑/手机/平板） | 同上，云端运行 |
+| **v2.5**（2026-05-26） | 每日盘后总结报告 + 事件时间线持久化 + 交易时间戳 + 思考舱移动端修复 | 同上，新增事件日志+总结文件系统 |
 
 v2 新增：7因子隐藏信号引擎、4维综合评分模型、Simfolio 模拟交易（10万虚拟资金，T+1，真实费率）。
 
 **v2.4**（2026-05-26）：部署至阿里云 ECS（华东2·上海，2核2G，Ubuntu 22.04），systemd 托管 24/7 运行（崩溃自动重启+开机自启）。桌面快捷方式改为直连云端。全站移动端响应式适配（外层仪表板+iframe 报告内容）。
+
+**v2.5**（2026-05-26）：每日16:00自动生成盘后总结报告（市场行情+交易记录+量化分析+账户统计）。事件时间线按日期持久化（`data/events/YYYY-MM-DD.json`），支持历史回溯。交易动态显示完整日期+时间。AI思考舱移动端可用（`<a>` 链接替代 popup、100dvh、禁用背景粒子）。时政要点/交易分析/持仓分析三板块根据市场时段自动切换状态。
 
 ---
 
@@ -147,8 +150,13 @@ Francis Investment/
 │   │   ├── recommendation-history.json / .js
 │   │   ├── simfolio/            # ★ Simfolio 持久化目录
 │   │   │   ├── portfolio.json   #   持仓+交易记录+净值历史
+│   │   │   ├── portfolio.json.bak  # 自动备份（防损坏）
 │   │   │   ├── last_pipeline_result.json
 │   │   │   └── scheduler_state.json
+│   │   ├── events/              # ★ 每日事件日志（v2.5）
+│   │   │   └── YYYY-MM-DD.json  #   当天所有交易/扫描/状态事件
+│   │   ├── summaries/           # ★ 每日盘后总结（v2.5）
+│   │   │   └── YYYY-MM-DD.json  #   16:00自动生成的完整总结报告
 │   │   └── YYYY-MM-DD/          #   每日报告数据
 │   └── templates/               #   模板函数（含移动端响应式 CSS）
 │       ├── css.js               #   renderSoftwareCSS() + renderCSS()，含移动端断点
@@ -190,16 +198,22 @@ node mosaic_server.js
 - ≤768px：内容区缩窄边距，表格缩小字体，卡片垂直堆叠，单列布局
 - ≤480px：最小边距，表格可横向滑动，K线图自适应缩放
 
-### v2.2 前端布局
+### 前端布局（v2.5）
 
 左侧边栏（320px）板块导航（自上而下）：
 
 | 板块 | 图标 | 说明 |
 |------|------|------|
-| **模拟交易** | 💰 | ★ 置顶，实时看板：倒计时+资产卡片+交易动态推送+持仓表+净值曲线 |
-| **时政要点** | 📰 | 当日政策/新闻摘要 |
-| **交易分析与报告** | 📊 | 合并板块（封面+大盘综述+板块跟踪+潜力股推荐+TOP5+风险矩阵） |
-| **持仓分析** | 💼 | 暂不可用（灰色），等待宇树科技上市后清仓再开放 |
+| **模拟交易** | 💰 | ★ 置顶，实时看板：交易动态（完整日期+时间）+资产卡片+持仓表+净值曲线 |
+| **时政要点** | 📰 | 分时段：盘后16:00前"暂不可用"，16:00后显示完整总结 |
+| **交易分析与报告** | 📊 | 分时段：盘后16:00前"暂不可用"，16:00后显示完整总结 |
+| **持仓分析** | 💼 | 分时段：盘后16:00前"暂不可用"，16:00后显示完整总结 |
+
+**工具栏变更（v2.5）**：
+- 移除 `#live-indicator`（倒计时+状态行，与 Simfolio 面板重复）
+- AI 思考舱按钮改为 `<a>` 标签（移动端兼容），桌面端用 JS 拦截开 popup
+
+**时间感知渲染**：四个板块通过 `renderTimeAwareSectionDirect()` 直接渲染到 DOM，支持异步数据加载。`getMarketTimeState()` 返回四种状态：`trading` / `generating` / `ready` / `closed`。
 
 ### 数据源架构（五源协同，v2.3）
 
@@ -228,12 +242,20 @@ node mosaic_server.js
 | `/api/pipeline/run` | POST | 启动全流程量化分析 |
 | `/api/pipeline/status` | GET | 实时进度（0-100%+步骤名） |
 | `/api/pipeline/result` | GET | 分析完成后获取结果 |
-| `/api/simfolio/status` | GET | 模拟账户快照（持仓+净值） |
+| `/api/pipeline/last-result` | GET | 最近一次Pipeline持久化结果（重启后可用） |
+| `/api/simfolio/status` | GET | 模拟账户快照（持仓+净值+交易记录） |
 | `/api/simfolio/history` | GET | 净值曲线数据 |
 | `/api/simfolio/trade` | POST | 基于Pipeline结果执行交易决策 |
 | `/api/simfolio/reset` | POST | 重置模拟账户至10万初始资金 |
-| `/api/pipeline/last-result` | GET | 最近一次Pipeline持久化结果（重启后可用） |
-| `/api/events` | GET | SSE 实时事件流（heartbeat + scan_complete + position_snapshot + last_result） |
+| `/api/scheduler/status` | GET | 调度器状态（state/nextTick/scheduledOps） |
+| `/api/scheduler/events` | GET | 调度器内存事件日志（最近N条） |
+| `/api/position/force-check` | POST | 手动触发持仓检查 |
+| `/api/think-tank/initial` | GET | 思考舱初始数据REST接口（调度器状态+持仓+最新扫描+今日事件） |
+| `/api/think-tank/stream` | GET | SSE 实时事件流（heartbeat/scan/progress/trade/position/state/daily_events） |
+| `/api/events/dates` | GET | 有事件记录的日期列表（v2.5） |
+| `/api/events/<date>` | GET | 指定日期的完整事件日志（v2.5） |
+| `/api/daily-summary/latest` | GET | 今日盘后总结报告（v2.5） |
+| `/api/daily-summary/<date>` | GET | 指定日期的盘后总结报告（v2.5） |
 
 ### 自动运行流程
 
@@ -251,7 +273,7 @@ node mosaic_server.js
   → 持仓+净值更新，持久化到 portfolio.json
   → 前端 SSE 推送 scan_complete 事件，思考舱实时更新
 
-盘中多次 mid-scan（10:30/11:25/14:00/14:35）
+盘中多次 mid-scan（10:00/10:30/11:25/13:30/14:00/14:30/14:50，共7次）
 ```
 
 ---
@@ -340,38 +362,103 @@ TotalScore = fundamental(0-25%*) + technical(15%) + hidden(20%) + capitalFlow(25
 
 ---
 
-## Mosaic AI 思考舱（Think Tank, v2.3）
+## Mosaic AI 思考舱（Think Tank, v2.5）
 
-实时量化分析仪表板，通过 SSE 接收服务器推送。
+实时量化分析仪表板，REST + SSE 双通道加载（REST 即时初始数据 → SSE 实时更新）。
 
 ### 访问方式
 
 - 云端：`http://8.153.101.112:8765/think-tank.html`
 - 主UI工具栏点击 "AI 思考舱" 按钮
+- **桌面端**（≥900px）：`window.open` 独立窗口（1400×900）
+- **移动端**（<900px）：`<a href="/think-tank.html" target="_blank">` 直接导航（避免 popup 被拦截）
 
-### SSE 事件流（`/api/events`）
+### 移动端响应式（v2.5）
+
+三层断点：900px（平板）/ 600px（手机）/ 380px（小屏手机）
+- ≤600px：禁用背景网格 + 粒子动画（性能优化），面板全宽堆叠
+- `100dvh` + `-webkit-overflow-scrolling: touch` 解决 iOS Safari 视口问题
+- 系统字体栈优先（`system-ui, -apple-system, ...`）
+
+### REST + SSE 双通道加载
+
+1. 页面加载 → `GET /api/think-tank/initial` → 即时渲染调度器状态+持仓+最新扫描+今日事件+事件日期列表
+2. 连接建立 → `GET /api/think-tank/stream` (SSE) → 持续推送实时更新
+3. SSE `connected` 事件保留 REST 已加载的事件（幂等去重），避免闪烁
+
+### SSE 事件流（`/api/think-tank/stream`）
 
 | 事件类型 | 触发时机 | 载荷 |
 |----------|----------|------|
 | `connected` | SSE 连接建立 | `{ sessionId, serverTime }` |
 | `heartbeat` | 每30秒（活跃）/ 每5分钟（空闲） | `{ time, marketState, nextScan, positions }` |
 | `last_result` | SSE 连接后立即发送 | 最近一次 Pipeline 完整摘要 |
-| `scan_complete` | Pipeline/Mid-Scan 完成 | `{ type, top5, scoreDistribution, stats }` |
+| `scan_complete` | Pipeline/Mid-Scan 完成 | `{ type, top5, scoreDistribution, stats, daily_summary }` |
 | `position_snapshot` | 持仓价格更新 | `{ positions, totalValue, cash }` |
 | `trade` | 自动交易执行 | `{ action, code, name, price, reason }` |
 | `pipeline_progress` | Pipeline 运行中 | `{ progress, step }` |
+| `daily_events` | SSE 连接建立时 | 今日全部事件日志（用于时间线渲染） |
 
-### 扫描调度（活跃交易日）
+### 事件时间线（v2.5）
+
+- **持久化**：每日事件按 `data/events/YYYY-MM-DD.json` 存储（环形缓冲，上限500条）
+- **日期选择器**：时间线面板顶部 `<select>` 下拉框，可切换查看历史日期
+- **API**：`GET /api/events/dates` 获取有记录的日期列表，`GET /api/events/<date>` 获取指定日期事件
+- **每日清空**：调度器跨日时自动切换新日期文件
+- **事件类型**：pipeline_complete, midscan_complete, trade_buy, trade_sell, position_refresh, daily_summary_start/complete 等
+
+### 扫描调度（活跃交易日，3 full + 7 mid = 10次/天）
 
 | 时间 | 类型 | 说明 |
 |------|------|------|
-| 9:30 | 全量扫描 (full) | 全A股过滤+评分+TOP5 |
-| 10:30 | 盘中扫描 (mid) | 成交额TOP200中深析15只 |
+| 9:30 | 全量扫描 (full) | 开盘全A股过滤+评分+TOP5 |
+| 10:00 | 盘中扫描 (mid) | 成交额TOP250深析20只 |
+| 10:30 | 盘中扫描 (mid) | 盘中二次检查 |
 | 11:00 | 全量扫描 (full) | 午间收盘前全量 |
 | 11:25 | 盘中扫描 (mid) | 午休前最后检查 |
 | 13:00 | 全量扫描 (full) | 下午开盘全量 |
+| 13:30 | 盘中扫描 (mid) | 下午盘中检查 |
 | 14:00 | 盘中扫描 (mid) | 尾盘前检查 |
-| 14:35 | 盘中扫描 (mid) | 收盘前25分钟最后机会 |
+| 14:30 | 盘中扫描 (mid) | 尾盘二次检查 |
+| 14:50 | 盘中扫描 (mid) | 收盘前10分钟最后机会 |
+
+---
+
+## 每日盘后总结报告（v2.5）
+
+每日 16:00 CST 自动生成完整盘后总结报告，持久化到 `data/summaries/YYYY-MM-DD.json`。
+
+### 自动生成流程
+
+调度器 `_tick()` 检测 `hourNow >= 16` → `_runDailySummary()` 执行：
+1. 收集当日市场行情（上证/深证/创业板指数）
+2. 收集持仓快照（持仓股价格+涨跌+市值+盈亏）
+3. 收集当日交易记录（买入/卖出明细）
+4. 收集最新 Pipeline 结果（TOP5 + 评分分布）
+5. 收集量化因子触发情况
+6. 统计账户数据（总资产/现金/市值/总盈亏）
+7. 统计当日事件数量（扫描次数/交易次数/错误数）
+8. 写入 JSON 文件 + 推送 SSE `daily_summary` 事件到思考舱
+
+### API
+
+| 路由 | 用途 |
+|------|------|
+| `/api/daily-summary/latest` | 获取今日盘后总结（如未生成返回 null） |
+| `/api/daily-summary/<date>` | 获取指定日期盘后总结 |
+
+### 前端集成
+
+时政要点、交易分析、持仓分析三个板块根据 `getMarketTimeState()` 自动切换：
+
+| 时段 | 状态 | 显示内容 |
+|------|------|---------|
+| 交易日 9:30-15:00 | `trading` | "暂不可用"（盘中交易时段） |
+| 交易日 15:00-16:00 | `generating` | "正在分析并生成中..."（等待16:00自动生成） |
+| 交易日 16:00+ | `ready` | 完整的盘后总结报告 |
+| 非交易日 | `closed` | "暂不可用"（休市） |
+
+前端通过 `renderTimeAwareSectionDirect()` 直接渲染到 DOM（非 iframe srcdoc），支持异步加载每日总结数据。
 
 ---
 
@@ -416,6 +503,17 @@ SMTP: smtp.163.com:465 (SSL)
 ---
 
 ## 已知教训
+
+### 2026-05-26（v2.5 盘后总结 + 思考舱移动端 + 事件持久化）
+
+盘后总结报告全自动生成 + 思考舱移动端彻底修复 + 交易时间戳完善 + 事件时间线跨天持久化。
+
+- **AI 思考舱移动端打不开**：根因是 `<button>` + `window.open('...', 'mosaic_think_tank', 'width=1400,height=900')` 在手机上被拦截或行为异常。修复：改为 `<a href="/think-tank.html" target="_blank">`，仅在桌面端（≥900px）用 JS 拦截开 popup。同时添加三层响应式断点（900/600/380）、禁用移动端背景粒子、`100dvh` 解决 iOS Safari 视口问题。
+- **思考舱 REST+SSE 双通道**：页面首次加载通过 REST `/api/think-tank/initial` 获取即时数据（调度器状态+持仓+最新扫描+今日事件+事件日期列表），然后 SSE 连接做增量更新。SSE `connected` 事件去重保护已渲染的事件，避免闪烁。
+- **事件时间线持久化**：每日事件写入 `data/events/YYYY-MM-DD.json`（环形缓冲500条），时间线面板新增日期选择器可回溯历史。API：`/api/events/dates` + `/api/events/<date>`。
+- **盘后总结自动生成**：调度器 `_tick()` 中检测 `hourNow >= 16` → `_runDailySummary()`，收集当日市场行情+持仓+交易+扫描结果+账户统计，写入 `data/summaries/`，SSE 推送到思考舱。前端三个板块（时政要点/交易分析/持仓分析）通过 `getMarketTimeState()` 分时切换（trading→"暂不可用" / generating→"生成中" / ready→完整总结）。
+- **交易动态时间戳**：从 `(t.time || '')` 改为 `(t.date || '') + ' ' + (t.time || '')`，显示完整日期+时间（如 "2026-05-26 09:35"）。
+- **调度器 bug**：`_tick()` 中使用了未定义的变量 `h`，修复为 `const hourNow = now.getHours()`。
 
 ### 2026-05-26（云端部署 + 移动端适配）
 

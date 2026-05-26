@@ -716,7 +716,7 @@ class Scheduler extends EventEmitter {
       const snap = simfolio.getSnapshot(pf);
       const stats = simfolio.computeStats(pf);
 
-      // Get today's trades
+      // Get today's trades (with analysisContext preserved)
       const todayTrades = pf.tradeHistory.filter(t => t.date === dateStr);
 
       // Get index data
@@ -745,6 +745,38 @@ class Scheduler extends EventEmitter {
           todayEvents = JSON.parse(fs.readFileSync(eventsPath, 'utf8'));
         }
       } catch (e) { /* silent */ }
+
+      // === NEW: Collect financial news ===
+      let newsData = null;
+      try {
+        const newsCollector = require('./collectors/news_collector');
+        newsData = await Promise.race([
+          newsCollector.fetchDailyNews(),
+          this._timeout(config.NEWS ? config.NEWS.fetchTimeoutMs || 20000 : 20000, '新闻采集超时'),
+        ]);
+      } catch (e) {
+        this._logEvent('news_collection_error', { error: e.message });
+        newsData = { items: [], count: 0, generatedAt: null, error: e.message };
+      }
+
+      // === NEW: Generate quant trade analysis ===
+      let analysisData = null;
+      try {
+        const quantReport = require('./analysis/quant_report');
+        const knowledgeBase = require('./analysis/knowledge_base');
+        let priorKnowledge = [];
+        try {
+          priorKnowledge = knowledgeBase.loadRecentPatterns(5);
+        } catch (e) { /* ignore */ }
+
+        analysisData = quantReport.buildTradeAnalysis(
+          dateStr, pf, lastResult, todayTrades, indices,
+          todayEvents, (newsData && newsData.items) || [], priorKnowledge
+        );
+      } catch (e) {
+        this._logEvent('analysis_error', { error: e.message });
+        analysisData = { date: dateStr, generatedAt: null, error: e.message };
+      }
 
       const summary = {
         date: dateStr,
@@ -779,6 +811,7 @@ class Scheduler extends EventEmitter {
           price: t.price, shares: t.shares, amount: t.amount,
           reason: t.reason, time: t.time, date: t.date,
           pnl: t.pnl, pnlPct: t.pnlPct,
+          analysisContext: t.analysisContext || null,
         })),
         pipeline: lastResult ? {
           type: lastResult.type,
@@ -791,6 +824,9 @@ class Scheduler extends EventEmitter {
         eventCount: todayEvents.length,
         scanCount: todayEvents.filter(e => e.type === 'pipeline_complete' || e.type === 'midscan_complete').length,
         tradeCount: todayTrades.length,
+        // === NEW fields ===
+        news: newsData || { items: [], count: 0, generatedAt: null },
+        tradeAnalysis: analysisData || { date: dateStr, generatedAt: null },
       };
 
       // Save summary
@@ -799,13 +835,27 @@ class Scheduler extends EventEmitter {
       const summaryPath = path.join(summaryDir, dateStr + '.json');
       fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf8');
 
+      // === NEW: Persist to knowledge base for self-growth ===
+      try {
+        const knowledgeBase = require('./analysis/knowledge_base');
+        if (analysisData && (analysisData.tradesAnalysis && analysisData.tradesAnalysis.length > 0 ||
+            analysisData.marketNarrative && analysisData.marketNarrative.narrative)) {
+          knowledgeBase.saveDailyAnalysis(analysisData, summary);
+          this._logEvent('knowledge_saved', { date: dateStr });
+        }
+      } catch (e) {
+        this._logEvent('knowledge_save_error', { error: e.message });
+      }
+
       this._logEvent('daily_summary_complete', {
         totalValue: snap.totalValue,
         tradeCount: todayTrades.length,
         topScore: lastResult ? lastResult.maxScore : null,
+        newsCount: newsData ? newsData.count : 0,
+        analysisGenerated: !!analysisData,
       });
 
-      // 广播到 SSE 客户端
+      // Broadcast to SSE clients
       this.emit('think_scan', {
         type: 'daily_summary',
         summary: summary,

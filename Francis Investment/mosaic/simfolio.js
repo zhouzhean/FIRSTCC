@@ -263,6 +263,37 @@ function checkSellSignal(position, stockData, isBoughtToday, isFullScan) {
 
 // ---- Buy Signal Detection ----
 
+function buildBuyReason(stockData, isStrong) {
+  var parts = [];
+  parts.push((isStrong ? '强买入' : '买入') + '：' + stockData.compositeScore + '分/' + stockData.rating + '级');
+
+  // Dimension highlight
+  if (stockData.rawScores) {
+    var dimHighlights = [];
+    var dims = [
+      { key: 'fundamental',  name: '基本面' },
+      { key: 'technical',    name: '技术面' },
+      { key: 'hidden',       name: '隐藏信号' },
+      { key: 'capitalFlow',  name: '资金流' },
+      { key: 'event',        name: '事件驱动' },
+    ];
+    for (var i = 0; i < dims.length; i++) {
+      var score = stockData.rawScores[dims[i].key];
+      if (score >= 60) dimHighlights.push(dims[i].name + score + '分');
+    }
+    if (dimHighlights.length > 0) parts.push('【' + dimHighlights.join('/') + '】');
+  }
+
+  // Hidden signals
+  if (stockData.hiddenSignals && stockData.hiddenSignals.length > 0) {
+    parts.push(stockData.hiddenSignals.map(function(s) {
+      return s.id + ':' + s.name + '(' + s.level + ')';
+    }).join('+'));
+  }
+
+  return parts.join(' ');
+}
+
 function checkBuySignal(stockData, pf, isStrong) {
   if (isStrong) {
     // Strong conviction: top percentile + strong signal
@@ -279,10 +310,15 @@ function checkBuySignal(stockData, pf, isStrong) {
       name: stockData.name,
       shares: shares,
       price: stockData.price,
-      reason: '强买入：' + stockData.compositeScore + '分/' + stockData.rating + '级（Top ' +
-              ((config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10) * 100 + '%） + ' +
-              (stockData.hiddenSignals ? stockData.hiddenSignals.map(s => s.name).join('+') : '无隐藏信号'),
+      reason: buildBuyReason(stockData, true),
       strength: 'strong',
+      analysisContext: {
+        compositeScore: stockData.compositeScore,
+        rating: stockData.rating,
+        hiddenSignals: stockData.hiddenSignals || [],
+        rawScores: stockData.rawScores || {},
+        dimensionScores: stockData.dimensionScores || {},
+      },
     };
   }
 
@@ -297,9 +333,15 @@ function checkBuySignal(stockData, pf, isStrong) {
     name: stockData.name,
     shares: shares,
     price: stockData.price,
-    reason: '买入：' + stockData.compositeScore + '分/' + stockData.rating + '级（Top ' +
-            ((config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20) * 100 + '%）',
+    reason: buildBuyReason(stockData, false),
     strength: 'normal',
+    analysisContext: {
+      compositeScore: stockData.compositeScore,
+      rating: stockData.rating,
+      hiddenSignals: stockData.hiddenSignals || [],
+      rawScores: stockData.rawScores || {},
+      dimensionScores: stockData.dimensionScores || {},
+    },
   };
 }
 
@@ -338,6 +380,7 @@ function executeBuy(pf, decision, date) {
     amount: amount,
     fee: Math.round(fee * 100) / 100,
     reason: decision.reason,
+    analysisContext: decision.analysisContext || null,
   };
   pf.tradeHistory.push(trade);
   return trade;
@@ -374,6 +417,7 @@ function executeSell(pf, decision, date) {
     pnl: Math.round(pnl * 100) / 100,
     pnlPct: Math.round(pnlPct * 100) / 100,
     reason: decision.reason,
+    analysisContext: decision.analysisContext || null,
   };
   pf.tradeHistory.push(trade);
   return trade;
