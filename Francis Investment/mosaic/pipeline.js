@@ -14,6 +14,9 @@ const EventEmitter = require('events');
 const path = require('path');
 const fs = require('fs');
 const marketData = require('./collectors/market_data');
+const capitalFlow = require('./collectors/capital_flow');
+const dragonTiger = require('./collectors/dragon_tiger');
+const northBound = require('./collectors/north_bound');
 const hiddenSignals = require('./factors/hidden_signals');
 const composite = require('./factors/composite');
 const config = require('./config');
@@ -67,6 +70,36 @@ class Pipeline extends EventEmitter {
       const indices = await marketData.fetchIndices();
       const marketDown = indices.length > 0 && (indices[0].changePercent || 0) < -0.3;
 
+      // === Step 3b: Fetch enrichment data (LHB, sector flow, north-bound) ===
+      this._setProgress(47, '正在获取龙虎榜+板块资金流+北向资金...');
+      const [lhbMap, sectorFlows, nbFlowData] = await Promise.all([
+        dragonTiger.fetchLHBDailyMap().catch(() => new Map()),
+        capitalFlow.fetchSectorFlow().catch(() => []),
+        northBound.fetchNorthBoundFlow(20).catch(() => []),
+      ]);
+
+      // Build sector flow map
+      const sectorFlowMap = new Map();
+      for (const s of sectorFlows) {
+        sectorFlowMap.set(s.code, s);
+      }
+
+      // Compute north-bound sentiment
+      const nbSentiment = northBound.computeSentiment(nbFlowData);
+
+      this._setProgress(49, '龙虎榜:' + lhbMap.size + '只 板块:' + sectorFlows.length + '个 北向:' + (nbSentiment.available ? nbSentiment.sentiment : 'N/A'));
+
+      this.emit('enrichment', {
+        lhbCount: lhbMap.size,
+        sectorCount: sectorFlows.length,
+        nbSentiment: nbSentiment.available ? nbSentiment.sentiment : 'N/A',
+        nbAvailable: nbSentiment.available,
+        topSectors: sectorFlows.slice(0, 5).map(s => ({
+          name: s.name || s.code,
+          netFlow: s.majorNetFlow || 0,
+        })),
+      });
+
       // === Step 4: Sort by preliminary score and take top N for detail ===
       // Pre-score using available fields for ranking
       const preScored = candidates.map(s => ({
@@ -107,13 +140,21 @@ class Pipeline extends EventEmitter {
           // Detail fetch failed, continue without it
         }
 
-        // Compute hidden signals (with fundamental data for H4, H5, H6)
+        // Compute hidden signals (with fundamental data for H4, H5, H6, H8, H9)
         const hiddenResult = hiddenSignals.computeHiddenSignals(stock, detail, klines, marketDown);
 
-        // Compute composite score (with fundamental data for 25% weight)
-        const scoreResult = composite.computeCompositeScore(stock, detail, klines, hiddenResult, marketDown);
+        // Build enrichment context for this stock
+        const lhbSignal = dragonTiger.checkLHB(stock.code, lhbMap);
+        const ctx = {
+          sectorFlowMap,
+          lhbSignal,
+          northBoundSentiment: nbSentiment,
+        };
 
-        results.push({
+        // Compute composite score with full context
+        const scoreResult = composite.computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, ctx);
+
+        const stockResult = {
           code: stock.code,
           name: stock.name,
           price: stock.price,
@@ -129,6 +170,30 @@ class Pipeline extends EventEmitter {
           hasStrongSignal: hiddenResult.hasStrong,
           detail: detail,
           klines: klines,
+        };
+        results.push(stockResult);
+
+        this.emit('stock_analyzed', {
+          code: stock.code,
+          name: stock.name,
+          index: i + 1,
+          total: finalists.length,
+          price: stock.price,
+          changePercent: stock.changePercent,
+          pe: stock.peTTM || stock.pe,
+          signals: hiddenResult.signals.map(s => ({ id: s.id, name: s.name, level: s.level })),
+          signalCount: hiddenResult.signalCount,
+          hiddenScore: hiddenResult.score,
+          hasStrongSignal: hiddenResult.hasStrong,
+          compositeScore: stockResult.compositeScore,
+          rating: stockResult.rating,
+          dimensions: {
+            fundamental: stockResult.fundamentalScore,
+            technical: stockResult.technicalScore,
+            hidden: stockResult.hiddenScore,
+            capitalFlow: stockResult.capitalFlowScore,
+            event: stockResult.eventScore,
+          },
         });
 
         // Rate limit
@@ -143,6 +208,30 @@ class Pipeline extends EventEmitter {
       // === Step 7: Assign sectors and build per-sector picks ===
       this._setProgress(88, '正在按板块分配推荐...');
       const sectorPicks = assignSectors(results);
+
+      // Emit factor statistics
+      const signalCounts = {};
+      for (const r of results) {
+        for (const s of (r.hiddenSignals || [])) {
+          signalCounts[s.id] = (signalCounts[s.id] || 0) + 1;
+        }
+      }
+      const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
+      for (const r of results) {
+        const s = r.compositeScore || 0;
+        if (s < 50) dist.lt50++;
+        else if (s < 60) dist.r50_60++;
+        else if (s < 70) dist.r60_70++;
+        else if (s < 80) dist.r70_80++;
+        else dist.gt80++;
+      }
+      this.emit('factor_stats', {
+        signalCounts,
+        scoreDistribution: dist,
+        totalAnalyzed: results.length,
+        avgScore: results.length > 0 ? Math.round(results.reduce((a, r) => a + (r.compositeScore || 0), 0) / results.length) : 0,
+        maxScore: results.length > 0 ? Math.max(...results.map(r => r.compositeScore || 0)) : 0,
+      });
 
       // === Step 8: Build TOP5 ===
       const top5 = results.slice(0, 5).map((r, i) => ({

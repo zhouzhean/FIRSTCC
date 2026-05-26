@@ -126,13 +126,34 @@ function makeTradingDecisions(pf, pipelineResults, indices) {
   }
 
   // ---- Step 3: Look for buy candidates ----
-  // Sort candidates by composite score
+  // Score all pipeline results, compute percentile thresholds
+  const scoredWithScores = pipelineResults
+    .filter(r => r.compositeScore != null)
+    .map(r => r.compositeScore)
+    .sort((a, b) => b - a);
+
+  // Percentile-based thresholds
+  const pctBuy = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20;
+  const pctStrong = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10;
+  const minAbsolute = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore) || 50;
+
+  let buyThreshold = minAbsolute;
+  let strongThreshold = minAbsolute + 5;
+
+  if (scoredWithScores.length > 0) {
+    const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
+    const strongIdx = Math.max(0, Math.floor(scoredWithScores.length * pctStrong) - 1);
+    buyThreshold = Math.max(minAbsolute, scoredWithScores[buyIdx] || 0);
+    strongThreshold = Math.max(minAbsolute + 5, scoredWithScores[strongIdx] || 0);
+  }
+
+  // Sort candidates by composite score (percentile-ranked, with absolute floor)
   const buyCandidates = pipelineResults
     .filter(r => {
       // Don't buy what we already hold
       if (pf.positions.some(p => p.code === r.code)) return false;
-      // Must have strong score
-      return r.compositeScore >= 65;
+      // Must meet percentile threshold (with absolute floor)
+      return r.compositeScore >= buyThreshold;
     })
     .sort((a, b) => b.compositeScore - a.compositeScore);
 
@@ -142,7 +163,9 @@ function makeTradingDecisions(pf, pipelineResults, indices) {
   for (const candidate of buyCandidates) {
     if (decisions.filter(d => d.action === 'buy').length >= availableSlots) break;
 
-    const buyDecision = checkBuySignal(candidate, pf);
+    // Strong buy: top percentile AND hasStrongSignal
+    const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
+    const buyDecision = checkBuySignal(candidate, pf, isStrong);
     if (buyDecision) {
       decisions.push(buyDecision);
     }
@@ -209,31 +232,13 @@ function checkSellSignal(position, stockData) {
 
 // ---- Buy Signal Detection ----
 
-function checkBuySignal(stockData, pf) {
-  // Must have at least one strong signal or high composite score
-  if (stockData.compositeScore >= 80 && stockData.hasStrongSignal) {
-    // Strong conviction: allocate more
+function checkBuySignal(stockData, pf, isStrong) {
+  if (isStrong) {
+    // Strong conviction: top percentile + strong signal
     const allocation = Math.min(
-      pf.cash * 0.20,  // 20% of cash
-      pf.meta.initialCapital * config.SIMFOLIO.maxSinglePositionPct  // max 30% of portfolio
+      pf.cash * 0.20,
+      pf.meta.initialCapital * config.SIMFOLIO.maxSinglePositionPct
     );
-    const shares = Math.floor(allocation / stockData.price / 100) * 100; // round to 100 shares
-    if (shares < 100) return null; // minimum 100 shares
-
-    return {
-      action: 'buy',
-      code: stockData.code,
-      name: stockData.name,
-      shares: shares,
-      price: stockData.price,
-      reason: '强买入：' + stockData.compositeScore + '分/' + stockData.rating + '级 + ' +
-              (stockData.hiddenSignals ? stockData.hiddenSignals.map(s => s.name).join('+') : ''),
-      strength: 'strong',
-    };
-  }
-
-  if (stockData.compositeScore >= 70) {
-    const allocation = Math.min(pf.cash * 0.10, pf.meta.initialCapital * 0.15);
     const shares = Math.floor(allocation / stockData.price / 100) * 100;
     if (shares < 100) return null;
 
@@ -243,12 +248,28 @@ function checkBuySignal(stockData, pf) {
       name: stockData.name,
       shares: shares,
       price: stockData.price,
-      reason: '试探买入：' + stockData.compositeScore + '分/' + stockData.rating + '级',
-      strength: 'normal',
+      reason: '强买入：' + stockData.compositeScore + '分/' + stockData.rating + '级（Top ' +
+              ((config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10) * 100 + '%） + ' +
+              (stockData.hiddenSignals ? stockData.hiddenSignals.map(s => s.name).join('+') : '无隐藏信号'),
+      strength: 'strong',
     };
   }
 
-  return null;
+  // Normal buy: meets percentile threshold
+  const allocation = Math.min(pf.cash * 0.10, pf.meta.initialCapital * 0.15);
+  const shares = Math.floor(allocation / stockData.price / 100) * 100;
+  if (shares < 100) return null;
+
+  return {
+    action: 'buy',
+    code: stockData.code,
+    name: stockData.name,
+    shares: shares,
+    price: stockData.price,
+    reason: '买入：' + stockData.compositeScore + '分/' + stockData.rating + '级（Top ' +
+            ((config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20) * 100 + '%）',
+    strength: 'normal',
+  };
 }
 
 // ---- Trade Execution ----

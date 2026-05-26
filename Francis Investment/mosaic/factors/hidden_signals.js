@@ -151,6 +151,73 @@ function signalLowChurnAccumulation(stock) {
   return { triggered: false, signal: null, detail: '' };
 }
 
+/**
+ * H8: 短期反转 — 5日累计跌幅较大，短期有反弹动能
+ * A股小盘股存在显著的短期反转效应（5日负收益→正收益）。
+ * 条件：5日累计跌幅>5% + 今日止跌(涨跌幅>-1%)
+ */
+function signalReversal(stock, klines) {
+  if (!klines || klines.length < 5) return { triggered: false, signal: null, detail: '' };
+
+  const closes = klines.map(k => k.close);
+  const chg5d = (closes[closes.length - 1] - closes[closes.length - 5]) / closes[closes.length - 5] * 100;
+  const todayChg = stock.changePercent || 0;
+
+  if (chg5d < -8 && todayChg > -0.5) {
+    return { triggered: true, signal: 'strong', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%后止跌，强势反转信号' };
+  }
+  if (chg5d < -5 && todayChg > -1) {
+    return { triggered: true, signal: 'medium', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%，关注超跌反弹' };
+  }
+  if (chg5d < -3 && todayChg > 0) {
+    return { triggered: true, signal: 'weak', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%后翻红，短线止跌' };
+  }
+  return { triggered: false, signal: null, detail: '' };
+}
+
+/**
+ * H9: 量价背离 — 成交量萎缩 + 价格企稳 = 吸筹信号
+ * 近5日量价相关系数为负（量缩价稳或量增价不跌），说明有资金在暗中吸筹。
+ */
+function signalVolumePriceDivergence(stock, klines) {
+  if (!klines || klines.length < 5) return { triggered: false, signal: null, detail: '' };
+
+  const recent = klines.slice(-5);
+  const priceChanges = [];
+  const volumeChanges = [];
+
+  for (let i = 1; i < recent.length; i++) {
+    priceChanges.push((recent[i].close - recent[i - 1].close) / recent[i - 1].close);
+    volumeChanges.push((recent[i].volume - recent[i - 1].volume) / Math.max(1, recent[i - 1].volume));
+  }
+
+  // Pearson correlation
+  const n = priceChanges.length;
+  if (n < 3) return { triggered: false, signal: null, detail: '' };
+
+  const avgP = priceChanges.reduce((a, b) => a + b, 0) / n;
+  const avgV = volumeChanges.reduce((a, b) => a + b, 0) / n;
+
+  let cov = 0, varP = 0, varV = 0;
+  for (let i = 0; i < n; i++) {
+    cov += (priceChanges[i] - avgP) * (volumeChanges[i] - avgV);
+    varP += (priceChanges[i] - avgP) ** 2;
+    varV += (volumeChanges[i] - avgV) ** 2;
+  }
+
+  const correlation = varP > 0 && varV > 0 ? cov / Math.sqrt(varP * varV) : 0;
+  const todayChg = stock.changePercent || 0;
+
+  // Negative correlation + price stabilizing = accumulation
+  if (correlation < -0.5 && todayChg > -0.5 && todayChg < 2) {
+    return { triggered: true, signal: 'strong', detail: '量价背离度' + correlation.toFixed(2) + '，缩量企稳，疑似吸筹' };
+  }
+  if (correlation < -0.3 && todayChg > -1) {
+    return { triggered: true, signal: 'medium', detail: '量价弱背离' + correlation.toFixed(2) + '，关注量价关系' };
+  }
+  return { triggered: false, signal: null, detail: '' };
+}
+
 // ---- Main scoring function ----
 
 /**
@@ -185,6 +252,12 @@ function computeHiddenSignals(stock, detail, klines, marketDown) {
   const s7 = signalLowChurnAccumulation(stock);
   if (s7.triggered) signals.push({ id: 'H7', name: '低换手蓄力', level: s7.signal, detail: s7.detail });
 
+  const s8 = signalReversal(stock, klines);
+  if (s8.triggered) signals.push({ id: 'H8', name: '短期反转', level: s8.signal, detail: s8.detail });
+
+  const s9 = signalVolumePriceDivergence(stock, klines);
+  if (s9.triggered) signals.push({ id: 'H9', name: '量价背离', level: s9.signal, detail: s9.detail });
+
   // Score: strong=3, medium=2, weak=1
   const weights = { strong: 3, medium: 2, weak: 1 };
   let rawScore = 0;
@@ -194,8 +267,8 @@ function computeHiddenSignals(stock, detail, klines, marketDown) {
     maxScore += 3;
   }
 
-  // If no signals triggered at all, score = 0
-  const normalizedScore = maxScore > 0 ? Math.round((rawScore / maxScore) * 100) : 0;
+  // No signals = neutral 50, not zero. Signals map range to 50-100.
+  const normalizedScore = maxScore > 0 ? Math.round(50 + (rawScore / maxScore) * 50) : 50;
 
   return {
     signals: signals,

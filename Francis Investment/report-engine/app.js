@@ -86,6 +86,12 @@ function initApp() {
   if ($btnSendPdf) $btnSendPdf.addEventListener('click', onSendPdf);
   if ($btnGenPDF) $btnGenPDF.addEventListener('click', onGenPDF);
 
+  // Think Tank button
+  var $btnThinkTank = document.getElementById('btn-think-tank');
+  if ($btnThinkTank) $btnThinkTank.addEventListener('click', function() {
+    window.open('/think-tank.html', 'mosaic_think_tank', 'width=1400,height=900');
+  });
+
   // Section nav delegation
   $sectionNavList.addEventListener('click', function(e) {
     var item = e.target.closest('.section-nav-item');

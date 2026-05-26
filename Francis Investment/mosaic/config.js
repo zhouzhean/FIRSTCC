@@ -25,9 +25,18 @@ module.exports = {
   // ---- 因子权重 ----
   FACTOR_WEIGHTS: {
     fundamental: 0.25,
-    technical: 0.20,
-    hidden: 0.35,
-    capital_flow: 0.20,
+    technical: 0.15,
+    hidden: 0.20,
+    capital_flow: 0.25,
+    event: 0.15,
+  },
+
+  // ---- 买入阈值（百分位制） ----
+  BUY_THRESHOLD: {
+    percentileTop: 0.20,       // top 20% = 普通买入
+    percentileStrong: 0.10,    // top 10% = 强买入
+    minAbsoluteScore: 50,      // 绝对质量底线
+    northBoundRiskOffset: 5,   // 北向大幅流出时额外提高阈值
   },
 
   // ---- 模拟交易 ----
@@ -58,10 +67,12 @@ module.exports = {
       { hour: 13, minute: 0 },
     ],
 
-    // Mid-Day Scan 触发时间（2次/天，轻量扫描）
+    // Mid-Day Scan 触发时间（4次/天，轻量扫描）
     midDayScanTimes: [
       { hour: 10, minute: 30 },
+      { hour: 11, minute: 25 },
       { hour: 14, minute: 0 },
+      { hour: 14, minute: 35 },
     ],
 
     // 持仓监控间隔（活跃时段每N分钟查一次持仓价格+风控）

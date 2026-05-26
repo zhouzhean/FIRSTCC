@@ -109,28 +109,121 @@ function scoreTechnical(stock, klines) {
  * 资金面评分 (0-100)
  * 基于：成交额、换手率
  */
-function scoreCapitalFlow(stock) {
+/**
+ * 资金面评分 (0-100) — 方向性资金流 + 活跃度
+ *
+ * 优先使用主力资金流方向数据；无数据时回退到成交活跃度指标。
+ * @param {object} stock - Stock with optional capital flow fields
+ * @param {Map} sectorFlowMap - Optional sector→flowRecord map for sector ranking
+ * @param {object} stockFlowHistory - Optional per-stock flow history { majorNetFlow[] }
+ */
+function scoreCapitalFlow(stock, sectorFlowMap, stockFlowHistory) {
+  // If we have directional capital flow data, use it
+  if (stock.majorNetFlow != null) {
+    return scoreDirectionalFlow(stock, sectorFlowMap, stockFlowHistory);
+  }
+  // Fallback: activity-based scoring
+  return scoreActivity(stock);
+}
+
+/**
+ * Directional capital flow scoring.
+ * Measures: big money direction, smart/money divergence, sector flow resonance.
+ */
+function scoreDirectionalFlow(stock, sectorFlowMap, stockFlowHistory) {
+  let score = 50;
+  const turnover = stock.turnover || 0;
+
+  // 1. 主力净流入占比 (majorNetFlow / turnover)
+  if (turnover > 0) {
+    const flowRatio = stock.majorNetFlow / turnover;
+    if (flowRatio > 0.05) score += 20;       // >5% = strong buying
+    else if (flowRatio > 0.02) score += 12;
+    else if (flowRatio > 0) score += 5;
+    else if (flowRatio < -0.05) score -= 20; // >5% = strong selling
+    else if (flowRatio < -0.02) score -= 12;
+    else if (flowRatio < 0) score -= 5;
+  }
+
+  // 2. 超大单 vs 小单背离 (smart money vs retail)
+  if (stock.superLargeNetFlow != null && stock.smallNetFlow != null) {
+    const divergence = stock.superLargeNetFlow - stock.smallNetFlow;
+    if (divergence > 0) score += 15;   // Institutions buying, retail selling = bullish
+    else score -= 10;                   // Institutions selling, retail buying = bearish
+  }
+
+  // 3. 板块资金流共振
+  if (sectorFlowMap && sectorFlowMap.size > 0) {
+    const sectorRank = getSectorFlowRank(stock, sectorFlowMap);
+    if (sectorRank != null) {
+      if (sectorRank <= 0.10) score += 10;      // Top 10% sector
+      else if (sectorRank <= 0.25) score += 5;
+      else if (sectorRank >= 0.75) score -= 8;   // Bottom 25% sector
+    }
+  }
+
+  // 4. 连续流入天数
+  if (stockFlowHistory && stockFlowHistory.length >= 3) {
+    let consecutiveInflows = 0;
+    for (let i = stockFlowHistory.length - 1; i >= 0; i--) {
+      if (stockFlowHistory[i].majorNetFlow > 0) consecutiveInflows++;
+      else break;
+    }
+    if (consecutiveInflows >= 5) score += 10;
+    else if (consecutiveInflows >= 3) score += 5;
+  }
+
+  return Math.max(0, Math.min(100, score));
+}
+
+/**
+ * Activity-based scoring (fallback when no directional data).
+ */
+function scoreActivity(stock) {
   let score = 50;
   const turnover = stock.turnover || 0;
   const turnoverRate = stock.turnoverRate || 0;
 
-  // Turnover (100M = 1e8)
   if (turnover > 5e8) score += 15;
   else if (turnover > 2e8) score += 10;
   else if (turnover > 1e8) score += 5;
   else if (turnover < 5e7) score -= 5;
 
-  // Turnover rate
   if (turnoverRate > 2 && turnoverRate < 8) score += 10;
   else if (turnoverRate >= 1 && turnoverRate <= 2) score += 5;
   else if (turnoverRate < 0.5) score -= 3;
-  else if (turnoverRate > 15) score -= 3; // too hot
+  else if (turnoverRate > 15) score -= 3;
 
-  // Volume ratio
   const volRatio = stock.volumeRatio || 1;
   if (volRatio > 1 && volRatio < 2.5) score += 5;
 
   return Math.max(0, Math.min(100, score));
+}
+
+/**
+ * Get a stock's sector flow percentile rank.
+ * Lower = better (top 10% = 0.10).
+ */
+function getSectorFlowRank(stock, sectorFlowMap) {
+  const sectors = Array.from(sectorFlowMap.values());
+  if (sectors.length === 0) return null;
+
+  // Sort by majorNetFlow descending
+  sectors.sort((a, b) => (b.majorNetFlow || 0) - (a.majorNetFlow || 0));
+
+  // Find matching sector via keyword in stock name
+  // Simple approach: scan all sectors, find best keyword match
+  let bestRank = null;
+  for (let i = 0; i < sectors.length; i++) {
+    const sec = sectors[i];
+    if (!sec.name) continue;
+    // Check if sector name keywords appear in stock name or vice versa
+    if (stock.name && stock.name.includes(sec.name.slice(0, 2))) {
+      bestRank = i / sectors.length;
+      break;
+    }
+  }
+  return bestRank;
 }
 
 // ---- 6-dimension star ratings (compatible with existing format) ----
@@ -151,41 +244,84 @@ function starsFromScore(score) {
  * Compute composite score and 6-dimension breakdown for a stock.
  * @returns {object} compositeScore (0-100 int), dimensionScores {6 keys}, rating letter
  */
-function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown) {
+function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, context) {
+  const ctx = context || {};
   const fundamental = scoreFundamental(stock, detail);
   const technical = scoreTechnical(stock, klines);
-  const hidden = hiddenResult ? hiddenResult.score : 0;
-  const capitalFlow = scoreCapitalFlow(stock);
+  const hidden = hiddenResult ? hiddenResult.score : 50;  // neutral=50, not 0
+  const capitalFlow = scoreCapitalFlow(stock, ctx.sectorFlowMap, ctx.stockFlowHistory);
 
-  // Weighted total
+  // Event score: dragon-tiger board signal
+  let eventScore = 50;
+  if (ctx.lhbSignal) {
+    const sig = ctx.lhbSignal;
+    if (sig.signal === 'strong') eventScore = 85;
+    else if (sig.signal === 'medium') eventScore = 70;
+    else if (sig.signal === 'weak' && sig.netAmt > 0) eventScore = 60;
+    else if (sig.netAmt < 0) eventScore = 40;
+  }
+
+  // Detect data quality: if detail is missing, fundamental data is thin
+  const hasDetail = detail && (detail.roe != null || detail.debtRatio != null || detail.revenueGrowth != null);
+  const dataQuality = hasDetail ? 'full' : 'thin';
+
+  // Adaptive weights
+  let weights;
+  if (!hasDetail) {
+    // Redistribute fundamental's 15% (25%→10%) proportionally
+    weights = {
+      fundamental: 0.10,
+      technical: 0.18,
+      hidden: 0.24,
+      capital_flow: 0.30,
+      event: 0.18,
+    };
+  } else {
+    weights = config.FACTOR_WEIGHTS;
+  }
+
+  // Weighted total (exclude event if no LHB data)
+  const eventWeight = ctx.lhbSignal ? weights.event : 0;
   const total = Math.round(
-    fundamental * config.FACTOR_WEIGHTS.fundamental +
-    technical * config.FACTOR_WEIGHTS.technical +
-    hidden * config.FACTOR_WEIGHTS.hidden +
-    capitalFlow * config.FACTOR_WEIGHTS.capital_flow
+    fundamental * (weights.fundamental + (ctx.lhbSignal ? 0 : weights.event * 0.4)) +
+    technical * (weights.technical + (ctx.lhbSignal ? 0 : weights.event * 0.3)) +
+    hidden * (weights.hidden + (ctx.lhbSignal ? 0 : weights.event * 0.3)) +
+    capitalFlow * weights.capital_flow +
+    eventScore * eventWeight
   );
 
-  // Rating
+  // North-bound sentiment adjustment
+  let adjustedTotal = total;
+  if (ctx.northBoundSentiment && ctx.northBoundSentiment.available) {
+    const nb = ctx.northBoundSentiment;
+    if (nb.sentiment === 'bullish') adjustedTotal = Math.min(100, total + 3);
+    else if (nb.sentiment === 'bearish') adjustedTotal = Math.max(0, total - 5);
+    else if (nb.sentiment === 'slightly_bullish') adjustedTotal = Math.min(100, total + 1);
+  }
+
+  // Rating (based on adjusted total)
   let rating;
-  if (total >= 85) rating = 'S';
-  else if (total >= 75) rating = 'A';
-  else if (total >= 60) rating = 'B';
-  else if (total >= 45) rating = 'C';
+  if (adjustedTotal >= 85) rating = 'S';
+  else if (adjustedTotal >= 75) rating = 'A';
+  else if (adjustedTotal >= 60) rating = 'B';
+  else if (adjustedTotal >= 45) rating = 'C';
   else rating = 'D';
 
   // 6-dimension display scores (0-5 scale)
   return {
-    compositeScore: total,
+    compositeScore: adjustedTotal,
     rating: rating,
+    dataQuality: dataQuality,
+    northBoundAdjustment: adjustedTotal - total,
     dimensionScores: {
-      [dimName('fundamental')]: roundHalf(fundamental / 20),   // 0-100 → 0-5
+      [dimName('fundamental')]: roundHalf(fundamental / 20),
       [dimName('technical')]: roundHalf(technical / 20),
-      [dimName('governance')]: roundHalf(60 / 20),   // default neutral (can't assess governance from API)
+      [dimName('governance')]: roundHalf(60 / 20),
       [dimName('industry')]: roundHalf(55 / 20),
       [dimName('institutional')]: roundHalf(50 / 20),
       [dimName('capital')]: roundHalf(capitalFlow / 20),
     },
-    rawScores: { fundamental, technical, hidden, capitalFlow },
+    rawScores: { fundamental, technical, hidden, capitalFlow, event: eventScore },
   };
 }
 

@@ -166,6 +166,13 @@ class Scheduler extends EventEmitter {
     }
 
     this.emit('state_change', { from: oldState, to: newState });
+    this.emit('think_state', {
+      type: 'state_change',
+      from: oldState,
+      to: newState,
+      reason: reason,
+      time: new Date().toISOString(),
+    });
   }
 
   // ==================== 调度检查 ====================
@@ -213,6 +220,7 @@ class Scheduler extends EventEmitter {
 
     this._opsRunning = true;
     this._logEvent('pipeline_start', { reason });
+    this.emit('think_scan', { type: 'scan_start', reason, time: new Date().toISOString() });
 
     try {
       const { Pipeline } = require('./pipeline');
@@ -221,6 +229,16 @@ class Scheduler extends EventEmitter {
       const pipeline = new Pipeline();
       pipeline.on('progress', (p) => {
         this.emit('pipeline_progress', p);
+        this.emit('think_progress', { type: 'progress', ...p });
+      });
+      pipeline.on('enrichment', (data) => {
+        this.emit('think_enrichment', { type: 'enrichment', ...data });
+      });
+      pipeline.on('stock_analyzed', (data) => {
+        this.emit('think_stock', { type: 'stock_analyzed', ...data });
+      });
+      pipeline.on('factor_stats', (data) => {
+        this.emit('think_stats', { type: 'factor_stats', ...data });
       });
 
       // 超时竞速
@@ -243,6 +261,18 @@ class Scheduler extends EventEmitter {
         top5: (result.top5 || []).map(s => s.code + ' ' + s.name + ' ' + s.compositeScore + '分'),
         duration: result.duration,
       });
+      // Persist result for think-tank initial load
+      this._saveLastPipelineResult(result, 'full');
+
+      this.emit('think_scan', {
+        type: 'scan_complete',
+        totalStocks: result.totalStocks,
+        candidates: result.candidates,
+        analyzed: result.analyzed,
+        top5: (result.top5 || []).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
+        duration: result.duration,
+        time: new Date().toISOString(),
+      });
 
       // 自动交易
       try {
@@ -264,8 +294,25 @@ class Scheduler extends EventEmitter {
               shares: t.shares,
               reason: t.reason,
             });
+            this.emit('think_trade', {
+              type: 'trade_executed',
+              action: t.action,
+              code: t.code,
+              name: t.name,
+              price: t.price,
+              shares: t.shares,
+              reason: t.reason,
+              time: new Date().toISOString(),
+            });
           }
           this.emit('trades_executed', tradeResult.executed);
+        } else if (!tradeResult.decisions || tradeResult.decisions.length === 0) {
+          this.emit('think_trade', {
+            type: 'trade_skip',
+            reason: 'no_candidates_above_threshold',
+            analyzedCount: result.analyzed,
+            time: new Date().toISOString(),
+          });
         }
       } catch (tradeErr) {
         this._logEvent('trade_error', { error: tradeErr.message });
@@ -287,9 +334,12 @@ class Scheduler extends EventEmitter {
 
     this._opsRunning = true;
     this._logEvent('midscan_start', {});
+    this.emit('think_scan', { type: 'scan_start', reason: 'mid_scan', time: new Date().toISOString() });
 
     try {
       const marketData = require('./collectors/market_data');
+      const dragonTiger = require('./collectors/dragon_tiger');
+      const northBound = require('./collectors/north_bound');
       const { computeHiddenSignals } = require('./factors/hidden_signals');
       const { computeCompositeScore } = require('./factors/composite');
       const simfolio = require('./simfolio');
@@ -299,6 +349,20 @@ class Scheduler extends EventEmitter {
       const candidates = marketData.screenStocks(allStocks);
       const indices = await marketData.fetchIndices();
       const marketDown = indices.length > 0 && indices[0].changePercent != null && indices[0].changePercent < -0.3;
+
+      // Lightweight enrichment: LHB + NB only
+      let lhbMap, nbSentiment;
+      try {
+        const [lhbResult, nbFlow] = await Promise.all([
+          dragonTiger.fetchLHBDailyMap().catch(() => new Map()),
+          northBound.fetchNorthBoundFlow(20).catch(() => []),
+        ]);
+        lhbMap = lhbResult;
+        nbSentiment = northBound.computeSentiment(nbFlow);
+      } catch (e) {
+        lhbMap = new Map();
+        nbSentiment = { available: false, sentiment: 'neutral' };
+      }
 
       // 按成交额排取 Top
       const topByTurnover = candidates
@@ -323,7 +387,11 @@ class Scheduler extends EventEmitter {
           const klines = await marketData.fetchKline(stock.code, 10);
           const detail = await marketData.fetchStockDetail(stock.code);
           const hiddenResult = computeHiddenSignals(stock, detail, klines, marketDown);
-          const compositeScore = computeCompositeScore(stock, detail, klines, hiddenResult, marketDown);
+          const lhbSignal = dragonTiger.checkLHB(stock.code, lhbMap);
+          const scoreResult = computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, {
+            lhbSignal,
+            northBoundSentiment: nbSentiment,
+          });
 
           results.push({
             ...stock,
@@ -331,8 +399,23 @@ class Scheduler extends EventEmitter {
             detail,
             hiddenSignals: hiddenResult.signals,
             hasStrongSignal: hiddenResult.hasStrong,
-            compositeScore,
-            rating: compositeScore >= 85 ? 'S' : compositeScore >= 75 ? 'A' : compositeScore >= 60 ? 'B' : compositeScore >= 45 ? 'C' : 'D',
+            ...scoreResult,
+          });
+
+          this.emit('think_stock', {
+            type: 'stock_analyzed',
+            code: stock.code,
+            name: stock.name,
+            index: i + 1,
+            total: deepList.length,
+            price: stock.price,
+            changePercent: stock.changePercent,
+            signals: hiddenResult.signals.map(s => ({ id: s.id, name: s.name, level: s.level })),
+            signalCount: hiddenResult.signalCount,
+            hiddenScore: hiddenResult.score,
+            hasStrongSignal: hiddenResult.hasStrong,
+            compositeScore: scoreResult.compositeScore,
+            rating: scoreResult.rating,
           });
         } catch (e) {
           // skip individual stock errors in mid-scan
@@ -344,6 +427,18 @@ class Scheduler extends EventEmitter {
       this._logEvent('midscan_complete', {
         topCount: topByTurnover.length,
         deepAnalyzed: results.length,
+      });
+      // Persist mid-scan result for think-tank
+      this._saveLastPipelineResult({ totalStocks: allStocks.length, candidates: candidates.length, analyzed: results.length, top5: results.slice(0, 5), allResults: results }, 'mid');
+
+      this.emit('think_scan', {
+        type: 'scan_complete',
+        totalStocks: allStocks.length,
+        candidates: candidates.length,
+        analyzed: results.length,
+        top5: results.slice(0, 5).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
+        duration: 0,
+        time: new Date().toISOString(),
       });
 
       // 自动交易
@@ -361,8 +456,25 @@ class Scheduler extends EventEmitter {
                 shares: t.shares,
                 reason: t.reason,
               });
+              this.emit('think_trade', {
+                type: 'trade_executed',
+                action: t.action,
+                code: t.code,
+                name: t.name,
+                price: t.price,
+                shares: t.shares,
+                reason: t.reason,
+                time: new Date().toISOString(),
+              });
             }
             this.emit('trades_executed', tradeResult.executed);
+          } else if (!tradeResult.decisions || tradeResult.decisions.length === 0) {
+            this.emit('think_trade', {
+              type: 'trade_skip',
+              reason: 'no_candidates_above_threshold',
+              analyzedCount: results.length,
+              time: new Date().toISOString(),
+            });
           }
         } catch (tradeErr) {
           this._logEvent('trade_error', { error: tradeErr.message });
@@ -441,6 +553,33 @@ class Scheduler extends EventEmitter {
       // 更新持仓现价
       simfolio.updatePositionPrices(pf, priceMap);
 
+      // Emit position update for think tank
+      const positionUpdates = pf.positions.map(pos => {
+        const marketData = priceMap[pos.code];
+        const currentPrice = marketData ? marketData.price : pos.currentPrice;
+        const pnl = (currentPrice - pos.avgCost) * pos.shares;
+        const pnlPct = pos.avgCost > 0 ? ((currentPrice - pos.avgCost) / pos.avgCost * 100) : 0;
+        return {
+          code: pos.code,
+          name: pos.name,
+          shares: pos.shares,
+          avgCost: pos.avgCost,
+          currentPrice: currentPrice,
+          pnl: Math.round(pnl * 100) / 100,
+          pnlPct: Math.round(pnlPct * 100) / 100,
+        };
+      });
+      this.emit('think_position', {
+        type: 'position_update',
+        positions: positionUpdates,
+        totalValue: pf.cash + pf.positions.reduce((sum, p) => {
+          const mp = priceMap[p.code];
+          return sum + (mp ? mp.price : p.currentPrice) * p.shares;
+        }, 0),
+        cash: pf.cash,
+        time: new Date().toISOString(),
+      });
+
       // 更新移动止盈
       simfolio.updateTrailingStop(pf, priceMap);
 
@@ -472,6 +611,16 @@ class Scheduler extends EventEmitter {
 
       if (alerts.length > 0 || executedCount > 0) {
         this.emit('risk_alerts', { alerts, executedCount });
+        for (const alert of alerts) {
+          this.emit('think_alert', {
+            type: 'risk_alert',
+            level: alert.level || 'warning',
+            code: alert.code,
+            name: alert.name,
+            message: alert.reason || alert.message || '',
+            time: new Date().toISOString(),
+          });
+        }
       }
     } catch (err) {
       this._logEvent('position_monitor_error', { error: err.message });
@@ -497,6 +646,59 @@ class Scheduler extends EventEmitter {
       });
     } catch (err) {
       this._logEvent('wrapup_error', { error: err.message });
+    }
+  }
+
+  // ==================== 持久化 Pipeline 结果 ====================
+
+  _saveLastPipelineResult(result, type) {
+    try {
+      const dir = path.join(config.DATA_DIR, 'simfolio');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+      const allResults = result.allResults || [];
+      const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
+      const signalCounts = {};
+      for (const r of allResults) {
+        const s = r.compositeScore || 0;
+        if (s < 50) dist.lt50++;
+        else if (s < 60) dist.r50_60++;
+        else if (s < 70) dist.r60_70++;
+        else if (s < 80) dist.r70_80++;
+        else dist.gt80++;
+
+        if (r.hiddenSignals) {
+          for (const sig of r.hiddenSignals) {
+            signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+          }
+        }
+      }
+
+      const summary = {
+        type: type || 'full',
+        date: this._todayDate,
+        time: new Date().toISOString(),
+        totalStocks: result.totalStocks || 0,
+        candidates: result.candidates || 0,
+        analyzed: result.analyzed || 0,
+        duration: result.duration || 0,
+        top5: (result.top5 || []).map(s => ({
+          code: s.code, name: s.name, score: s.compositeScore, rating: s.rating,
+        })),
+        scoreDistribution: dist,
+        signalCounts: signalCounts,
+        avgScore: allResults.length > 0
+          ? Math.round(allResults.reduce((a, r) => a + (r.compositeScore || 0), 0) / allResults.length)
+          : 0,
+        maxScore: allResults.length > 0
+          ? Math.max(...allResults.map(r => r.compositeScore || 0))
+          : 0,
+      };
+
+      const filePath = path.join(dir, 'last_pipeline_result.json');
+      fs.writeFileSync(filePath, JSON.stringify(summary, null, 2), 'utf8');
+    } catch (e) {
+      // 静默失败
     }
   }
 

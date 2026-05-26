@@ -19,7 +19,14 @@ Static web project — no build tools, no package manager, no tests. All HTML/CS
 
 ## Francis Investment
 
-A股投资分析报告引擎子项目，详见 `Francis Investment/CLAUDE.md`（完整架构文档）。
+A股投资分析报告引擎 + Mosaic 量化系统，详见 `Francis Investment/CLAUDE.md`（完整架构文档）。
+
+### 启动方式
+
+- **桌面快捷方式** `Francis Investment.lnk` → `open.vbs` → 自动检测+启动 Node 服务器 → 打开 Chrome `--app` 模式到 `http://127.0.0.1:8765`
+- **手动调试**：双击 `Francis Investment/start.bat`（有控制台窗口，可见服务器日志）
+- **开机自启**：Startup 文件夹快捷方式 → `launch.vbs` → 后台静默启动服务器
+- **停止服务器**：关闭 Node 控制台窗口，或 `taskkill /F /IM node.exe`
 
 ### 快速更新流程
 
@@ -36,6 +43,8 @@ A股投资分析报告引擎子项目，详见 `Francis Investment/CLAUDE.md`（
 - **K线图**：Canvas动画（65帧），含MACD/BOLL技术指标切换+下一交易日金融分析预测
 - **板块筛选**：7大热门板块，潜力股推荐含板块标签筛选，自动防重复+参与TOP5排行
 - **日历导航**：左侧320px边栏（日历+板块导航+报告列表），内容通过iframe srcdoc隔离渲染
+- **Mosaic AI 思考舱**：`think-tank.html` — SSE 实时量化仪表板（因子分析+评分分布+TOP5+扫描倒计时）
+- **Mosaic 量化引擎**：Node.js 全自动交易系统（9因子评分+5维模型+Simfolio模拟交易+全自动调度器）
 - **邮件发送**：通过 `send_mail.js` 发送至163邮箱，凭据见子项目CLAUDE.md
 
 ## Architecture notes

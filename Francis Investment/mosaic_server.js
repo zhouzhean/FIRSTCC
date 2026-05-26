@@ -21,6 +21,90 @@ let pipeline = null;
 // Scheduler instance
 let scheduler = null;
 
+// SSE clients for Think Tank
+const sseClients = new Set();
+
+function broadcastSSE(event, data) {
+  const payload = 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
+  for (const res of sseClients) {
+    try { res.write(payload); } catch (e) { sseClients.delete(res); }
+  }
+}
+
+// Heartbeat to keep SSE connections alive and provide current state
+const SCAN_SCHEDULE = [
+  { h: 9, m: 30, label: '全量扫描', type: 'full' },
+  { h: 10, m: 30, label: '盘中扫描', type: 'mid' },
+  { h: 11, m: 0, label: '全量扫描', type: 'full' },
+  { h: 11, m: 25, label: '盘中扫描', type: 'mid' },
+  { h: 13, m: 0, label: '全量扫描', type: 'full' },
+  { h: 14, m: 0, label: '盘中扫描', type: 'mid' },
+  { h: 14, m: 35, label: '盘中扫描', type: 'mid' },
+];
+
+function saveLastPipelineResult(result, type) {
+  try {
+    const dir = path.join(DATA_DIR, 'simfolio');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const allResults = result.allResults || [];
+    const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
+    const signalCounts = {};
+    for (const r of allResults) {
+      const s = r.compositeScore || 0;
+      if (s < 50) dist.lt50++;
+      else if (s < 60) dist.r50_60++;
+      else if (s < 70) dist.r60_70++;
+      else if (s < 80) dist.r70_80++;
+      else dist.gt80++;
+      if (r.hiddenSignals) {
+        for (const sig of r.hiddenSignals) {
+          signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+        }
+      }
+    }
+    const summary = {
+      type: type || 'full',
+      time: new Date().toISOString(),
+      totalStocks: result.totalStocks || 0,
+      candidates: result.candidates || 0,
+      analyzed: result.analyzed || 0,
+      duration: result.duration || 0,
+      top5: (result.top5 || []).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
+      scoreDistribution: dist,
+      signalCounts: signalCounts,
+      avgScore: allResults.length > 0 ? Math.round(allResults.reduce((a, r) => a + (r.compositeScore || 0), 0) / allResults.length) : 0,
+      maxScore: allResults.length > 0 ? Math.max(...allResults.map(r => r.compositeScore || 0)) : 0,
+    };
+    fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
+  } catch (e) { /* silent */ }
+}
+
+function getNextScanTime() {
+  const now = new Date();
+  for (const s of SCAN_SCHEDULE) {
+    const t = new Date(now.getFullYear(), now.getMonth(), now.getDate(), s.h, s.m, 0);
+    if (t > now) {
+      return { time: t.toISOString(), label: s.label, type: s.type };
+    }
+  }
+  return null;
+}
+
+setInterval(() => {
+  if (sseClients.size === 0) return;
+  const now = new Date();
+  const sStatus = scheduler ? scheduler.getStatus() : null;
+  const nextScan = getNextScanTime();
+  broadcastSSE('heartbeat', {
+    time: now.toISOString(),
+    state: sStatus ? sStatus.state : 'stopped',
+    isTradingDay: sStatus ? sStatus.isTradingDay : false,
+    nextTickMs: sStatus ? sStatus.nextTickMs : null,
+    opsRunning: sStatus ? sStatus.opsRunning : false,
+    nextScan: nextScan,
+  });
+}, 3000);
+
 // ---- Trading day detection ----
 
 function isTradingDay(date) {
@@ -120,12 +204,35 @@ function handlePipelineRun(res) {
   pipeline = new Pipeline();
   pipeline.on('progress', (data) => {
     console.log('  [' + data.progress + '%] ' + data.step);
+    broadcastSSE('progress', { type: 'progress', ...data });
   });
+  pipeline.on('enrichment', (data) => {
+    broadcastSSE('enrichment', { type: 'enrichment', ...data });
+  });
+  pipeline.on('stock_analyzed', (data) => {
+    broadcastSSE('stock', { type: 'stock_analyzed', ...data });
+  });
+  pipeline.on('factor_stats', (data) => {
+    broadcastSSE('stats', { type: 'factor_stats', ...data });
+  });
+
+  broadcastSSE('scan', { type: 'scan_start', reason: 'manual', time: new Date().toISOString() });
 
   // Run in background (don't await)
   pipeline.run().then(result => {
     console.log('  Pipeline done: ' + result.analyzed + ' stocks analyzed in ' + result.duration + 's');
     console.log('  Top pick: ' + (result.top5[0] ? result.top5[0].name + ' (' + result.top5[0].compositeScore + '分)' : 'N/A'));
+    broadcastSSE('scan', {
+      type: 'scan_complete',
+      totalStocks: result.totalStocks,
+      candidates: result.candidates,
+      analyzed: result.analyzed,
+      top5: (result.top5 || []).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
+      duration: result.duration,
+      time: new Date().toISOString(),
+    });
+    // Persist result so think-tank can reload it after restart
+    saveLastPipelineResult(result, 'full');
   }).catch(err => {
     console.error('  Pipeline error:', err.message);
   });
@@ -301,6 +408,75 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: true, message: '已触发持仓检查' });
   }
 
+  // Last pipeline result (persisted, survives restarts)
+  if (pathname === '/api/pipeline/last-result') {
+    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    if (fs.existsSync(p)) {
+      return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(p, 'utf8')) });
+    }
+    return jsonResponse(res, { ok: false, message: '尚无分析结果' });
+  }
+
+  // Think Tank SSE stream
+  if (pathname === '/api/think-tank/stream') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'X-Accel-Buffering': 'no',
+    });
+    res.write('event: connected\ndata: {"ok":true}\n\n');
+    sseClients.add(res);
+
+    // Send initial state snapshot
+    if (scheduler) {
+      const sStatus = scheduler.getStatus();
+      res.write('event: heartbeat\ndata: ' + JSON.stringify({
+        time: new Date().toISOString(),
+        state: sStatus.state,
+        isTradingDay: sStatus.isTradingDay,
+        nextTickMs: sStatus.nextTickMs,
+        opsRunning: sStatus.opsRunning,
+      }) + '\n\n');
+
+      // Send event history
+      const events = scheduler.getEvents(50);
+      if (events.length > 0) {
+        res.write('event: history\ndata: ' + JSON.stringify({ events }) + '\n\n');
+      }
+
+      // Send position snapshot
+      try {
+        const pf = simfolio.loadPortfolio();
+        const snap = simfolio.getSnapshot(pf);
+        res.write('event: position_snapshot\ndata: ' + JSON.stringify({
+          type: 'position_snapshot',
+          cash: snap.cash,
+          totalValue: snap.totalValue,
+          totalReturn: snap.totalReturn,
+          positions: snap.positions.map(p => ({
+            code: p.code, name: p.name, shares: p.shares,
+            avgCost: p.avgCost, currentPrice: p.currentPrice,
+            pnl: p.pnl, pnlPct: p.pnlPct,
+          })),
+        }) + '\n\n');
+      } catch (e) { /* ignore */ }
+
+      // Send last pipeline result so think-tank shows previous scan data
+      try {
+        const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        if (fs.existsSync(lastResultPath)) {
+          const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+          res.write('event: last_result\ndata: ' + JSON.stringify(lastResult) + '\n\n');
+        }
+      } catch (e) { /* ignore */ }
+    }
+
+    req.on('close', () => { sseClients.delete(res); });
+    return; // Don't fall through to static serving
+  }
+
   // ---- Static file serving ----
   let filePath;
   if (pathname === '/') {
@@ -321,12 +497,27 @@ server.listen(PORT, '127.0.0.1', function() {
   // 启动全自动调度器
   scheduler = new Scheduler();
   scheduler.start();
+
+  // Wire scheduler events to console
   scheduler.on('event', (evt) => {
-    // 重要事件自动输出到控制台（scheduler 内部已处理）
+    // Important events already logged by scheduler internally
   });
   scheduler.on('trades_executed', (trades) => {
     console.log('  [Server] Auto-trades executed:', trades.length);
   });
+
+  // Wire scheduler think-tank events to SSE broadcast
+  const thinkEvents = ['think_progress', 'think_enrichment', 'think_stock', 'think_stats',
+    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert'];
+  for (const evt of thinkEvents) {
+    scheduler.on(evt, (data) => {
+      if (sseClients.size > 0) {
+        // Strip 'think_' prefix for the SSE event name
+        const sseEvent = evt.replace('think_', '');
+        broadcastSSE(sseEvent, data);
+      }
+    });
+  }
 
   printBanner();
   console.log('  Scheduler: ' + scheduler.getStatus().state + ' | next tick in ' +

@@ -290,6 +290,7 @@ async function fetchAllStocksEastmoney() {
   const FIELDS = [
     'f2','f3','f4','f5','f6','f7','f8','f9','f10',
     'f12','f14','f15','f16','f17','f18','f20','f21','f23',
+    'f62','f64','f66','f70','f72',   // 主力资金流（主力/超大单/大单/中单/小单净流入）
     'f115','f124','f152',
   ].join(',');
 
@@ -349,6 +350,12 @@ function normalizeStockEM(item) {
     totalCap: item.f20 != null ? parseFloat(item.f20) : null,
     circCap: item.f21 != null ? parseFloat(item.f21) : null,
     pb: item.f23 != null ? parseFloat(item.f23) : null,
+    // 主力资金流
+    majorNetFlow: item.f62 != null ? parseFloat(item.f62) : null,
+    superLargeNetFlow: item.f64 != null ? parseFloat(item.f64) : null,
+    largeNetFlow: item.f66 != null ? parseFloat(item.f66) : null,
+    mediumNetFlow: item.f70 != null ? parseFloat(item.f70) : null,
+    smallNetFlow: item.f72 != null ? parseFloat(item.f72) : null,
     peTTM: (item.f115 != null && parseFloat(item.f115) > 0) ? parseFloat(item.f115) : null,
     isST: item.f152 === 1,
     market: code.startsWith('6') ? 'SH' : 'SZ',
