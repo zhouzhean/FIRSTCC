@@ -602,6 +602,11 @@ function fmtPrice(v) {
   return v.toFixed(2);
 }
 function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function isoToLocalTime(isoStr) {
+  if (!isoStr) return '--:--:--';
+  var d = new Date(isoStr);
+  return d.toTimeString().slice(0, 8);
+}
 
 // ---- SSE Connection ----
 function connectSSE() {
@@ -639,7 +644,7 @@ function connectSSE() {
       const d = JSON.parse(e.data);
       if (d.events) {
         for (const evt of d.events) {
-          const time = evt.time ? evt.time.slice(11,19) : '';
+          const time = isoToLocalTime(evt.time);
           addTimelineEntry(time, mapEventTag(evt.type), mapEventClass(evt.type), formatEventMsg(evt));
         }
       }
@@ -673,7 +678,7 @@ function connectSSE() {
         document.getElementById('enrichPanel').style.display = 'block';
         document.getElementById('enrichData').innerHTML =
           '<div class="enrich-item"><span class="key">扫描类型</span><span class="val">' + (d.type==='full'?'全量扫描':'盘中扫描') + '</span></div>' +
-          '<div class="enrich-item"><span class="key">完成时间</span><span class="val">' + (d.time ? d.time.slice(11,19) : '--') + '</span></div>' +
+          '<div class="enrich-item"><span class="key">完成时间</span><span class="val">' + isoToLocalTime(d.time) + '</span></div>' +
           '<div class="enrich-item"><span class="key">平均分</span><span class="val">' + (d.avgScore||'--') + '</span></div>' +
           '<div class="enrich-item"><span class="key">最高分</span><span class="val">' + (d.maxScore||'--') + '</span></div>';
       }
@@ -685,7 +690,7 @@ function connectSSE() {
       // Show last result in thought stream
       updateIdleDisplay();
       // Add timeline entry
-      addTimelineEntry(d.time ? d.time.slice(11,19) : '--:--:--', '结果', 'scan',
+      addTimelineEntry(isoToLocalTime(d.time), '结果', 'scan',
         '加载上次' + (d.type==='full'?'全量':'盘中') + '扫描: ' +
         (d.totalStocks||'?') + '只→' + (d.candidates||'?') + '候选→' +
         (d.analyzed||'?') + '深析 | 均分' + (d.avgScore||0) + ' 最高' + (d.maxScore||0));
@@ -867,7 +872,7 @@ function connectSSE() {
           escHtml(d.name) + '(' + d.code + ') ' +
           d.shares + '股 @' + fmtPrice(d.price) +
           (d.reason ? ' <span style="color:var(--dim)">' + escHtml(d.reason) + '</span>' : '');
-        addTimelineEntry(d.time ? d.time.slice(11,19) : new Date().toTimeString().slice(0,8),
+        addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
           actionLabel, 'trade',
           actionLabel + ' ' + escHtml(d.name) + '(' + d.code + ') ' + d.shares + '股 @' + fmtPrice(d.price) +
           (d.reason ? ' — ' + d.reason : ''));
@@ -875,7 +880,7 @@ function connectSSE() {
         document.getElementById('thinkingContent').innerHTML =
           '<span style="color:var(--dim)">无交易决策</span> — ' +
           '分析了' + (d.analyzedCount||'?') + '只股票，无触发买入阈值的标的。';
-        addTimelineEntry(d.time ? d.time.slice(11,19) : new Date().toTimeString().slice(0,8),
+        addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
           '跳过', 'trade', '无交易: 分析了' + (d.analyzedCount||'?') + '只，无触发阈值 — ' + (d.reason||''));
       }
     } catch(ex) {}
@@ -889,7 +894,7 @@ function connectSSE() {
       if (d.positions && d.positions.length > 0) {
         for (const p of d.positions) {
           const pnlSign = p.pnlPct >= 0 ? '+' : '';
-          addTimelineEntry(d.time ? d.time.slice(11,19) : new Date().toTimeString().slice(0,8),
+          addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
             '持仓', 'state',
             escHtml(p.name) + ' @' + fmtPrice(p.currentPrice) + ' ' + pnlSign + p.pnlPct.toFixed(2) + '%');
         }
@@ -902,7 +907,7 @@ function connectSSE() {
     try {
       const d = JSON.parse(e.data);
       updateStateUI(d.to);
-      addTimelineEntry(d.time ? d.time.slice(11,19) : new Date().toTimeString().slice(0,8),
+      addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
         '状态', 'state',
         (STATE_LABELS[d.from] || d.from) + ' → ' + (STATE_LABELS[d.to] || d.to) +
         (d.reason ? ' (' + d.reason + ')' : ''));
@@ -913,7 +918,7 @@ function connectSSE() {
   es.addEventListener('alert', function(e) {
     try {
       const d = JSON.parse(e.data);
-      addTimelineEntry(d.time ? d.time.slice(11,19) : new Date().toTimeString().slice(0,8),
+      addTimelineEntry(d.time ? isoToLocalTime(d.time) : new Date().toTimeString().slice(0,8),
         '风控', 'alert', escHtml(d.name||d.code||'') + ' ' + (d.message||''));
     } catch(ex) {}
   });
