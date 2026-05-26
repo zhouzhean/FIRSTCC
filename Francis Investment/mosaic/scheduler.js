@@ -283,7 +283,7 @@ class Scheduler extends EventEmitter {
       // 自动交易
       try {
         const pf = simfolio.loadPortfolio();
-        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || []);
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full');
         this._logEvent('trade_complete', {
           decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
           executed: tradeResult.executed ? tradeResult.executed.length : 0,
@@ -451,7 +451,7 @@ class Scheduler extends EventEmitter {
       if (results.length > 0) {
         try {
           const pf = simfolio.loadPortfolio();
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices);
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid');
           if (tradeResult.executed && tradeResult.executed.length > 0) {
             for (const t of tradeResult.executed) {
               this._logEvent('trade_executed', {

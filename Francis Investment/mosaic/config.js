@@ -67,16 +67,19 @@ module.exports = {
       { hour: 13, minute: 0 },
     ],
 
-    // Mid-Day Scan 触发时间（4次/天，轻量扫描）
+    // Mid-Day Scan 触发时间（7次/天，轻量扫描，云端24/7优化）
     midDayScanTimes: [
+      { hour: 10, minute: 0 },
       { hour: 10, minute: 30 },
       { hour: 11, minute: 25 },
+      { hour: 13, minute: 30 },
       { hour: 14, minute: 0 },
-      { hour: 14, minute: 35 },
+      { hour: 14, minute: 30 },
+      { hour: 14, minute: 50 },
     ],
 
     // 持仓监控间隔（活跃时段每N分钟查一次持仓价格+风控）
-    positionMonitorIntervalMin: 5,
+    positionMonitorIntervalMin: 3,
 
     // 超时设置（毫秒）
     fullPipelineTimeoutMs: 600_000,   // Full Pipeline 10分钟超时
@@ -84,8 +87,8 @@ module.exports = {
     positionMonitorTimeoutMs: 30_000, // 持仓检查 30秒超时
 
     // Mid-Day Scan 参数
-    midScanTopCount: 200,   // 按成交额取前200只
-    midScanDeepAnalyze: 15, // 深析前15只
+    midScanTopCount: 250,   // 按成交额取前250只（云端优化）
+    midScanDeepAnalyze: 20, // 深析前20只（云端优化）
 
     // 移动止盈
     trailingStop: {
@@ -99,7 +102,7 @@ module.exports = {
     },
 
     // Tick 间隔（毫秒）
-    activeTickMs: 30_000,   // 活跃时段每30秒tick一次
+    activeTickMs: 20_000,   // 活跃时段每20秒tick一次（云端优化）
     idleTickMs: 300_000,    // 空闲时段每5分钟tick一次
 
     // 事件日志上限

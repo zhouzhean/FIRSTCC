@@ -487,6 +487,7 @@ let factorCounts = {};
 let maxFactorCount = 0;
 let lastResult = null;
 let nextScanInfo = null;
+let initialDataLoaded = false;
 
 function updateFactorBars() {
   const container = document.getElementById('factorBars');
@@ -613,13 +614,15 @@ function connectSSE() {
   const es = new EventSource('/api/think-tank/stream');
 
   es.addEventListener('connected', function(e) {
-    clearThoughtLog();
+    thoughtEntries = [];
     eventEntries = [];
-    lastResult = null;
     nextScanInfo = null;
+    // Don't clear lastResult — keep stale data until fresh data arrives
+    var msg = initialDataLoaded
+      ? '<div class="msg" style="color:var(--green)">已重新连接到 Mosaic AI 引擎</div>'
+      : '<div class="msg" style="color:var(--green)">已连接到 Mosaic AI 引擎</div>';
     addThoughtEntry('<div class="idle-overlay"><div class="big-icon" style="color:var(--green)">&#9678;</div>' +
-      '<div class="msg" style="color:var(--green)">已连接到 Mosaic AI 引擎</div>' +
-      '<div class="sub">等待分析事件...</div></div>');
+      msg + '<div class="sub">等待分析事件...</div></div>');
     addTimelineEntry(new Date().toTimeString().slice(0,8), '连接', 'state', 'SSE 已连接到 Mosaic 服务器');
     updateIdleDisplay();
   });
@@ -935,6 +938,86 @@ function connectSSE() {
   return es;
 }
 
+// ---- Initial Data Load (REST, instant before SSE connects) ----
+function loadInitialData() {
+  fetch('/api/think-tank/initial')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok) return;
+      initialDataLoaded = true;
+
+      // Update state UI
+      if (data.scheduler) {
+        updateStateUI(data.scheduler.state);
+        // Update next scan info
+        var now = new Date();
+        var scanSchedule = [
+          { h: 9, m: 30, label: '全量扫描' },
+          { h: 10, m: 0, label: '盘中扫描' },
+          { h: 10, m: 30, label: '盘中扫描' },
+          { h: 11, m: 0, label: '全量扫描' },
+          { h: 11, m: 25, label: '盘中扫描' },
+          { h: 13, m: 0, label: '全量扫描' },
+          { h: 13, m: 30, label: '盘中扫描' },
+          { h: 14, m: 0, label: '盘中扫描' },
+          { h: 14, m: 30, label: '盘中扫描' },
+          { h: 14, m: 50, label: '盘中扫描' },
+        ];
+        for (var si = 0; si < scanSchedule.length; si++) {
+          var t = new Date(now.getFullYear(), now.getMonth(), now.getDate(), scanSchedule[si].h, scanSchedule[si].m, 0);
+          if (t > now) {
+            nextScanInfo = { time: t, label: scanSchedule[si].label, diffMin: Math.max(0, Math.round((t - now) / 60000)) };
+            break;
+          }
+        }
+      }
+
+      // Populate last pipeline result
+      if (data.lastResult && data.lastResult.top5 && data.lastResult.top5.length > 0) {
+        lastResult = data.lastResult;
+        if (data.lastResult.signalCounts) {
+          factorCounts = data.lastResult.signalCounts;
+          updateFactorBars();
+        }
+        if (data.lastResult.scoreDistribution) {
+          updateScoreDist(data.lastResult.scoreDistribution);
+        }
+        updateTop5(data.lastResult.top5 || []);
+        document.getElementById('enrichPanel').style.display = 'block';
+        document.getElementById('enrichData').innerHTML =
+          '<div class="enrich-item"><span class="key">扫描类型</span><span class="val">' + (data.lastResult.type==='full'?'全量扫描':'盘中扫描') + '</span></div>' +
+          '<div class="enrich-item"><span class="key">完成时间</span><span class="val">' + isoToLocalTime(data.lastResult.time) + '</span></div>' +
+          '<div class="enrich-item"><span class="key">平均分</span><span class="val">' + (data.lastResult.avgScore||'--') + '</span></div>' +
+          '<div class="enrich-item"><span class="key">最高分</span><span class="val">' + (data.lastResult.maxScore||'--') + '</span></div>';
+        document.getElementById('statStocks').textContent = data.lastResult.totalStocks || '--';
+        document.getElementById('statCandidates').textContent = data.lastResult.candidates || '--';
+        document.getElementById('statAnalyzed').textContent = data.lastResult.analyzed || '--';
+        document.getElementById('statTopScore').textContent = data.lastResult.maxScore || '--';
+        document.getElementById('thinkingLabel').textContent = '◆ 上次扫描结果';
+        var topHtml = 'TOP5: ';
+        for (var ti = 0; ti < Math.min(3, data.lastResult.top5.length); ti++) {
+          var s = data.lastResult.top5[ti];
+          topHtml += '<span class="highlight">' + escHtml(s.name) + '</span>(' + s.code + ') ' +
+            '<span style="color:var(--amber)">' + s.score + '分</span>';
+          if (ti < Math.min(3, data.lastResult.top5.length) - 1) topHtml += ', ';
+        }
+        document.getElementById('thinkingContent').innerHTML = topHtml;
+        addTimelineEntry(isoToLocalTime(data.lastResult.time), '结果', 'scan',
+          '加载上次' + (data.lastResult.type==='full'?'全量':'盘中') + '扫描: ' +
+          (data.lastResult.totalStocks||'?') + '只→' + (data.lastResult.candidates||'?') + '候选→' +
+          (data.lastResult.analyzed||'?') + '深析 | 均分' + (data.lastResult.avgScore||0));
+      }
+
+      // Populate position bar
+      if (data.positions) {
+        updatePositionBar(data.positions);
+      }
+    })
+    .catch(function() { /* REST fallback failed, SSE will handle */ });
+}
+
+// Load initial data immediately, then connect SSE for live updates
+loadInitialData();
 let sse = connectSSE();
 
 // Reconnect on visibility change

@@ -3,6 +3,12 @@
  *
  * 10万虚拟资金，T+1交易，真实费率，基于量化信号自动决策。
  * 持久化到 report-engine/data/simfolio/portfolio.json
+ *
+ * 中国A股合规规则：
+ *  - T+1：当日买入的股票次日方可卖出（硬止损除外）
+ *  - 涨跌停 ±10%（主板），±20%（科创板/创业板）
+ *  - 交易单位：100股（1手）整数倍
+ *  - 费率：佣金0.025%，印花税0.1%（卖），过户费0.001%
  */
 const fs = require('fs');
 const path = require('path');
@@ -10,6 +16,7 @@ const config = require('./config');
 
 const SIMFOLIO_DIR = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
 const PORTFOLIO_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json');
+const PORTFOLIO_BAK_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json.bak');
 
 // ---- Portfolio Management ----
 
@@ -40,7 +47,16 @@ function loadPortfolio() {
     try {
       pf = JSON.parse(fs.readFileSync(PORTFOLIO_FILE, 'utf8'));
     } catch (e) {
-      console.error('  Simfolio: failed to load portfolio, creating new one');
+      console.error('  [Simfolio] ERROR: 投资组合文件损坏，尝试从备份恢复...');
+      // Try to restore from backup
+      if (fs.existsSync(PORTFOLIO_BAK_FILE)) {
+        try {
+          pf = JSON.parse(fs.readFileSync(PORTFOLIO_BAK_FILE, 'utf8'));
+          console.error('  [Simfolio] 已从备份恢复投资组合');
+        } catch (e2) {
+          console.error('  [Simfolio] 备份也损坏，创建新投资组合');
+        }
+      }
     }
   }
   if (!pf) pf = createPortfolio();
@@ -50,7 +66,12 @@ function loadPortfolio() {
 function savePortfolio(pf) {
   ensureDir();
   pf.meta.lastUpdated = new Date().toISOString();
-  fs.writeFileSync(PORTFOLIO_FILE, JSON.stringify(pf, null, 2), 'utf8');
+  // Backup old file first
+  const json = JSON.stringify(pf, null, 2);
+  if (fs.existsSync(PORTFOLIO_FILE)) {
+    try { fs.copyFileSync(PORTFOLIO_FILE, PORTFOLIO_BAK_FILE); } catch (e) { /* ignore */ }
+  }
+  fs.writeFileSync(PORTFOLIO_FILE, json, 'utf8');
 }
 
 // ---- Portfolio Snapshot ----
@@ -100,9 +121,10 @@ function getSnapshot(pf) {
  * @param {Array} pipelineResults - Array of stock analysis results from pipeline
  * @param {Array} indices - Market index data (for benchmark tracking)
  */
-function makeTradingDecisions(pf, pipelineResults, indices) {
+function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
+  const isFullScan = scanType === 'full';
 
   // ---- Step 1: Update benchmark ----
   updateBenchmark(pf, indices, today);
@@ -112,7 +134,11 @@ function makeTradingDecisions(pf, pipelineResults, indices) {
     const stockData = pipelineResults.find(r => r.code === pos.code);
     if (!stockData) continue;
 
-    const sellReason = checkSellSignal(pos, stockData);
+    // T+1 compliance: stocks bought today cannot be sold today (A-share rule)
+    // Exception: hard stop-loss can still trigger on same day
+    const isBoughtToday = pos.entryDate === today;
+
+    const sellReason = checkSellSignal(pos, stockData, isBoughtToday, isFullScan);
     if (sellReason) {
       decisions.push({
         action: 'sell',
@@ -205,17 +231,22 @@ function makeTradingDecisions(pf, pipelineResults, indices) {
 
 // ---- Sell Signal Detection ----
 
-function checkSellSignal(position, stockData) {
+function checkSellSignal(position, stockData, isBoughtToday, isFullScan) {
   const pnlPct = (stockData.price - position.avgCost) / position.avgCost * 100;
 
-  // Hard stop loss: -8%
+  // Hard stop loss: -8% (always active, even T+1 same-day)
   if (pnlPct <= config.SIMFOLIO.stopLossPct * 100) {
     return '硬止损：亏损' + pnlPct.toFixed(1) + '%触发-' + Math.abs(config.SIMFOLIO.stopLossPct * 100) + '%止损线';
   }
 
+  // T+1: stocks bought today cannot be sold (except hard stop above)
+  if (isBoughtToday) return null;
+
   // Soft stop: composite score dropped significantly
-  if (stockData.compositeScore < 50) {
-    return '软止损：综合评分降至' + stockData.compositeScore + '分（<50）';
+  // Only during FULL pipeline scans — mid-scan scores are less reliable
+  // Threshold: < 45 for full scan (was 50, made more conservative)
+  if (isFullScan && stockData.compositeScore < 45) {
+    return '软止损：综合评分降至' + stockData.compositeScore + '分（<45）';
   }
 
   // Take profit: up > 20% with weakening signals

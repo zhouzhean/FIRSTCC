@@ -34,12 +34,15 @@ function broadcastSSE(event, data) {
 // Heartbeat to keep SSE connections alive and provide current state
 const SCAN_SCHEDULE = [
   { h: 9, m: 30, label: '全量扫描', type: 'full' },
+  { h: 10, m: 0, label: '盘中扫描', type: 'mid' },
   { h: 10, m: 30, label: '盘中扫描', type: 'mid' },
   { h: 11, m: 0, label: '全量扫描', type: 'full' },
   { h: 11, m: 25, label: '盘中扫描', type: 'mid' },
   { h: 13, m: 0, label: '全量扫描', type: 'full' },
+  { h: 13, m: 30, label: '盘中扫描', type: 'mid' },
   { h: 14, m: 0, label: '盘中扫描', type: 'mid' },
-  { h: 14, m: 35, label: '盘中扫描', type: 'mid' },
+  { h: 14, m: 30, label: '盘中扫描', type: 'mid' },
+  { h: 14, m: 50, label: '盘中扫描', type: 'mid' },
 ];
 
 function saveLastPipelineResult(result, type) {
@@ -271,7 +274,7 @@ function handleSimfolioTrade(res) {
   }
 
   const pf = simfolio.loadPortfolio();
-  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices);
+  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices, 'full');
 
   return jsonResponse(res, {
     ok: true,
@@ -417,6 +420,38 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: false, message: '尚无分析结果' });
   }
 
+  // Think Tank initial data (REST fallback, loads instantly before SSE connects)
+  if (pathname === '/api/think-tank/initial') {
+    const data = { ok: true, time: new Date().toISOString() };
+    // Include scheduler status
+    if (scheduler) {
+      data.scheduler = scheduler.getStatus();
+    }
+    // Include last pipeline result
+    const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    if (fs.existsSync(lastResultPath)) {
+      try {
+        data.lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+      } catch (e) { /* ignore */ }
+    }
+    // Include position snapshot
+    try {
+      const pf = simfolio.loadPortfolio();
+      const snap = simfolio.getSnapshot(pf);
+      data.positions = {
+        cash: snap.cash,
+        totalValue: snap.totalValue,
+        totalReturn: snap.totalReturn,
+        positions: snap.positions.map(p => ({
+          code: p.code, name: p.name, shares: p.shares,
+          avgCost: p.avgCost, currentPrice: p.currentPrice,
+          pnl: p.pnl, pnlPct: p.pnlPct,
+        })),
+      };
+    } catch (e) { /* ignore */ }
+    return jsonResponse(res, data);
+  }
+
   // Think Tank SSE stream
   if (pathname === '/api/think-tank/stream') {
     res.writeHead(200, {
@@ -493,7 +528,7 @@ const server = http.createServer(function(req, res) {
   serveStatic(res, filePath);
 });
 
-server.listen(PORT, '127.0.0.1', function() {
+server.listen(PORT, '0.0.0.0', function() {
   // 启动全自动调度器
   scheduler = new Scheduler();
   scheduler.start();

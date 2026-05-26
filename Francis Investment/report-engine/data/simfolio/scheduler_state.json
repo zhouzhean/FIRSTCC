@@ -1,0 +1,18 @@
+{
+  "state": "afternoon_session",
+  "todayDate": "2026-05-26",
+  "scheduledOps": [
+    "full_pipeline_2026-05-26_9:30",
+    "mid_scan_2026-05-26_10:30",
+    "full_pipeline_2026-05-26_11:0",
+    "mid_scan_2026-05-26_11:25",
+    "full_pipeline_2026-05-26_13:0",
+    "mid_scan_2026-05-26_14:0",
+    "mid_scan_2026-05-26_14:35"
+  ],
+  "lastPipelineTime": "2026-05-26T05:00:49.707Z",
+  "lastMidScanTime": "2026-05-26T06:35:46.013Z",
+  "lastPositionCheck": "2026-05-26T06:56:05.221Z",
+  "positionCheckFailures": 0,
+  "savedAt": "2026-05-26T06:57:35.251Z"
+}
