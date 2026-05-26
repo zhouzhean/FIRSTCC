@@ -35,6 +35,12 @@ class Scheduler extends EventEmitter {
     const now = new Date();
     this._todayDate = this._dateStr(now);
     this._transition(this._determineState(now), 'boot');
+
+    // If booting after market close, refresh position prices to capture closing prices
+    if (this._state === 'post_market' || this._state === 'closed') {
+      this._refreshPositionPrices().catch(() => {});
+    }
+
     this._scheduleNextTick();
     this._logEvent('scheduler_start', { state: this._state, date: this._todayDate });
   }
@@ -627,14 +633,52 @@ class Scheduler extends EventEmitter {
     }
   }
 
+  // ==================== 操作：持仓现价刷新 ====================
+
+  async _refreshPositionPrices() {
+    try {
+      const simfolio = require('./simfolio');
+      const marketData = require('./collectors/market_data');
+      const pf = simfolio.loadPortfolio();
+      if (pf.positions.length === 0) return;
+
+      const codes = pf.positions.map(p => p.code);
+      let priceMap = {};
+      try {
+        const stocks = await marketData.fetchSpecificStocks(codes);
+        for (const s of (stocks || [])) {
+          if (s && s.price != null) priceMap[s.code] = s;
+        }
+      } catch (e) {
+        try {
+          const sinaStocks = await marketData.fetchSpecificStocksSina(codes);
+          for (const s of (sinaStocks || [])) {
+            if (s && s.price != null) priceMap[s.code] = s;
+          }
+        } catch (e2) { /* both failed */ }
+      }
+      if (Object.keys(priceMap).length > 0) {
+        simfolio.updatePositionPrices(pf, priceMap);
+        this._logEvent('position_refresh', {
+          codes: Object.keys(priceMap),
+          reason: this._state === 'post_market' ? 'post_market_boot' : 'closed_boot',
+        });
+      }
+    } catch (e) { /* silent */ }
+  }
+
   // ==================== 操作：收盘总结 ====================
 
-  _runPostMarketWrapup() {
+  async _runPostMarketWrapup() {
     const dateStr = this._todayDate;
     this._scheduledOps.add('post_market_wrapup_' + dateStr);
 
     try {
       const simfolio = require('./simfolio');
+
+      // Refresh position prices to capture closing prices
+      await this._refreshPositionPrices().catch(() => {});
+
       const pf = simfolio.loadPortfolio();
       const snap = simfolio.getSnapshot(pf);
 
@@ -725,7 +769,7 @@ class Scheduler extends EventEmitter {
       'pipeline_complete', 'pipeline_error', 'pipeline_timeout',
       'trade_executed', 'risk_trade', 'trade_error',
       'state_change', 'position_monitor_fetch_fail',
-      'scheduler_start', 'scheduler_stop',
+      'scheduler_start', 'scheduler_stop', 'position_refresh',
     ];
     if (importantTypes.includes(type)) {
       const ts = new Date().toTimeString().slice(0, 8);
