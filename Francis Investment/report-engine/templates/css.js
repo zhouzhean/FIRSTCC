@@ -619,8 +619,8 @@ function renderCSS() {
       padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); color: #c8d0dc;
     }
     tbody tr:hover td { background: rgba(201,168,76,0.04); }
-    .price-up { color: var(--green); }
-    .price-down { color: var(--red); }
+    .price-up { color: var(--red); }
+    .price-down { color: var(--green); }
     .price-flat { color: var(--text-muted); }
 
     /* Stock cards */
@@ -684,8 +684,8 @@ function renderCSS() {
       background: var(--card-bg); border: 1px solid var(--border);
       border-radius: 8px; padding: 16px 18px;
     }
-    .signal-buy { color: var(--green); font-weight: 700; }
-    .signal-sell { color: var(--red); font-weight: 700; }
+    .signal-buy { color: var(--red); font-weight: 700; }
+    .signal-sell { color: var(--green); font-weight: 700; }
     .signal-neutral { color: var(--warning); font-weight: 700; }
 
     /* Ranking */

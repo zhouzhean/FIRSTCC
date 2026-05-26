@@ -519,8 +519,8 @@ body {
 .sf-card-value {
   transition: all 0.4s ease;
 }
-.sf-card-value.flash-up { color: #16a34a !important; }
-.sf-card-value.flash-down { color: #dc2626 !important; }
+.sf-card-value.flash-up { color: #dc2626 !important; }
+.sf-card-value.flash-down { color: #16a34a !important; }
 
 /* Content header accent for simfolio */
 .content-header.simfolio-header::before {

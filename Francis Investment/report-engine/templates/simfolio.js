@@ -11,8 +11,8 @@ function renderSimfolio(data, mode) {
   var text = isPDF ? '#c9d1d9' : '#1e293b';
   var muted = isPDF ? '#8b949e' : '#64748b';
   var accent = isPDF ? '#c9a84c' : '#b8942c';
-  var green = isPDF ? '#3fb950' : '#16a34a';
-  var red = isPDF ? '#f85149' : '#dc2626';
+  var up = isPDF ? '#f85149' : '#dc2626';
+  var down = isPDF ? '#3fb950' : '#16a34a';
 
   // Build HTML
   var html = '';
@@ -51,7 +51,7 @@ function renderSimfolio(data, mode) {
   html += '<div style="background:' + cardBg + ';border-radius:8px;padding:16px;border:1px solid ' + (isPDF ? '#1e3050' : '#e2e5eb') + ';">';
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">总资产</div>';
   html += '<div style="font-size:22px;font-weight:700;color:' + text + ';">¥' + formatMoney(snap.totalValue) + '</div>';
-  html += '<div style="font-size:12px;color:' + (snap.totalReturn >= 0 ? green : red) + ';">' + (snap.totalReturn >= 0 ? '+' : '') + snap.totalReturn.toFixed(2) + '%</div>';
+  html += '<div style="font-size:12px;color:' + (snap.totalReturn >= 0 ? up : down) + ';">' + (snap.totalReturn >= 0 ? '+' : '') + snap.totalReturn.toFixed(2) + '%</div>';
   html += '</div>';
 
   // Cash
@@ -64,7 +64,7 @@ function renderSimfolio(data, mode) {
   // Alpha
   html += '<div style="background:' + cardBg + ';border-radius:8px;padding:16px;border:1px solid ' + (isPDF ? '#1e3050' : '#e2e5eb') + ';">';
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">超额收益 α</div>';
-  html += '<div style="font-size:22px;font-weight:700;color:' + (snap.alpha >= 0 ? green : red) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
+  html += '<div style="font-size:22px;font-weight:700;color:' + (snap.alpha >= 0 ? up : down) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
   html += '<div style="font-size:12px;color:' + muted + ';">基准: ' + (snap.benchmarkReturn >= 0 ? '+' : '') + snap.benchmarkReturn.toFixed(2) + '%</div>';
   html += '</div>';
 
@@ -73,8 +73,8 @@ function renderSimfolio(data, mode) {
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">统计</div>';
   html += '<div style="font-size:13px;color:' + text + ';line-height:1.8;">';
   html += '交易: <b>' + (stats.totalTrades || 0) + '</b> 笔';
-  if (stats.winRate != null) html += ' | 胜率: <b style="color:' + (stats.winRate >= 50 ? green : red) + ';">' + stats.winRate + '%</b>';
-  if (stats.maxDrawdown != null) html += '<br>最大回撤: <b style="color:' + red + ';">' + stats.maxDrawdown.toFixed(2) + '%</b>';
+  if (stats.winRate != null) html += ' | 胜率: <b style="color:' + (stats.winRate >= 50 ? up : down) + ';">' + stats.winRate + '%</b>';
+  if (stats.maxDrawdown != null) html += '<br>最大回撤: <b style="color:' + (isPDF ? '#f85149' : '#dc2626') + ';">' + stats.maxDrawdown.toFixed(2) + '%</b>';
   if (stats.sharpeRatio != null) html += ' | 夏普: <b>' + stats.sharpeRatio.toFixed(2) + '</b>';
   html += '</div>';
   html += '</div>';
@@ -96,7 +96,7 @@ function renderSimfolio(data, mode) {
 
     for (var i = 0; i < snap.positions.length; i++) {
       var p = snap.positions[i];
-      var pnlColor = p.pnl >= 0 ? green : red;
+      var pnlColor = p.pnl >= 0 ? up : down;
       html += '<tr style="border-bottom:1px solid ' + (isPDF ? '#1e3050' : '#eef0f4') + ';">';
       html += '<td style="padding:8px;"><b>' + escHtml(p.name) + '</b><br><span style="color:' + muted + ';font-size:11px;">' + p.code + '</span></td>';
       html += '<td style="padding:8px;text-align:right;">¥' + p.avgCost.toFixed(2) + '</td>';
@@ -125,12 +125,12 @@ function renderSimfolio(data, mode) {
       html += '<tr style="border-bottom:1px solid ' + (isPDF ? '#1e3050' : '#eef0f4') + ';">';
       html += '<td style="padding:6px;">' + t.date + '</td>';
       html += '<td style="padding:6px;color:' + muted + ';">' + (t.time || '--:--:--') + '</td>';
-      html += '<td style="padding:6px;color:' + (isBuy ? red : green) + ';font-weight:600;">' + (isBuy ? '买入' : '卖出') + '</td>';
+      html += '<td style="padding:6px;color:' + (isBuy ? up : down) + ';font-weight:600;">' + (isBuy ? '买入' : '卖出') + '</td>';
       html += '<td style="padding:6px;">' + escHtml(t.name) + ' <span style="color:' + muted + ';">' + t.code + '</span></td>';
       html += '<td style="padding:6px;text-align:right;">¥' + t.price.toFixed(2) + '</td>';
       html += '<td style="padding:6px;text-align:right;">' + t.shares + '</td>';
       html += '<td style="padding:6px;text-align:right;">¥' + formatMoney(t.amount) + '</td>';
-      html += '<td style="padding:6px;text-align:right;color:' + (t.action === 'sell' && t.pnl >= 0 ? green : (t.action === 'sell' ? red : muted)) + ';">' + (t.action === 'sell' ? (t.pnl >= 0 ? '+' : '') + formatMoney(t.pnl) + '<br><span style="font-size:10px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>' : '-') + '</td>';
+      html += '<td style="padding:6px;text-align:right;color:' + (t.action === 'sell' && t.pnl >= 0 ? up : (t.action === 'sell' ? down : muted)) + ';">' + (t.action === 'sell' ? (t.pnl >= 0 ? '+' : '') + formatMoney(t.pnl) + '<br><span style="font-size:10px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>' : '-') + '</td>';
       html += '<td style="padding:6px;font-size:10px;color:' + muted + ';max-width:180px;">' + escHtml(t.reason || '') + '</td>';
       html += '</tr>';
     }

@@ -239,7 +239,7 @@ function renderCountdownBar(sched) {
 }
 
 function renderSimfolioCards(snap, stats) {
-  var green = '#16a34a', red = '#dc2626', muted = '#64748b', text = '#1e293b';
+  var up = '#dc2626', down = '#16a34a', muted = '#64748b', text = '#1e293b';
   var prevSnap = (state.simfolioData && state.simfolioData._prevSnapshot) ? state.simfolioData._prevSnapshot : null;
 
   function flashClass(newVal, oldVal) {
@@ -254,7 +254,7 @@ function renderSimfolioCards(snap, stats) {
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">总资产</div>';
   html += '<div class="sf-card-value' + tvFlash + '" style="font-size:20px;font-weight:700;color:' + text + ';">¥' + formatMoneyCN(snap.totalValue) + '</div>';
-  html += '<div style="font-size:11px;color:' + (snap.totalReturn >= 0 ? green : red) + ';">' + (snap.totalReturn >= 0 ? '+' : '') + snap.totalReturn.toFixed(2) + '%</div>';
+  html += '<div style="font-size:11px;color:' + (snap.totalReturn >= 0 ? up : down) + ';">' + (snap.totalReturn >= 0 ? '+' : '') + snap.totalReturn.toFixed(2) + '%</div>';
   html += '</div>';
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
@@ -265,7 +265,7 @@ function renderSimfolioCards(snap, stats) {
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">超额收益 α</div>';
-  html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + (snap.alpha >= 0 ? green : red) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
+  html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + (snap.alpha >= 0 ? up : down) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
   html += '<div style="font-size:11px;color:' + muted + ';">基准: ' + (snap.benchmarkReturn >= 0 ? '+' : '') + snap.benchmarkReturn.toFixed(2) + '%</div>';
   html += '</div>';
 
@@ -273,8 +273,8 @@ function renderSimfolioCards(snap, stats) {
   html += '<div style="font-size:11px;color:' + muted + ';margin-bottom:4px;">持仓 / 统计</div>';
   html += '<div style="font-size:13px;color:' + text + ';line-height:1.7;">';
   html += '<b>' + (snap.positions ? snap.positions.length : 0) + '</b> 只股票';
-  if (stats.winRate != null) html += ' · 胜率 <b style="color:' + (stats.winRate >= 50 ? green : red) + ';">' + stats.winRate + '%</b>';
-  if (stats.maxDrawdown != null) html += '<br>最大回撤 <b style="color:' + red + ';">' + stats.maxDrawdown.toFixed(2) + '%</b>';
+  if (stats.winRate != null) html += ' · 胜率 <b style="color:' + (stats.winRate >= 50 ? up : down) + ';">' + stats.winRate + '%</b>';
+  if (stats.maxDrawdown != null) html += '<br>最大回撤 <b style="color:#dc2626;">' + stats.maxDrawdown.toFixed(2) + '%</b>';
   if (stats.totalTrades) html += ' · ' + stats.totalTrades + '笔交易';
   html += '</div>';
   html += '</div>';
@@ -307,7 +307,7 @@ function renderTradeActivityFeed(trades) {
       html += '<span>¥' + t.price.toFixed(2) + ' × ' + t.shares + '股</span>';
       html += '<span style="font-weight:600;">¥' + formatMoneyCN(t.amount) + '</span>';
       if (t.action === 'sell' && t.pnlPct != null) {
-        html += '<span style="color:' + (t.pnlPct >= 0 ? '#16a34a' : '#dc2626') + ';font-size:11px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>';
+        html += '<span style="color:' + (t.pnlPct >= 0 ? up : down) + ';font-size:11px;">' + (t.pnlPct >= 0 ? '+' : '') + t.pnlPct.toFixed(2) + '%</span>';
       }
       html += '<span style="flex:1;"></span>';
       html += '<span style="font-size:10px;color:#94a3b8;">' + (t.time || '') + '</span>';
@@ -326,7 +326,7 @@ function renderCompactPositions(positions) {
 
   for (var i = 0; i < positions.length; i++) {
     var p = positions[i];
-    var pnlColor = p.pnl >= 0 ? '#16a34a' : '#dc2626';
+    var pnlColor = p.pnl >= 0 ? up : down;
     html += '<tr style="border-bottom:1px solid #f1f5f9;">';
     html += '<td style="padding:8px;"><b>' + escHtml(p.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + p.code + '</span></td>';
     html += '<td style="padding:8px;text-align:right;">¥' + p.avgCost.toFixed(2) + '</td>';
