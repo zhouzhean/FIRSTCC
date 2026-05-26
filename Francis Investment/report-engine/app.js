@@ -143,8 +143,12 @@ function initApp() {
 
   // Think Tank button
   var $btnThinkTank = document.getElementById('btn-think-tank');
-  if ($btnThinkTank) $btnThinkTank.addEventListener('click', function() {
-    window.open('/think-tank.html', 'mosaic_think_tank', 'width=1400,height=900');
+  if ($btnThinkTank) $btnThinkTank.addEventListener('click', function(e) {
+    // On desktop, open as sized popup; on mobile, let the <a> link handle it naturally
+    if (window.innerWidth >= 900) {
+      e.preventDefault();
+      window.open('/think-tank.html', 'mosaic_think_tank', 'width=1400,height=900');
+    }
   });
 
   // Section nav delegation
