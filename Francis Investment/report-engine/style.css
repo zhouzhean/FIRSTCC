@@ -366,18 +366,106 @@ body {
   #sidebar { width: 280px; }
   .toolbar-title { font-size: 15px; }
   .section-nav-label { font-size: 12px; }
+  #toolbar { padding: 8px 12px; }
+  .btn { padding: 6px 10px; font-size: 11px; }
+  .toolbar-right { gap: 4px; }
 }
+
 @media (max-width: 720px) {
-  #main-layout { flex-direction: column; }
+  body { overflow: auto; }
+  #app { height: auto; min-height: 100vh; }
+
+  /* Stack main layout vertically */
+  #main-layout {
+    flex-direction: column;
+  }
+
+  /* Toolbar: wrap and compact */
+  #toolbar {
+    flex-wrap: wrap;
+    padding: 8px 10px;
+    gap: 6px;
+  }
+  .toolbar-left { flex: 1 1 auto; gap: 6px; min-width: 0; }
+  .toolbar-logo { height: 28px; width: auto; }
+  .toolbar-title { font-size: 13px; }
+  .toolbar-divider { display: none; }
+  .toolbar-date { font-size: 11px; }
+  #live-indicator { display: none; }
+  .toolbar-right {
+    flex: 1 1 100%;
+    gap: 4px;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  #ai-status-badge { font-size: 10px; padding: 4px 10px; gap: 4px; }
+  #ai-status-dot { width: 6px; height: 6px; }
+  #ai-status-label { font-size: 10px; }
+  .btn {
+    padding: 5px 10px;
+    font-size: 11px;
+    border-radius: 5px;
+  }
+  #btn-think-tank { font-size: 10px; padding: 5px 8px; }
+  #btn-gen-pdf, #btn-send-pdf { font-size: 10px; padding: 5px 8px; }
+
+  /* Sidebar: compact at top, scrollable */
   #sidebar {
     width: 100%;
-    max-height: 40vh;
+    max-height: 35vh;
+    min-height: auto;
     border-right: none;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 2px solid var(--border);
+    overflow-y: auto;
+    flex-shrink: 0;
   }
-  .toolbar-left { gap: 8px; }
-  .toolbar-title { font-size: 14px; }
-  .toolbar-date { font-size: 12px; }
+  #calendar-widget { padding: 8px 10px; }
+  .calendar-day { font-size: 10px; }
+  .calendar-month-label { font-size: 12px; }
+  .calendar-day-header { font-size: 9px; }
+
+  #section-nav { padding: 6px 10px; }
+  .section-nav-list { flex-direction: row; flex-wrap: wrap; gap: 3px; }
+  .section-nav-item {
+    padding: 6px 10px;
+    font-size: 11px;
+    flex: 1 1 auto;
+    min-width: 0;
+    border-radius: 6px;
+    gap: 4px;
+  }
+  .section-nav-icon { font-size: 14px; width: auto; }
+  .section-nav-label { font-size: 11px; white-space: nowrap; }
+  .section-nav-title { display: none; }
+  #section-nav-item-holdings { display: none; }
+
+  #report-list { padding: 6px 10px; }
+  .report-list-title { font-size: 10px; margin-bottom: 4px; }
+  .report-item { padding: 6px 10px; margin-bottom: 3px; }
+  .report-item-date { font-size: 11px; }
+
+  /* Content panel fills remaining space */
+  #content-panel { flex: 1 1 auto; min-height: 50vh; }
+  .content-header { padding: 8px 12px; font-size: 12px; }
+  #content-area { flex: 1 1 auto; }
+  #content-area iframe { width: 100% !important; height: 100% !important; }
+}
+
+@media (max-width: 400px) {
+  #toolbar { padding: 6px 8px; }
+  .toolbar-title { font-size: 12px; }
+  .toolbar-date { font-size: 10px; }
+  .toolbar-logo { height: 24px; }
+  .btn { padding: 4px 7px; font-size: 10px; }
+  #btn-gen-pdf, #btn-send-pdf { font-size: 9px; padding: 4px 6px; }
+  #btn-think-tank { font-size: 9px; padding: 4px 6px; }
+
+  #sidebar { max-height: 30vh; }
+  .section-nav-item { padding: 4px 8px; }
+  .section-nav-label { font-size: 10px; }
+  .section-nav-icon { font-size: 12px; }
+
+  .content-header { padding: 6px 10px; font-size: 11px; }
 }
 
 /* Trade notification toast animation */

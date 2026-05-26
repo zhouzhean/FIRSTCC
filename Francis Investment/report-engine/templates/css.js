@@ -446,11 +446,44 @@ function renderSoftwareCSS() {
     }
 
     @media (max-width: 768px) {
+      .content { padding: 16px 12px; }
+      .cover-software { padding: 40px 20px; min-height: auto; }
+      .cover-software h1 { font-size: 24px; }
+      .cover-software .subtitle { font-size: 14px; }
+      .cover-software .ci-badge { font-size: 11px; padding: 6px 16px; letter-spacing: 2px; }
+      .cover-software .meta-row { flex-direction: column; gap: 8px; align-items: center; }
       .tech-grid { grid-template-columns: 1fr; }
       .sector-grid { grid-template-columns: 1fr; }
       .metrics-row { grid-template-columns: repeat(2, 1fr); }
-      .cover-software h1 { font-size: 24px; }
-      table { font-size: 12px; }
+      .metric-card { padding: 14px 10px; }
+      .metric-card .value { font-size: 22px; }
+      .stock-card { padding: 14px 16px; }
+      .stock-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+      .stock-name { font-size: 1em; }
+      table { font-size: 11px; }
+      thead th, tbody td { padding: 8px 6px; }
+      .callout { padding: 12px 14px; font-size: 12px; }
+      .section-header h2 { font-size: 1.1em; }
+      .kline-chart-wrapper { padding: 8px 4px; overflow-x: auto; }
+      .kline-chart-wrapper svg { max-width: 100%; height: auto; }
+      .ranking-table { overflow-x: auto; display: block; }
+    }
+
+    @media (max-width: 480px) {
+      .content { padding: 10px 6px; }
+      .cover-software h1 { font-size: 20px; }
+      .cover-software .subtitle { font-size: 13px; }
+      .metrics-row { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+      .metric-card { padding: 10px 6px; }
+      .metric-card .value { font-size: 18px; }
+      .metric-card .label { font-size: 10px; }
+      table { font-size: 10px; }
+      thead th, tbody td { padding: 6px 4px; }
+      .stock-card { padding: 10px 12px; }
+      .stock-tags span { font-size: 0.7em; padding: 2px 6px; }
+      .event-card { padding: 12px 14px; }
+      .event-card .event-content { font-size: 12px; }
+      h3 { font-size: 0.9em; }
     }
 
     @media print {
@@ -732,14 +765,39 @@ function renderCSS() {
     .disclaimer h3 { color: var(--red); border: none; }
 
     @media (max-width: 768px) {
+      .cover { padding: 40px 20px; }
+      .cover h1 { font-size: 26px; }
+      .cover .subtitle { font-size: 14px; }
+      .cover .badge { font-size: 11px; padding: 6px 16px; letter-spacing: 2px; }
+      .content { padding: 16px 10px; }
       .tech-grid { grid-template-columns: 1fr; }
       .sector-grid { grid-template-columns: 1fr; }
-      .cover h1 { font-size: 28px; }
-      .content { padding: 16px 10px; }
-      table { font-size: 12px; }
+      .metrics-row { flex-direction: column; gap: 8px; }
+      .metric-card { min-width: auto; padding: 14px 12px; }
+      .metric-card .value { font-size: 22px; }
+      .stock-card { padding: 14px 16px; }
+      .stock-header { flex-direction: column; align-items: flex-start; gap: 6px; }
+      .stock-name { font-size: 1em; }
+      table { font-size: 11px; }
       thead th, tbody td { padding: 6px 8px; }
-      .kline-chart-wrapper { padding: 8px 6px; }
+      .kline-chart-wrapper { padding: 8px 4px; overflow-x: auto; }
       .kline-chart-wrapper svg { max-width: 100%; height: auto; }
+      .callout { padding: 12px 14px; font-size: 12px; }
+      h2 { font-size: 1.2em; }
+      h3 { font-size: 1em; }
+      .ranking-table { overflow-x: auto; display: block; }
+    }
+
+    @media (max-width: 480px) {
+      .cover h1 { font-size: 20px; }
+      .cover .subtitle { font-size: 12px; }
+      .content { padding: 10px 6px; }
+      table { font-size: 10px; }
+      thead th, tbody td { padding: 5px 4px; }
+      .sector-card { padding: 12px 14px; }
+      .sector-card .sector-name { font-size: 0.95em; }
+      .stock-card { padding: 10px 12px; }
+      .stock-tags span { font-size: 0.7em; padding: 2px 6px; }
     }
 
     @media print {
