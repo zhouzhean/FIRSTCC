@@ -573,13 +573,12 @@ const server = http.createServer(function(req, res) {
               const parts = line.split('"');
               if (parts.length < 2) continue;
               const values = parts[1].split(',');
-              const name = values[0] || sectorCodes[i].name;
               const price = parseFloat(values[1]) || 0;
               const change = parseFloat(values[2]) || 0;
               const changePct = parseFloat(values[3]) || 0;
               results.push({
                 code: sectorCodes[i].code,
-                name: name,
+                name: sectorCodes[i].name,
                 price: price,
                 change: change,
                 changePercent: changePct,
