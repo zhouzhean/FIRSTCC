@@ -427,12 +427,9 @@
           <div class="info"><span id="progressStep"></span><span id="progressPct">0%</span></div>
         </div>
       </div>
-      <!-- Market Index Mini Chart (replaces Top5 text list) -->
+      <!-- Market Index Static Daily Snapshot (no live refresh) -->
       <div id="market-index-chart" style="margin-bottom:8px;display:none;">
         <div style="display:flex;gap:6px;flex-wrap:wrap;" id="market-index-badges"></div>
-        <div style="margin-top:6px;height:80px;position:relative;background:rgba(0,0,0,0.2);border-radius:4px;overflow:hidden;" id="market-mini-chart">
-          <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--dim);font-size:10px;">加载中...</div>
-        </div>
       </div>
 
       <div class="thought-log" id="thoughtLog">
@@ -554,9 +551,7 @@ function updateIdleDisplay() {
   }
 }
 
-// ---- Market Index Mini Chart ----
-let marketIndexHistory = {};
-
+// ---- Market Index Static Daily Snapshot (fetch once on load) ----
 function fetchMarketIndices() {
   fetch('/api/sectors/live')
     .then(function(r) { return r.json(); })
@@ -572,75 +567,34 @@ function fetchMarketIndices() {
       const indices = data.sectors.filter(function(s) { return keyCodes.indexOf(s.code) >= 0; });
       if (indices.length === 0) return;
 
-      // Update badge row
-      let badgeHtml = '';
+      // Build a static daily chart card
+      let html = '';
       for (var i = 0; i < indices.length; i++) {
         var idx = indices[i];
-        var changeColor = idx.changePercent >= 0 ? 'var(--red)' : 'var(--green)';
-        var sign = idx.changePercent >= 0 ? '+' : '';
-        badgeHtml += '<div style="padding:2px 8px;background:rgba(26,37,64,0.5);border-radius:4px;font-size:10px;display:flex;gap:4px;align-items:center;">' +
-          '<span style="color:var(--text-bright);font-weight:bold;">' + idx.name + '</span>' +
-          '<span style="color:' + changeColor + ';font-weight:bold;">' + idx.price.toFixed(2) + '</span>' +
-          '<span style="color:' + changeColor + ';">' + sign + idx.changePercent.toFixed(2) + '%</span>' +
+        var isUp = idx.changePercent >= 0;
+        var changeColor = isUp ? 'var(--red)' : 'var(--green)';
+        var sign = isUp ? '+' : '';
+        var barW = Math.min(100, Math.max(2, Math.abs(idx.changePercent) * 4));
+        var barColor = isUp ? 'var(--red)' : 'var(--green)';
+
+        html += '<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:10px 14px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.06);">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;">' +
+          '<span style="color:var(--text-bright);font-weight:bold;font-size:12px;">' + idx.name + '</span>' +
+          '<span style="color:' + changeColor + ';font-weight:bold;font-size:15px;">' + idx.price.toFixed(2) + '</span>' +
+          '<span style="color:' + changeColor + ';font-size:11px;font-weight:600;">' + sign + idx.changePercent.toFixed(2) + '%</span>' +
+          '</div>' +
+          '<div style="margin-top:6px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;">' +
+          '<div style="height:100%;width:' + barW + '%;background:' + barColor + ';border-radius:2px;"></div>' +
+          '</div>' +
           '</div>';
       }
-      badges.innerHTML = badgeHtml;
 
-      // Track history for mini sparkline
-      const now = new Date();
-      for (var j = 0; j < indices.length; j++) {
-        var code = indices[j].code;
-        if (!marketIndexHistory[code]) marketIndexHistory[code] = [];
-        marketIndexHistory[code].push({
-          time: now.getTime(),
-          price: indices[j].price,
-          pct: indices[j].changePercent,
-        });
-        // Keep last 60 data points
-        if (marketIndexHistory[code].length > 60) marketIndexHistory[code].shift();
-      }
-
-      // Render mini sparkline for Shanghai Composite
-      renderMiniSparkline(indices[0]);
+      badges.innerHTML = html;
     })
     .catch(function() {});
 }
 
-function renderMiniSparkline(indexData) {
-  const chart = document.getElementById('market-mini-chart');
-  if (!chart) return;
-  const history = marketIndexHistory[indexData.code];
-  if (!history || history.length < 2) return;
-
-  const prices = history.map(function(h) { return h.price; });
-  const minP = Math.min.apply(null, prices);
-  const maxP = Math.max.apply(null, prices);
-  const range = maxP - minP || 1;
-  const w = chart.offsetWidth || 300;
-  const h = 80;
-  const pad = 4;
-  const chartW = w - pad * 2;
-  const chartH = h - pad * 2;
-
-  var points = '';
-  for (var i = 0; i < prices.length; i++) {
-    var x = pad + (i / (prices.length - 1)) * chartW;
-    var y = pad + chartH - ((prices[i] - minP) / range) * chartH;
-    points += (i === 0 ? '' : ' ') + x.toFixed(1) + ',' + y.toFixed(1);
-  }
-
-  const isUp = prices[prices.length - 1] >= prices[0];
-  const lineColor = isUp ? 'var(--red)' : 'var(--green)';
-
-  chart.innerHTML = '<svg width="100%" height="100%" viewBox="0 0 ' + w + ' ' + h + '" style="display:block;">' +
-    '<polyline points="' + points + '" fill="none" stroke="' + lineColor + '" stroke-width="1.5" stroke-linejoin="round"/>' +
-    '<text x="' + (w - 4) + '" y="' + (h - 6) + '" text-anchor="end" font-size="9" fill="var(--dim)">' +
-    indexData.name + ' ' + prices[prices.length - 1].toFixed(0) + '</text>' +
-    '</svg>';
-}
-
-// Periodically refresh market indices
-setInterval(fetchMarketIndices, 30000);
+// Fetch once on load — no periodic refresh
 setTimeout(fetchMarketIndices, 1000);
 
 // ---- Factor bars ----

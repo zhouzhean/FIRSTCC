@@ -541,18 +541,20 @@ const server = http.createServer(function(req, res) {
   if (pathname === '/api/sectors/live') {
     const https = require('https');
     const sectorCodes = [
+      // 大盘指数 (first 3 used by think-tank)
       { code: 'sh000001', name: '上证指数' },
       { code: 'sz399001', name: '深证成指' },
       { code: 'bj899050', name: '北证50' },
-      { code: 'sh000688', name: '科创50' },
+      // 热门板块（用户关注）
+      { code: 'sz399667', name: '机器人' },         // 深证机器人
+      { code: 'sz399620', name: 'AI/算力' },        // 深证信息技术（含AI/半导体/算力）
+      { code: 'sz399395', name: '医药生物' },       // 创新药/医疗
+      { code: 'sz399434', name: '中证军工' },       // 军工
+      { code: 'sz399613', name: '固态电池' },       // 深证能源（含电池/储能）
+      { code: 'sz399621', name: '商业航天' },       // 深证电信业务（含航天通信）
+      { code: 'sz399614', name: '稀土/有色' },      // 深证原材料（含有色/稀土）
+      { code: 'sh000688', name: '科创50' },         // 科创板（半导体/AI聚集）
       { code: 'sz399006', name: '创业板指' },
-      { code: 'sz399812', name: '养老产业' },
-      { code: 'sz399395', name: '医药生物' },     // 医药
-      { code: 'sz399434', name: '中证军工' },     // 军工
-      { code: 'sz399006', name: '创业板指' },
-      { code: 'sz399678', name: '深证电信' },     // AI/算力相关
-      { code: 'sz399998', name: '中证煤炭' },
-      { code: 'sz399997', name: '中证白酒' },
     ];
     // Use Sina API for real-time index quotes
     const queryCodes = sectorCodes.map(function(s) { return 's_' + s.code; }).join(',');

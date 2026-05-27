@@ -96,7 +96,6 @@ var SECTIONS = [
   { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
   { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '🧠', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
-  { id: 'historyReview',   label: '历史复盘',         icon: '📅', render: function(d,m) { return renderHistoryReview(d,m); } },
 ];
 
 // -- DOM refs --
@@ -425,8 +424,8 @@ function renderSectorLiveChart() {
   html += '<span style="font-size:10px;color:#94a3b8;" id="sector-update-time">加载中...</span>';
   html += '</div>';
   html += '<div id="sector-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">';
-  // Placeholder cards
-  var sectorNames = ['上证指数', '深证成指', '北证50', '科创50', '创业板指', '医药生物', '中证军工', '半导体/AI'];
+  // Placeholder cards for hot sectors
+  var sectorNames = ['机器人', 'AI/算力', '医药生物', '中证军工', '固态电池', '商业航天', '稀土/有色', '科创50'];
   for (var i = 0; i < sectorNames.length; i++) {
     html += '<div class="sector-card-mini" style="background:#f8fafc;border-radius:6px;padding:10px;text-align:center;border:1px solid #eef0f4;">';
     html += '<div style="font-size:11px;color:#64748b;">' + sectorNames[i] + '</div>';
@@ -1615,314 +1614,8 @@ function loadSummaryDates() {
     .catch(function() {});
 }
 
-// ============ History Review (Calendar-based Backtesting) ============
 
-function renderHistoryReview(data, mode) {
-  var dateStr = cal.activeDate;
-  var html = '<div id="history-review-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
-  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-  html += '<div style="font-size:32px;margin-bottom:12px;">📅</div>';
-  html += '<div>正在加载 ' + dateStr + ' 的历史数据...</div>';
-  html += '</div></div>';
-  setTimeout(function() { loadHistoryReviewData(dateStr); }, 100);
-  return html;
-}
-
-function loadHistoryReviewData(dateStr) {
-  var container = document.getElementById('history-review-container');
-  if (!container) return;
-
-  // Fetch all available data for this date in parallel
-  var summaryPromise = fetch('/api/daily-summary/' + dateStr).then(function(r) { return r.json(); }).catch(function() { return null; });
-  var newsPromise = fetch('/api/news/' + dateStr).then(function(r) { return r.json(); }).catch(function() { return null; });
-  var analysisPromise = fetch('/api/analysis/' + dateStr).then(function(r) { return r.json(); }).catch(function() { return null; });
-  var eventsPromise = fetch('/api/events/' + dateStr).then(function(r) { return r.json(); }).catch(function() { return null; });
-
-  Promise.all([summaryPromise, newsPromise, analysisPromise, eventsPromise]).then(function(results) {
-    var summaryData = results[0];
-    var newsData = results[1];
-    var analysisData = results[2];
-    var eventsData = results[3];
-
-    var hasSummary = summaryData && summaryData.ok;
-    var hasNews = newsData && newsData.ok && newsData.news && newsData.news.items && newsData.news.items.length > 0;
-    var hasAnalysis = analysisData && analysisData.ok && analysisData.tradeAnalysis;
-    var hasEvents = eventsData && eventsData.ok && eventsData.events && eventsData.events.length > 0;
-
-    if (!hasSummary && !hasNews && !hasAnalysis && !hasEvents) {
-      container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">📭</div>' +
-        '<div class="lock-title">' + dateStr + ' 无历史数据</div>' +
-        '<div class="lock-desc">该日期没有可用的盘后总结、新闻或分析数据。</div>' +
-        '</div>';
-      return;
-    }
-
-    var html = '';
-
-    // Title
-    html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 16px;">📅 ' + dateStr + ' 历史复盘</h2>';
-
-    // Tab bar
-    html += '<div style="display:flex;gap:8px;margin-bottom:20px;flex-wrap:wrap;" id="history-tabs">';
-    if (hasSummary) html += '<button class="history-tab-btn active" data-tab="summary" style="padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;background:#1e293b;color:#fff;border:1px solid #1e293b;font-weight:600;" onclick="switchHistoryTab(\'summary\')">📊 收盘总结</button>';
-    if (hasNews) html += '<button class="history-tab-btn" data-tab="news" style="padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;background:#fff;color:#475569;border:1px solid #e2e5eb;" onclick="switchHistoryTab(\'news\')">📰 时政要点</button>';
-    if (hasAnalysis) html += '<button class="history-tab-btn" data-tab="analysis" style="padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;background:#fff;color:#475569;border:1px solid #e2e5eb;" onclick="switchHistoryTab(\'analysis\')">📊 交易分析</button>';
-    if (hasEvents) html += '<button class="history-tab-btn" data-tab="events" style="padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer;background:#fff;color:#475569;border:1px solid #e2e5eb;" onclick="switchHistoryTab(\'events\')">📋 事件时间线</button>';
-    html += '</div>';
-
-    // Tab content containers
-    html += '<div id="history-tab-content">';
-    if (hasSummary) {
-      html += '<div class="history-tab-pane" id="history-tab-summary">' + renderHistorySummary(summaryData) + '</div>';
-    } else {
-      html += '<div class="history-tab-pane" id="history-tab-summary" style="display:none;"></div>';
-    }
-    if (hasNews) {
-      html += '<div class="history-tab-pane" id="history-tab-news" style="display:none;">' + renderHistoryNews(newsData) + '</div>';
-    } else {
-      html += '<div class="history-tab-pane" id="history-tab-news" style="display:none;"></div>';
-    }
-    if (hasAnalysis) {
-      html += '<div class="history-tab-pane" id="history-tab-analysis" style="display:none;">' + renderHistoryAnalysis(analysisData) + '</div>';
-    } else {
-      html += '<div class="history-tab-pane" id="history-tab-analysis" style="display:none;"></div>';
-    }
-    if (hasEvents) {
-      html += '<div class="history-tab-pane" id="history-tab-events" style="display:none;">' + renderHistoryEvents(eventsData) + '</div>';
-    } else {
-      html += '<div class="history-tab-pane" id="history-tab-events" style="display:none;"></div>';
-    }
-    html += '</div>';
-
-    container.innerHTML = html;
-  });
-}
-
-function renderHistorySummary(s) {
-  var html = '';
-
-  // Market Overview
-  if (s.market && s.market.indices && s.market.indices.length > 0) {
-    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📈 大盘行情</h3>';
-    html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">';
-    for (var i = 0; i < s.market.indices.length; i++) {
-      var idx = s.market.indices[i];
-      var changeColor = (idx.changePercent || 0) >= 0 ? UP_COLOR : DOWN_COLOR;
-      var changeSign = (idx.changePercent || 0) >= 0 ? '+' : '';
-      html += '<div style="background:#f8fafc;border-radius:6px;padding:10px 14px;">';
-      html += '<div style="font-size:13px;font-weight:600;color:#1e293b;">' + escHtml(idx.name) + '</div>';
-      html += '<div style="font-size:18px;font-weight:700;margin:4px 0;">' + (idx.price || '--') + '</div>';
-      html += '<div style="font-size:12px;color:' + changeColor + ';">' + changeSign + (idx.changePercent || 0).toFixed(2) + '%</div>';
-      html += '</div>';
-    }
-    html += '</div></div>';
-  }
-
-  // Portfolio Summary
-  if (s.portfolio) {
-    var p = s.portfolio;
-    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">💰 当日持仓快照</h3>';
-    html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:12px;">';
-    html += '<div style="text-align:center;background:#f8fafc;border-radius:6px;padding:10px;"><div style="font-size:11px;color:#94a3b8;">总资产</div><div style="font-size:18px;font-weight:700;">¥' + formatMoneyCN(p.totalValue) + '</div></div>';
-    html += '<div style="text-align:center;background:#f8fafc;border-radius:6px;padding:10px;"><div style="font-size:11px;color:#94a3b8;">收益</div><div style="font-size:18px;font-weight:700;color:' + ((p.totalReturn||0) >= 0 ? UP_COLOR : DOWN_COLOR) + ';">' + ((p.totalReturn||0) >= 0 ? '+' : '') + (p.totalReturn||0).toFixed(2) + '%</div></div>';
-    html += '<div style="text-align:center;background:#f8fafc;border-radius:6px;padding:10px;"><div style="font-size:11px;color:#94a3b8;">现金</div><div style="font-size:18px;font-weight:700;">¥' + formatMoneyCN(p.cash) + '</div></div>';
-    html += '</div>';
-    if (p.positions && p.positions.length > 0) {
-      html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-      html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
-      html += '<th style="padding:8px;text-align:left;">股票</th><th style="padding:8px;text-align:right;">成本</th><th style="padding:8px;text-align:right;">现价</th><th style="padding:8px;text-align:right;">盈亏</th></tr></thead><tbody>';
-      for (var j = 0; j < p.positions.length; j++) {
-        var pos = p.positions[j];
-        html += '<tr style="border-bottom:1px solid #f1f5f9;">';
-        html += '<td style="padding:8px;"><b>' + escHtml(pos.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + pos.code + '</span></td>';
-        html += '<td style="padding:8px;text-align:right;">¥' + pos.avgCost.toFixed(2) + '</td>';
-        html += '<td style="padding:8px;text-align:right;">¥' + pos.currentPrice.toFixed(2) + '</td>';
-        html += '<td style="padding:8px;text-align:right;color:' + ((pos.pnl||0) >= 0 ? UP_COLOR : DOWN_COLOR) + ';font-weight:600;">' + ((pos.pnl||0) >= 0 ? '+' : '') + (pos.pnlPct||0).toFixed(2) + '%</td>';
-        html += '</tr>';
-      }
-      html += '</tbody></table>';
-    }
-    html += '</div>';
-  }
-
-  // Pipeline Summary
-  if (s.pipeline) {
-    var pl = s.pipeline;
-    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔬 量化分析总结</h3>';
-    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
-    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">深度分析</div><div style="font-size:16px;font-weight:600;">' + (pl.analyzed || 0) + ' 只</div></div>';
-    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">平均分</div><div style="font-size:16px;font-weight:600;">' + (pl.avgScore || 0) + '</div></div>';
-    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最高分</div><div style="font-size:16px;font-weight:600;color:#f59e0b;">' + (pl.maxScore || 0) + '</div></div>';
-    if (pl.duration) html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">耗时</div><div style="font-size:16px;font-weight:600;">' + pl.duration + '秒</div></div>';
-    html += '</div>';
-    if (pl.top5 && pl.top5.length > 0) {
-      html += '<div style="font-size:12px;color:#64748b;margin-bottom:4px;">当日 TOP5 推荐:</div>';
-      for (var ti = 0; ti < pl.top5.length; ti++) {
-        var top = pl.top5[ti];
-        html += '<div style="padding:4px 0;font-size:13px;border-bottom:1px solid #f1f5f9;">';
-        html += '<span style="font-weight:600;color:#1e293b;">#' + (ti+1) + ' ' + escHtml(top.name) + '</span> ';
-        html += '<span style="color:#94a3b8;">' + top.code + '</span> ';
-        html += '<span style="color:#f59e0b;font-weight:600;">' + top.score + '分</span>';
-        html += '</div>';
-      }
-    }
-    html += '</div>';
-  }
-
-  // Today's trades
-  if (s.todayTrades && s.todayTrades.length > 0) {
-    html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 当日交易 (' + s.todayTrades.length + '笔)</h3>';
-    html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-    html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
-    html += '<th style="padding:8px;">时间</th><th style="padding:8px;">操作</th><th style="padding:8px;">股票</th><th style="padding:8px;text-align:right;">价格</th><th style="padding:8px;text-align:right;">数量</th><th style="padding:8px;text-align:right;">金额</th><th style="padding:8px;">原因</th></tr></thead><tbody>';
-    for (var k = 0; k < s.todayTrades.length; k++) {
-      var tr = s.todayTrades[k];
-      var isBuy = tr.action === 'buy';
-      html += '<tr style="border-bottom:1px solid #f1f5f9;">';
-      html += '<td style="padding:8px;font-size:11px;">' + (tr.time||'') + '</td>';
-      html += '<td style="padding:8px;font-weight:600;color:' + (isBuy ? UP_COLOR : DOWN_COLOR) + ';">' + (isBuy ? '买入' : '卖出') + '</td>';
-      html += '<td style="padding:8px;"><b>' + escHtml(tr.name) + '</b><br><span style="color:#94a3b8;font-size:10px;">' + tr.code + '</span></td>';
-      html += '<td style="padding:8px;text-align:right;">¥' + tr.price.toFixed(2) + '</td>';
-      html += '<td style="padding:8px;text-align:right;">' + tr.shares + '股</td>';
-      html += '<td style="padding:8px;text-align:right;">¥' + formatMoneyCN(tr.amount) + '</td>';
-      html += '<td style="padding:8px;font-size:11px;color:#64748b;">' + escHtml(tr.reason || '') + '</td>';
-      html += '</tr>';
-    }
-    html += '</tbody></table></div>';
-  }
-
-  return html;
-}
-
-function renderHistoryNews(newsData) {
-  var news = newsData.news;
-  if (!news || !news.items || news.items.length === 0) {
-    return '<div class="unavailable-placeholder"><div class="lock-icon">📭</div><div class="lock-title">该日期无新闻数据</div></div>';
-  }
-  var html = '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📰 当日时政要点 (' + news.count + '条)</h3>';
-  for (var i = 0; i < news.items.length; i++) {
-    var item = news.items[i];
-    var catColors = { policy: '#7c3aed', sector: '#059669', company: '#d97706', macro: '#dc2626' };
-    var timeHHMM = item.time ? new Date(item.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
-    html += '<div style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid #f1f5f9;">';
-    html += '<div style="min-width:48px;font-size:11px;color:#94a3b8;padding-top:2px;">' + timeHHMM + '</div>';
-    html += '<div style="flex:1;">';
-    html += '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;color:#fff;background:' + (catColors[item.category]||'#64748b') + ';margin-right:6px;">' + item.category + '</span>';
-    html += '<a href="' + (item.url||'#') + '" target="_blank" style="font-size:13px;color:#1e293b;text-decoration:none;font-weight:500;">' + escHtml(item.title) + '</a>';
-    html += '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">' + escHtml(item.source) + '</div>';
-    if (item.summary) html += '<div style="font-size:12px;color:#64748b;margin-top:4px;">' + escHtml(item.summary) + '</div>';
-    html += '</div></div>';
-  }
-  return html;
-}
-
-function renderHistoryAnalysis(analysisData) {
-  var anal = analysisData.tradeAnalysis;
-  var html = '';
-  if (anal.marketNarrative && anal.marketNarrative.narrative) {
-    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border-left:4px solid #b8942c;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🏛 市场叙事</h3>';
-    html += '<p style="font-size:14px;line-height:1.9;color:#334155;">' + escHtml(anal.marketNarrative.narrative) + '</p>';
-    html += '</div>';
-  }
-  if (anal.tradesAnalysis && anal.tradesAnalysis.length > 0) {
-    for (var t = 0; t < anal.tradesAnalysis.length; t++) {
-      var ta = anal.tradesAnalysis[t];
-      var isBuy = ta.action === 'buy';
-      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-      html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
-      html += '<div><span style="color:' + (isBuy ? UP_COLOR : DOWN_COLOR) + ';font-weight:700;">' + (isBuy ? '🔴 买入' : '🟢 卖出') + '</span> ';
-      html += '<b>' + escHtml((ta.stock||{}).name || '') + '</b> ';
-      html += '<span style="color:#94a3b8;">' + ((ta.stock||{}).code || '') + '</span></div>';
-      html += '</div>';
-      html += '<p style="font-size:13px;line-height:1.8;color:#334155;">' + escHtml(ta.deepReason || '') + '</p>';
-      html += '</div>';
-    }
-  }
-  if (!html) {
-    html = '<div class="unavailable-placeholder"><div class="lock-icon">📊</div><div class="lock-title">该日期无交易分析</div></div>';
-  }
-  return html;
-}
-
-function renderHistoryEvents(eventsData) {
-  var evts = eventsData.events;
-  var html = '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 当日事件 (' + evts.length + '条)</h3>';
-  // Reverse chronological
-  for (var i = evts.length - 1; i >= 0; i--) {
-    var evt = evts[i];
-    var time = evt.time ? new Date(evt.time).toTimeString().slice(0,8) : '--:--:--';
-    var tag = mapEventTag_review(evt.type);
-    var tagClass = mapEventClass_review(evt.type);
-    var msg = formatEventMsg_review(evt);
-    html += '<div class="tl-entry" style="display:flex;gap:8px;padding:4px 8px;font-size:11px;border-bottom:1px solid #f1f5f9;">';
-    html += '<span style="color:#94a3b8;white-space:nowrap;min-width:70px;">' + time + '</span>';
-    html += '<span style="padding:0 6px;border-radius:3px;font-size:10px;font-weight:bold;white-space:nowrap;min-width:50px;text-align:center;background:rgba(0,212,255,0.15);color:#00d4ff;">' + tag + '</span>';
-    html += '<span style="color:#64748b;flex:1;">' + msg + '</span>';
-    html += '</div>';
-  }
-  return html;
-}
-
-function switchHistoryTab(tabId) {
-  // Update tab buttons
-  var btns = document.querySelectorAll('.history-tab-btn');
-  btns.forEach(function(btn) {
-    if (btn.getAttribute('data-tab') === tabId) {
-      btn.style.background = '#1e293b';
-      btn.style.color = '#fff';
-      btn.style.borderColor = '#1e293b';
-    } else {
-      btn.style.background = '#fff';
-      btn.style.color = '#475569';
-      btn.style.border = '1px solid #e2e5eb';
-    }
-  });
-  // Show/hide panes
-  var panes = document.querySelectorAll('.history-tab-pane');
-  panes.forEach(function(pane) {
-    pane.style.display = pane.id === 'history-tab-' + tabId ? 'block' : 'none';
-  });
-}
-window.switchHistoryTab = switchHistoryTab;
-
-function mapEventTag_review(type) {
-  var m = {
-    pipeline_start: '扫描', pipeline_complete: '扫描', pipeline_error: '扫描',
-    midscan_start: '扫描', midscan_complete: '扫描',
-    trade_executed: '交易', trade_complete: '交易', trade_skip: '跳过',
-    state_change: '状态', risk_trade: '风控',
-    scheduler_start: '系统', scheduler_stop: '系统',
-    position_refresh: '刷新', post_market_wrapup: '收盘',
-    daily_summary_start: '总结', daily_summary_complete: '总结',
-    new_day: '新日',
-  };
-  return m[type] || '信息';
-}
-function mapEventClass_review(type) {
-  if (type.includes('trade')) return 'trade';
-  if (type.includes('scan') || type.includes('pipeline') || type.includes('summary')) return 'scan';
-  if (type.includes('risk') || type.includes('error')) return 'alert';
-  return 'state';
-}
-function formatEventMsg_review(evt) {
-  var d = evt.detail || {};
-  switch (evt.type) {
-    case 'pipeline_complete': return '扫描完成: ' + (d.totalStocks||'?') + '只 → ' + (d.candidates||'?') + '候选';
-    case 'trade_executed': return (d.action==='buy'?'买入':'卖出') + ' ' + (d.name||'') + ' ' + (d.shares||'?') + '股';
-    case 'state_change': return '状态: ' + (d.from||'') + ' → ' + (d.to||'');
-    case 'post_market_wrapup': return '收盘: 总资产¥' + (d.totalValue||0);
-    default: return evt.type + (d.reason ? ': ' + d.reason : '');
-  }
-}
-// End of History Review
-
-function loadReportsIndex() {
+// ============ Load Reports Index ============
   var index = window.__REPORTS_INDEX__;
   if (!index || !index.reports) {
     updateStatus('报告索引加载失败，请检查 data/reports-index.js');
@@ -2038,7 +1731,7 @@ function renderCurrentSection() {
 
   // News Policy, Trade Analysis, Knowledge Base, History Review: always render directly
   // These sections handle all states internally
-  if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis' || sectionId === 'knowledgeBase' || sectionId === 'historyReview') {
+  if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis' || sectionId === 'knowledgeBase') {
     renderTimeAwareSectionDirect(sectionId);
     return;
   }
@@ -2355,8 +2048,9 @@ function calNextMonth() {
 
 function onDateClick(dateStr) {
   cal.activeDate = dateStr;
+  state.activeSection = 'simfolio';
 
-  // If there's a report for this date, load it and switch to simfolio
+  // If there's a report for this date, load it
   var reports = state.reportsByDate[dateStr];
   if (reports && reports.length > 0) {
     var best = null;
@@ -2368,23 +2062,10 @@ function onDateClick(dateStr) {
       best = reports[0];
     }
     if (!best) best = reports[0];
-    state.activeSection = 'simfolio';
     loadReportByMeta(best);
   } else {
-    // No report — check if there's a summary for this date (historical data)
-    var hasSummary = state.summaryDates && state.summaryDates.indexOf(dateStr) >= 0;
-    if (hasSummary) {
-      // Switch to history review section
-      setActiveSection('historyReview');
-    } else {
-      // Just select the date in calendar with no data
-      if ($contentTitle) $contentTitle.textContent = dateStr + ' — 无数据';
-      $contentArea.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">📅</div>' +
-        '<div class="lock-title">该日期无数据</div>' +
-        '<div class="lock-desc">所选日期没有盘后总结或其他报告数据。</div>' +
-        '</div>';
-    }
+    // Every date is clickable — show data or empty state
+    setActiveSection('simfolio');
   }
   renderCalendar();
   renderReportList();
