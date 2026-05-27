@@ -463,6 +463,22 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: true, date: eventsDateMatch[1], events: events });
   }
 
+  // List dates with available summaries
+  if (pathname === '/api/summary-dates') {
+    try {
+      const summariesDir = path.join(DATA_DIR, 'summaries');
+      if (!fs.existsSync(summariesDir)) return jsonResponse(res, { ok: true, dates: [] });
+      const dates = fs.readdirSync(summariesDir)
+        .filter(f => f.endsWith('.json'))
+        .map(f => f.replace('.json', ''))
+        .sort()
+        .reverse();
+      return jsonResponse(res, { ok: true, dates });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, dates: [] });
+    }
+  }
+
   // Daily summary report
   if (pathname === '/api/daily-summary/latest') {
     const today = new Date().toISOString().slice(0, 10);
@@ -519,6 +535,68 @@ const server = http.createServer(function(req, res) {
       return jsonResponse(res, { ok: true, date: analysisDateMatch[1], tradeAnalysis: s.tradeAnalysis || null });
     }
     return jsonResponse(res, { ok: false, message: '该日期分析不存在' });
+  }
+
+  // Sector Live Data API
+  if (pathname === '/api/sectors/live') {
+    const https = require('https');
+    const sectorCodes = [
+      { code: 'sh000001', name: '上证指数' },
+      { code: 'sz399001', name: '深证成指' },
+      { code: 'bj899050', name: '北证50' },
+      { code: 'sh000688', name: '科创50' },
+      { code: 'sz399006', name: '创业板指' },
+      { code: 'sz399812', name: '养老产业' },
+      { code: 'sz399395', name: '医药生物' },     // 医药
+      { code: 'sz399434', name: '中证军工' },     // 军工
+      { code: 'sz399006', name: '创业板指' },
+      { code: 'sz399678', name: '深证电信' },     // AI/算力相关
+      { code: 'sz399998', name: '中证煤炭' },
+      { code: 'sz399997', name: '中证白酒' },
+    ];
+    // Use Sina API for real-time index quotes
+    const queryCodes = sectorCodes.map(function(s) { return 's_' + s.code; }).join(',');
+    const url = 'https://hq.sinajs.cn/list=' + queryCodes;
+
+    try {
+      const httpModule = url.startsWith('https') ? require('https') : require('http');
+      httpModule.get(url, { headers: { 'Referer': 'https://finance.sina.com.cn' } }, function(resp) {
+        let data = '';
+        resp.on('data', function(chunk) { data += chunk; });
+        resp.on('end', function() {
+          try {
+            const lines = data.split('\n');
+            const results = [];
+            for (var i = 0; i < lines.length && i < sectorCodes.length; i++) {
+              const line = lines[i].trim();
+              if (!line || !line.includes('=')) continue;
+              const parts = line.split('"');
+              if (parts.length < 2) continue;
+              const values = parts[1].split(',');
+              const name = values[0] || sectorCodes[i].name;
+              const price = parseFloat(values[1]) || 0;
+              const change = parseFloat(values[2]) || 0;
+              const changePct = parseFloat(values[3]) || 0;
+              results.push({
+                code: sectorCodes[i].code,
+                name: name,
+                price: price,
+                change: change,
+                changePercent: changePct,
+              });
+            }
+            jsonResponse(res, { ok: true, sectors: results, time: new Date().toISOString() });
+          } catch (e) {
+            jsonResponse(res, { ok: false, message: 'Parse error' });
+          }
+        });
+      }).on('error', function() {
+        jsonResponse(res, { ok: false, message: 'Fetch error' });
+      });
+    } catch (e) {
+      jsonResponse(res, { ok: false, message: 'Error' });
+    }
+    return;
   }
 
   // Knowledge Base API

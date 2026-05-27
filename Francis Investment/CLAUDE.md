@@ -152,3 +152,4 @@ Francis Investment/
 - **Eastmoney push2 K线 API 不可用**：基本面评分会自适应降权（25%→10%）
 - **Tencent API 每批 60 只**：全量扫描需分批，Sina 备选每批 80 只
 - **portfolio.json 损坏时有 .bak 自动恢复**：不要手动删除 .bak 文件
+- **⚠ `git pull` 会覆盖运行时数据**：`.gitignore` 已排除 data 目录，但如果新增运行时文件必须确认不在 git 追踪中。云端的实时数据（持仓/调度状态/总结/知识库）被 git 覆盖后难以恢复

@@ -188,6 +188,23 @@ body {
   background: var(--accent);
   color: #fff;
 }
+.calendar-day.has-summary::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+.calendar-day.today.has-summary::after {
+  background: #fff;
+}
+.calendar-day.active.has-summary::after {
+  background: #fff;
+}
 
 /* ===== Section Navigation ===== */
 #section-nav {
@@ -407,7 +424,8 @@ body {
     border-radius: 5px;
   }
   #btn-think-tank { font-size: 10px; padding: 5px 8px; }
-  #btn-gen-pdf, #btn-send-pdf { font-size: 10px; padding: 5px 8px; }
+  #btn-gen-pdf, #btn-send-pdf { display: none !important; }
+  #btn-calendar-toggle { display: inline-block !important; font-size: 10px; padding: 5px 8px; }
 
   /* Sidebar: compact at top, scrollable */
   #sidebar {
@@ -457,7 +475,8 @@ body {
   .toolbar-date { font-size: 10px; }
   .toolbar-logo { height: 24px; }
   .btn { padding: 4px 7px; font-size: 10px; }
-  #btn-gen-pdf, #btn-send-pdf { font-size: 9px; padding: 4px 6px; }
+  #btn-gen-pdf, #btn-send-pdf { display: none !important; }
+  #btn-calendar-toggle { display: inline-block !important; font-size: 9px; padding: 4px 6px; }
   #btn-think-tank { font-size: 9px; padding: 4px 6px; }
 
   #sidebar { max-height: 30vh; }
@@ -614,6 +633,14 @@ body {
 .content-header.simfolio-header::before {
   background: #f59e0b !important;
   animation: pulse-dot 2s infinite;
+}
+
+.sector-card-mini {
+  transition: all 0.2s;
+}
+.sector-card-mini:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
 }
 
 /* ===== Unavailable Placeholder ===== */
