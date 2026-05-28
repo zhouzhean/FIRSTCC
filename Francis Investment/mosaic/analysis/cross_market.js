@@ -519,6 +519,28 @@ function formatThinkTankSummary(analysis) {
   return lines.join('\n');
 }
 
+// Read US market snapshot from disk, compute risk state (no API calls)
+var _cachedRiskState = null;
+var _cachedRiskStateTime = 0;
+
+function getCachedRiskState() {
+  var now = Date.now();
+  if (_cachedRiskState && (now - _cachedRiskStateTime) < 120000) {
+    return _cachedRiskState;
+  }
+  try {
+    var usLatestFile = path.join(DATA_DIR, 'us_market', 'us_latest.json');
+    if (!fs.existsSync(usLatestFile)) return null;
+    var usData = JSON.parse(fs.readFileSync(usLatestFile, 'utf8'));
+    if (!usData.macro || usData.macro.length === 0) return null;
+    _cachedRiskState = computeRiskState(usData.macro);
+    _cachedRiskStateTime = now;
+    return _cachedRiskState;
+  } catch (e) {
+    return null;
+  }
+}
+
 module.exports = {
   computeRiskState,
   computeCorrelationMatrix,
@@ -530,4 +552,5 @@ module.exports = {
   fetchAStockSectorPerformance,
   formatThinkTankSummary,
   pearsonR,
+  getCachedRiskState,
 };

@@ -193,23 +193,20 @@ class Scheduler extends EventEmitter {
     if (!now) now = new Date();
     const day = now.getDay();
     if (day === 0 || day === 6) return false; // US market closed weekends
-    // US regular session: 9:30 AM - 4:00 PM ET
-    // EDT (UTC-4): 21:30 - 04:00 CST
-    // EST (UTC-5): 22:30 - 05:00 CST
-    // We approximate: active if 21:30 - 05:00 CST on Mon-Thu nights
-    // (Mon night = Tue early morning in CST)
+    // US extended hours including pre-market (4AM ET) and post-market (8PM ET):
+    // EDT (UTC-4): pre=16:00 CST, regular=21:30 CST, post ends=05:00 CST next day
+    // EST (UTC-5): pre=17:00 CST, regular=22:30 CST, post ends=06:00 CST next day
+    // Active window: 16:00 - 06:00 CST (covers both DST and non-DST)
     const h = now.getHours();
     const m = now.getMinutes();
     const t = h * 60 + m;
-    // Friday night US market closes, but it's Saturday CST morning
-    // US closes Friday 4PM ET = Saturday ~4-5AM CST
-    // For simplicity: active hours 21:30-05:00, and skip Friday night
+    // US closes Friday 4PM ET → post-market ends Sat ~5-6AM CST
     const isFriNight = day === 5 && h >= 21;
     if (isFriNight) return false;
-    // Sunday night US futures open but cash market closed — skip
-    const isSunNight = day === 0 && h < 5;
-    if (isSunNight) return false;
-    return t >= 21 * 60 + 30 || t < 5 * 60;
+    // Sunday before 16:00 CST: US weekend
+    const isSunBefore = day === 0 && h < 16;
+    if (isSunBefore) return false;
+    return t >= 16 * 60 || t < 6 * 60;
   }
 
   _transition(newState, reason) {
@@ -354,10 +351,29 @@ class Scheduler extends EventEmitter {
         time: new Date().toISOString(),
       });
 
+      // Emit factor performance after scan
+      try {
+        const factorPerf = require('./analysis/factor_performance');
+        const signalCounts = {};
+        if (result.allResults) {
+          for (const r of result.allResults) {
+            const sigs = r.hiddenSignals || r.signals || [];
+            for (const s of sigs) {
+              signalCounts[s.id] = (signalCounts[s.id] || 0) + 1;
+            }
+          }
+        }
+        factorPerf.updatePerformanceCache(this._todayDate, signalCounts, result.analyzed);
+        const perf = factorPerf.computeFactorPerformance({ days: 20 });
+        this.emit('think_factor_perf', perf);
+      } catch (_) {}
+
       // 自动交易
       try {
         const pf = simfolio.loadPortfolio();
-        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full');
+        const crossMarket = require('./analysis/cross_market');
+        const macroContext = { riskState: crossMarket.getCachedRiskState() };
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext);
         this._logEvent('trade_complete', {
           decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
           executed: tradeResult.executed ? tradeResult.executed.length : 0,
@@ -525,7 +541,9 @@ class Scheduler extends EventEmitter {
       if (results.length > 0) {
         try {
           const pf = simfolio.loadPortfolio();
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid');
+          const crossMarket = require('./analysis/cross_market');
+          const macroContext = { riskState: crossMarket.getCachedRiskState() };
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext);
           if (tradeResult.executed && tradeResult.executed.length > 0) {
             for (const t of tradeResult.executed) {
               this._logEvent('trade_executed', {
@@ -1083,6 +1101,10 @@ class Scheduler extends EventEmitter {
           for (const sig of r.hiddenSignals) {
             signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
           }
+        } else if (r.signals) {
+          for (const sig of r.signals) {
+            signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+          }
         }
       }
 
@@ -1126,6 +1148,7 @@ class Scheduler extends EventEmitter {
         top5: (result.top5 || []).slice(0, 5).map(s => ({
           code: s.code, name: s.name, score: s.compositeScore || s.score, rating: s.rating,
         })),
+        signalCounts: signalCounts,
         avgScore: summary.avgScore,
         maxScore: summary.maxScore,
       });

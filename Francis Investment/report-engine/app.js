@@ -227,7 +227,7 @@ function fetchSimfolioData(callback) {
             },
             stats: data.stats || {},
             tradeHistory: (data.todayTrades || []).map(function(t) {
-              return { code: t.code, name: t.name, action: t.action, price: t.price, shares: t.shares, reason: t.reason, time: t.time };
+              return { code: t.code, name: t.name, action: t.action, price: t.price, shares: t.shares, amount: t.amount, reason: t.reason, time: t.time, date: t.date || targetDate };
             }),
             dailyNav: [],
             time: targetDate,
@@ -414,13 +414,21 @@ function renderSimfolioCards(snap, stats) {
 }
 
 function renderTradeActivityFeed(trades) {
+  // Filter trades by selected calendar date
+  var activeDate = cal.activeDate || new Date().toISOString().slice(0, 10);
+  var filtered = trades;
+  if (activeDate && trades && trades.length > 0) {
+    filtered = trades.filter(function(t) { return t.date === activeDate; });
+    // If no trades on selected date, still show empty (don't fallback to all)
+  }
+
   var html = '<div class="sf-trade-feed">';
   html += '<div class="sf-trade-feed-header">📋 交易动态 <span style="font-weight:400;font-size:10px;margin-left:auto;" id="feed-update-time"></span></div>';
 
-  if (!trades || trades.length === 0) {
+  if (!filtered || filtered.length === 0) {
     html += '<div class="sf-trade-feed-empty">暂无交易记录 — AI 交易员将在开盘后自动执行买卖</div>';
   } else {
-    var recent = trades.slice(-8).reverse();
+    var recent = filtered.slice(-8).reverse();
     for (var i = 0; i < recent.length; i++) {
       var t = recent[i];
       var isBuy = t.action === 'buy';
@@ -477,55 +485,66 @@ function formatMoneyCN(val) {
 
 // ============ Sector Live Chart (replaces NAV chart) ============
 function renderSectorLiveChart() {
+  var today = new Date().toISOString().slice(0, 10);
+  var activeDate = (typeof cal !== 'undefined' && cal.activeDate) ? cal.activeDate : today;
+  var isHistorical = activeDate !== today;
+
   var html = '<div id="sector-live-container" style="margin:0 16px 16px;">';
   html += '<div style="background:#fff;border-radius:8px;padding:16px;border:1px solid #e2e5eb;">';
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">';
   html += '<h3 style="font-size:14px;color:#1e293b;margin:0;">📊 板块实时走势</h3>';
-  html += '<span style="font-size:10px;color:#94a3b8;" id="sector-update-time">加载中...</span>';
+  html += '<span style="font-size:10px;color:#94a3b8;" id="sector-update-time">' + (isHistorical ? activeDate : '加载中...') + '</span>';
   html += '</div>';
-  html += '<div class="sector-cards-scroll"><div id="sector-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">';
-  // Placeholder cards for hot sectors
-  var sectorNames = ['机器人', 'AI/算力', '医药生物', '中证军工', '固态电池', '商业航天', '稀土/有色', '科创50'];
-  for (var i = 0; i < sectorNames.length; i++) {
-    html += '<div class="sector-card-mini" style="background:#f8fafc;border-radius:6px;padding:10px;text-align:center;border:1px solid #eef0f4;">';
-    html += '<div style="font-size:11px;color:#64748b;">' + sectorNames[i] + '</div>';
-    html += '<div style="font-size:16px;font-weight:700;color:#94a3b8;margin:4px 0;">--</div>';
-    html += '<div style="font-size:11px;">--</div>';
-    html += '</div>';
-  }
-  html += '</div></div></div></div>';
 
-  // Async load sector data
-  setTimeout(function() {
-    fetch('/api/sectors/live')
-      .then(function(r) { return r.json(); })
-      .then(function(data) {
-        if (!data.ok || !data.sectors) return;
-        var grid = document.getElementById('sector-grid');
-        var timeEl = document.getElementById('sector-update-time');
-        if (timeEl) {
-          var now = new Date();
-          timeEl.textContent = now.toTimeString().slice(0, 8);
-        }
-        if (!grid) return;
-        var html2 = '';
-        for (var i = 0; i < data.sectors.length; i++) {
-          var s = data.sectors[i];
-          var changeColor = s.changePercent >= 0 ? '#dc2626' : '#16a34a';
-          var sign = s.changePercent >= 0 ? '+' : '';
-          html2 += '<div class="sector-card-mini" style="background:#f8fafc;border-radius:6px;padding:10px;text-align:center;border:1px solid #eef0f4;">';
-          html2 += '<div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(s.name) + '</div>';
-          html2 += '<div style="font-size:16px;font-weight:700;color:#1e293b;margin:4px 0;font-variant-numeric:tabular-nums;">' + s.price.toFixed(2) + '</div>';
-          html2 += '<div style="font-size:12px;font-weight:600;color:' + changeColor + ';">' + sign + s.changePercent.toFixed(2) + '%</div>';
-          html2 += '</div>';
-        }
-        grid.innerHTML = html2;
-      })
-      .catch(function() {
-        var timeEl = document.getElementById('sector-update-time');
-        if (timeEl) timeEl.textContent = '获取失败';
-      });
-  }, 200);
+  if (isHistorical) {
+    html += '<div style="text-align:center;padding:20px;color:#94a3b8;font-size:13px;">历史日期无实时板块数据</div>';
+  } else {
+    html += '<div class="sector-cards-scroll"><div id="sector-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">';
+    var sectorNames = ['机器人', 'AI/算力', '医药生物', '中证军工', '固态电池', '商业航天', '稀土/有色', '科创50'];
+    for (var i = 0; i < sectorNames.length; i++) {
+      html += '<div class="sector-card-mini" style="background:#f8fafc;border-radius:6px;padding:10px;text-align:center;border:1px solid #eef0f4;">';
+      html += '<div style="font-size:11px;color:#64748b;">' + sectorNames[i] + '</div>';
+      html += '<div style="font-size:16px;font-weight:700;color:#94a3b8;margin:4px 0;">--</div>';
+      html += '<div style="font-size:11px;">--</div>';
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
+  html += '</div></div>';
+
+  if (!isHistorical) {
+    setTimeout(function() {
+      fetch('/api/sectors/live')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          if (!data.ok || !data.sectors) return;
+          var grid = document.getElementById('sector-grid');
+          var timeEl = document.getElementById('sector-update-time');
+          if (timeEl) {
+            var now = new Date();
+            timeEl.textContent = now.toTimeString().slice(0, 8);
+          }
+          if (!grid) return;
+          var html2 = '';
+          for (var i = 0; i < data.sectors.length; i++) {
+            var s = data.sectors[i];
+            var changeColor = s.changePercent >= 0 ? '#dc2626' : '#16a34a';
+            var sign = s.changePercent >= 0 ? '+' : '';
+            html2 += '<div class="sector-card-mini" style="background:#f8fafc;border-radius:6px;padding:10px;text-align:center;border:1px solid #eef0f4;">';
+            html2 += '<div style="font-size:11px;color:#64748b;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escHtml(s.name) + '</div>';
+            html2 += '<div style="font-size:16px;font-weight:700;color:#1e293b;margin:4px 0;font-variant-numeric:tabular-nums;">' + s.price.toFixed(2) + '</div>';
+            html2 += '<div style="font-size:12px;font-weight:600;color:' + changeColor + ';">' + sign + s.changePercent.toFixed(2) + '%</div>';
+            html2 += '</div>';
+          }
+          grid.innerHTML = html2;
+        })
+        .catch(function() {
+          var timeEl = document.getElementById('sector-update-time');
+          if (timeEl) timeEl.textContent = '获取失败';
+        });
+    }, 200);
+  }
 
   return html;
 }

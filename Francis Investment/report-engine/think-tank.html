@@ -4,6 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mosaic AI 思考舱</title>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
   :root {
     --bg: #080c14;
@@ -311,6 +314,65 @@
   .top5-code { color: var(--dim); font-size: 10px; }
   .top5-score { font-weight: bold; color: var(--amber); }
 
+  /* Factor Performance Cards */
+  .fp-card {
+    background: rgba(13,19,32,0.6);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 4px;
+    text-align: center;
+    cursor: default;
+    transition: all 0.4s ease;
+    position: relative;
+    overflow: hidden;
+    min-width: 0;
+  }
+  .fp-card:hover {
+    border-color: rgba(0,212,255,0.3);
+    background: rgba(0,212,255,0.04);
+  }
+  .fp-card.entering {
+    animation: fpCardEnter 0.5s cubic-bezier(0.34,1.56,0.64,1) both;
+  }
+  .fp-card.hot {
+    border-color: rgba(0,230,118,0.5);
+    animation: hotGlow 2s ease-in-out infinite;
+  }
+  .fp-card.cold {
+    border-color: rgba(255,59,74,0.3);
+    opacity: 0.85;
+  }
+  @keyframes fpCardEnter {
+    from { opacity: 0; transform: translateY(12px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes hotGlow {
+    0%, 100% { box-shadow: 0 0 8px rgba(0,230,118,0.1); }
+    50% { box-shadow: 0 0 18px rgba(0,230,118,0.25); }
+  }
+  .fp-card .fp-name {
+    font-size: 9px; color: var(--dim); margin-bottom: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .fp-card .fp-id {
+    font-size: 11px; font-weight: bold; color: var(--text-bright); margin-bottom: 3px;
+  }
+  .fp-card canvas { display: block; margin: 0 auto; }
+  .fp-card .fp-return {
+    font-size: 10px; margin-top: 2px; font-weight: bold;
+  }
+  .fp-card .fp-count {
+    font-size: 8px; color: var(--dim); margin-top: 1px;
+  }
+  .fp-card .fp-status {
+    font-size: 8px; font-weight: bold; margin-top: 2px;
+    padding: 1px 5px; border-radius: 3px; display: inline-block;
+    letter-spacing: 0.5px;
+  }
+  .fp-status.hot { background: rgba(0,230,118,0.15); color: var(--green); }
+  .fp-status.stable { background: rgba(255,184,0,0.12); color: var(--amber); }
+  .fp-status.cold { background: rgba(255,59,74,0.1); color: var(--red); }
+
   /* Responsive — Tablet */
   @media (max-width: 900px) {
     .main-grid { grid-template-columns: 1fr; }
@@ -440,6 +502,17 @@
         </div>
         <div id="scanRecordsList" style="max-height:140px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;font-size:11px;">
           <div style="color:var(--dim);text-align:center;padding:8px;">暂无扫描记录</div>
+        </div>
+      </div>
+
+      <!-- Factor Performance Tracking -->
+      <div id="factorPerfSection" style="margin-top:8px;">
+        <div class="panel-header" style="margin-bottom:4px;">
+          <span class="icon">&#9678;</span><span class="title">因子绩效追踪</span>
+          <span id="perfUpdatedAt" style="margin-left:auto;font-size:10px;color:var(--dim);font-weight:normal;letter-spacing:0;"></span>
+        </div>
+        <div id="factorPerfGrid" style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+          <div style="color:var(--dim);text-align:center;padding:12px;font-size:12px;grid-column:1/-1;">等待扫描数据...</div>
         </div>
       </div>
 
@@ -1326,6 +1399,14 @@ function connectSSE() {
     } catch(ex) {}
   });
 
+  // factor_perf — factor performance tracking
+  es.addEventListener('factor_perf', function(e) {
+    try {
+      const d = JSON.parse(e.data);
+      renderFactorPerformance(d);
+    } catch(ex) {}
+  });
+
   // trade
   es.addEventListener('trade', function(e) {
     try {
@@ -1515,6 +1596,11 @@ function loadInitialData() {
         updatePositionBar(data.positions);
       }
 
+      // Populate factor performance
+      if (data.factorPerformance) {
+        renderFactorPerformance(data.factorPerformance);
+      }
+
       // Populate scan records from server (with localStorage fallback)
       if (data.scanRecords && data.scanRecords.length > 0) {
         syncServerScanRecords(data.scanRecords);
@@ -1573,6 +1659,15 @@ function loadInitialData() {
 
 // Load initial data immediately, then connect SSE for live updates
 loadInitialData();
+// Direct factor performance load as backup
+setTimeout(function() {
+  fetch('/api/factors/performance')
+    .then(function(r) { return r.json(); })
+    .then(function(perf) {
+      if (perf && perf.factors) renderFactorPerformance(perf);
+    })
+    .catch(function() {});
+}, 1500);
 setTimeout(syncTimelineWithCalendar, 500);
 let sse = connectSSE();
 
@@ -1978,6 +2073,203 @@ function showStandardModal() {
   overlay.addEventListener('click', function(e) {
     if (e.target === overlay) overlay.remove();
   });
+}
+
+// ---- Factor Performance Tracking ----
+
+var factorPerformance = null;
+
+function renderFactorPerformance(perfData) {
+  try {
+    if (!perfData || !perfData.factors || perfData.factors.length === 0) return;
+    factorPerformance = perfData;
+
+    var section = document.getElementById('factorPerfSection');
+    var grid = document.getElementById('factorPerfGrid');
+    if (!section || !grid) return;
+
+    var tsEl = document.getElementById('perfUpdatedAt');
+    if (tsEl && perfData.summary) {
+      var t = perfData.summary.updatedAt || '';
+      tsEl.textContent = t ? '更新 ' + isoToLocalTime(t) : '';
+    }
+
+    var html = '';
+    for (var i = 0; i < perfData.factors.length; i++) {
+      var f = perfData.factors[i];
+      var statusCls = f.status || 'stable';
+      var statusLabel = { hot: 'HOT', stable: '--', cold: 'COLD' }[statusCls] || '--';
+      var cardCls = 'fp-card entering' + (statusCls === 'hot' ? ' hot' : '') + (statusCls === 'cold' ? ' cold' : '');
+      var returnStr = f.avgReturn != null
+        ? (f.avgReturn >= 0 ? '+' : '') + f.avgReturn.toFixed(2) + '%'
+        : '--';
+      var returnClr = f.avgReturn != null ? (f.avgReturn >= 0 ? 'var(--red)' : 'var(--green)') : 'var(--dim)';
+      var trendArrow = f.trend === 'improving' ? ' <span style=\"color:var(--green)\">▲</span>' :
+                       f.trend === 'declining' ? ' <span style=\"color:var(--red)\">▼</span>' : '';
+
+      html += '<div class=\"' + cardCls + '\" style=\"animation-delay:' + (i * 50) + 'ms\" id=\"fp-card-' + f.id + '\">' +
+        '<div class=\"fp-name\">' + escHtml(f.name) + '</div>' +
+        '<div class=\"fp-id\">' + f.id + '</div>' +
+        '<canvas id=\"fp-gauge-' + f.id + '\" width=\"52\" height=\"52\" style=\"width:52px;height:52px;\"></canvas>' +
+        '<canvas id=\"fp-spark-' + f.id + '\" width=\"78\" height=\"18\" style=\"width:78px;height:18px;\"></canvas>' +
+        '<div class=\"fp-return\" style=\"color:' + returnClr + '\">' + returnStr + trendArrow + '</div>' +
+        '<div class=\"fp-count\">信号 ' + (f.signalCount || 0) + ' 次</div>' +
+        '<span class=\"fp-status ' + statusCls + '\">' + statusLabel + '</span>' +
+        '</div>';
+    }
+    grid.innerHTML = html;
+
+    // Draw gauges and sparklines after DOM insertion (nested RAF + setTimeout for reliability)
+    requestAnimationFrame(function() {
+      requestAnimationFrame(function() {
+        for (var j = 0; j < perfData.factors.length; j++) {
+          var f = perfData.factors[j];
+          setTimeout((function(factor) {
+            return function() {
+              drawFactorGauge('fp-gauge-' + factor.id, factor.hitRate || 0, factor.status);
+              drawFactorSparkline('fp-spark-' + factor.id, factor.signalHistory || []);
+            };
+          })(f), j * 80);
+        }
+      });
+    });
+  } catch(e) {
+    var grid2 = document.getElementById('factorPerfGrid');
+    if (grid2) grid2.innerHTML = '<div style=\"color:var(--red);padding:8px;\">Error: ' + e.message + '</div>';
+  }
+}
+
+function drawFactorGauge(canvasId, hitRate, status) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var size = 52;
+  canvas.width = size * dpr;
+  canvas.height = size * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  var cx = size / 2, cy = size / 2;
+  var radius = 20;
+  var lineWidth = 3.5;
+  var startAngle = -Math.PI * 0.72;
+  var endAngle = Math.PI * 0.72;
+  var totalAngle = endAngle - startAngle;
+
+  var color;
+  if (hitRate >= 0.55) color = '#00e676';
+  else if (hitRate >= 0.40) color = '#ffb800';
+  else color = '#ff3b4a';
+
+  // Animate gauge fill
+  var targetRate = Math.max(0, Math.min(1, hitRate));
+  var currentRate = parseFloat(canvas.dataset.currentRate) || 0;
+  if (isNaN(currentRate)) currentRate = 0;
+  canvas.dataset.targetRate = targetRate;
+
+  function animateFill() {
+    currentRate += (targetRate - currentRate) * 0.1;
+    if (Math.abs(targetRate - currentRate) < 0.003) currentRate = targetRate;
+
+    ctx.clearRect(0, 0, size, size);
+
+    // Background arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, endAngle);
+    ctx.strokeStyle = 'rgba(26,37,64,0.8)';
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // Filled arc
+    var fillAngle = startAngle + totalAngle * currentRate;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, fillAngle);
+    ctx.strokeStyle = color;
+    ctx.shadowColor = color;
+    ctx.shadowBlur = (status === 'hot' && currentRate > 0.5) ? 8 : 2;
+    ctx.lineWidth = lineWidth;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Center percentage text
+    ctx.fillStyle = '#e0e8f0';
+    ctx.font = 'bold 13px "Consolas","Courier New",monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.round(currentRate * 100) + '%', cx, cy);
+
+    canvas.dataset.currentRate = currentRate;
+
+    if (Math.abs(targetRate - currentRate) > 0.003) {
+      requestAnimationFrame(animateFill);
+    }
+  }
+  animateFill();
+}
+
+function drawFactorSparkline(canvasId, values) {
+  var canvas = document.getElementById(canvasId);
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var W = 78, H = 18;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  if (!values || values.length < 2) {
+    ctx.fillStyle = 'rgba(160,170,190,0.3)';
+    ctx.font = '8px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('数据不足', W / 2, H / 2);
+    return;
+  }
+
+  var maxVal = Math.max.apply(null, values);
+  var minVal = Math.min.apply(null, values);
+  var range = maxVal - minVal || 1;
+  var padT = 2, padB = 2, padL = 2, padR = 2;
+  var plotW = W - padL - padR;
+  var plotH = H - padT - padB;
+
+  function xFor(i) { return padL + (i / (values.length - 1)) * plotW; }
+  function yFor(v) { return padT + (1 - (v - minVal) / range) * plotH; }
+
+  // Fill area
+  ctx.beginPath();
+  ctx.moveTo(xFor(0), H - padB);
+  for (var i = 0; i < values.length; i++) {
+    ctx.lineTo(xFor(i), yFor(values[i]));
+  }
+  ctx.lineTo(xFor(values.length - 1), H - padB);
+  ctx.closePath();
+  var gradient = ctx.createLinearGradient(0, padT, 0, H);
+  gradient.addColorStop(0, 'rgba(0,212,255,0.20)');
+  gradient.addColorStop(1, 'rgba(0,212,255,0.01)');
+  ctx.fillStyle = gradient;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(xFor(0), yFor(values[0]));
+  for (var j = 1; j < values.length; j++) {
+    ctx.lineTo(xFor(j), yFor(values[j]));
+  }
+  ctx.strokeStyle = 'rgba(0,212,255,0.75)';
+  ctx.lineWidth = 1;
+  ctx.lineJoin = 'round';
+  ctx.stroke();
+
+  // Dot at last point
+  var lx = xFor(values.length - 1);
+  var ly = yFor(values[values.length - 1]);
+  ctx.fillStyle = '#00d4ff';
+  ctx.beginPath();
+  ctx.arc(lx, ly, 1.8, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function updateTop5(list) {

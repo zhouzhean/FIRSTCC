@@ -126,6 +126,44 @@ function getSnapshot(pf) {
   };
 }
 
+// ---- Sector Classification (mirrored from pipeline.js assignSectors) ----
+
+const SECTOR_KEYWORDS = {
+  '有色金属/稀土': ['有色', '稀土', '矿', '铝', '铜', '钢', '金属', '材料', '磁'],
+  '半导体/AI算力': ['半导体', '芯片', '电子', '光电', '封测', '晶圆', '硅', '算力', '存储'],
+  '机器人/具身智能': ['机器人', '智能', '减速器', '电机', '伺服', '驱动的', '传感', '运动控制', '自动化'],
+  '创新药/AI医疗': ['药', '医疗', '医', '生物', '基因', '细胞', '疫苗', '诊断', '试剂'],
+  '商业航天': ['航天', '卫星', '航空', '火箭', '军工电子', '雷达', '导航'],
+  '固态电池/储能': ['电池', '储能', '锂', '电解', '正极', '负极', '新能源', '光伏', '风电'],
+  '新型电力基建': ['电力', '电网', '特高压', '电缆', '电气', '充电桩', '能源', '配电'],
+  '军工': ['军工', '弹药', '装备', '船舶', '电磁', '武器', '防务'],
+};
+
+function classifySector(stockName) {
+  for (const [sector, keywords] of Object.entries(SECTOR_KEYWORDS)) {
+    if (keywords.some(kw => stockName.includes(kw))) {
+      return sector;
+    }
+  }
+  return '其他';
+}
+
+function getSectorExposure(pf, targetSector, excludeStockCode) {
+  var totalValue = pf.cash;
+  for (var i = 0; i < pf.positions.length; i++) {
+    totalValue += pf.positions[i].shares * pf.positions[i].currentPrice;
+  }
+  var sectorValue = 0;
+  for (var i = 0; i < pf.positions.length; i++) {
+    var pos = pf.positions[i];
+    if (pos.code === excludeStockCode) continue;
+    if (classifySector(pos.name) === targetSector) {
+      sectorValue += pos.shares * pos.currentPrice;
+    }
+  }
+  return totalValue > 0 ? sectorValue / totalValue : 0;
+}
+
 // ---- Trading Engine ----
 
 /**
@@ -134,8 +172,9 @@ function getSnapshot(pf) {
  *
  * @param {Array} pipelineResults - Array of stock analysis results from pipeline
  * @param {Array} indices - Market index data (for benchmark tracking)
+ * @param {Object} macroContext - Optional macro risk context from cross-market engine
  */
-function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
+function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
   const isFullScan = scanType === 'full';
@@ -165,7 +204,29 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
     }
   }
 
-  // ---- Step 3: Look for buy candidates ----
+  // ---- Step 3: Apply macro risk penalty ----
+  // Risk-off regime: reduce all composite scores by 5-8 points
+  var macroPenalty = 0;
+  if (macroContext && macroContext.riskState) {
+    const regime = macroContext.riskState.regime;
+    if (regime === 'risk_off' || regime === 'panic') {
+      macroPenalty = 8;
+    } else if (regime === 'slightly_bullish') {
+      macroPenalty = 0;  // no penalty in slightly bullish regime
+    } else if (regime === 'neutral') {
+      macroPenalty = 2;
+    }
+    // risk_on: macroPenalty stays 0
+  }
+  if (macroPenalty > 0) {
+    for (const r of pipelineResults) {
+      if (r.compositeScore != null) {
+        r.compositeScore = Math.max(0, r.compositeScore - macroPenalty);
+      }
+    }
+  }
+
+  // ---- Step 4: Look for buy candidates ----
   // Score all pipeline results, compute percentile thresholds
   const scoredWithScores = pipelineResults
     .filter(r => r.compositeScore != null)
@@ -176,24 +237,32 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
   const pctBuy = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20;
   const pctStrong = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10;
   const minAbsolute = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore) || 50;
+  const minStrongScore = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minStrongScore) || 70;
 
   let buyThreshold = minAbsolute;
-  let strongThreshold = minAbsolute + 5;
+  let strongThreshold = Math.max(minStrongScore, minAbsolute + 5);
 
   if (scoredWithScores.length > 0) {
     const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
     const strongIdx = Math.max(0, Math.floor(scoredWithScores.length * pctStrong) - 1);
     buyThreshold = Math.max(minAbsolute, scoredWithScores[buyIdx] || 0);
-    strongThreshold = Math.max(minAbsolute + 5, scoredWithScores[strongIdx] || 0);
+    strongThreshold = Math.max(strongThreshold, scoredWithScores[strongIdx] || 0);
   }
 
   // Sort candidates by composite score (percentile-ranked, with absolute floor)
+  const maxSectorExposure = (config.SIMFOLIO && config.SIMFOLIO.maxSectorExposurePct) || 0.40;
   const buyCandidates = pipelineResults
     .filter(r => {
       // Don't buy what we already hold
       if (pf.positions.some(p => p.code === r.code)) return false;
       // Must meet percentile threshold (with absolute floor)
-      return r.compositeScore >= buyThreshold;
+      if (r.compositeScore < buyThreshold) return false;
+      // Sector concentration check: skip if same sector already >= 40%
+      const candidateSector = classifySector(r.name);
+      if (candidateSector !== '其他' && getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) {
+        return false;
+      }
+      return true;
     })
     .sort((a, b) => b.compositeScore - a.compositeScore);
 
@@ -203,7 +272,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
   for (const candidate of buyCandidates) {
     if (decisions.filter(d => d.action === 'buy').length >= availableSlots) break;
 
-    // Strong buy: top percentile AND hasStrongSignal
+    // Strong buy: top percentile AND hasStrongSignal AND meets minStrongScore
     const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
     const buyDecision = checkBuySignal(candidate, pf, isStrong);
     if (buyDecision) {
@@ -211,7 +280,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
     }
   }
 
-  // ---- Step 4: Execute decisions ----
+  // ---- Step 5: Execute decisions ----
   const executedTrades = [];
   for (const dec of decisions) {
     if (dec.action === 'sell') {
@@ -223,7 +292,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
     }
   }
 
-  // ---- Step 5: Update position prices ----
+  // ---- Step 6: Update position prices ----
   for (const pos of pf.positions) {
     const stockData = pipelineResults.find(r => r.code === pos.code);
     if (stockData) {
@@ -231,7 +300,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType) {
     }
   }
 
-  // ---- Step 6: Record daily NAV ----
+  // ---- Step 7: Record daily NAV ----
   recordDailyNAV(pf, today);
 
   savePortfolio(pf);

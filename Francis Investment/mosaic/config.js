@@ -33,9 +33,10 @@ module.exports = {
 
   // ---- 买入阈值（百分位制） ----
   BUY_THRESHOLD: {
-    percentileTop: 0.20,       // top 20% = 普通买入
-    percentileStrong: 0.10,    // top 10% = 强买入
-    minAbsoluteScore: 50,      // 绝对质量底线
+    percentileTop: 0.15,       // top 15% = 普通买入（收紧）
+    percentileStrong: 0.05,    // top 5% = 强买入（收紧）
+    minAbsoluteScore: 60,      // 绝对质量底线（从50→60）
+    minStrongScore: 70,        // 强买入最低绝对分（防止top 5%质量不足）
     northBoundRiskOffset: 5,   // 北向大幅流出时额外提高阈值
   },
 
@@ -44,6 +45,7 @@ module.exports = {
     initialCapital: 100_000,
     maxPositions: 5,
     maxSinglePositionPct: 0.30,
+    maxSectorExposurePct: 0.40,  // 同一行业总仓位不超过40%
     stopLossPct: -0.08,
     commissionRate: 0.00025,
     stampTaxRate: 0.001,
@@ -96,8 +98,8 @@ module.exports = {
       activationPct: 3, // 盈利超3%才激活
       tiers: [
         { profitPct: 5, trailOffset: 3 },   // +5% → 回撤3%止盈
-        { profitPct: 10, trailOffset: 5 },  // +10% → 回撤5%止盈
-        { profitPct: 20, trailOffset: 10 }, // +20% → 回撤10%止盈
+        { profitPct: 10, trailOffset: 6 },  // +10% → 回撤6%止盈（放宽防过早下车）
+        { profitPct: 20, trailOffset: 12 }, // +20% → 回撤12%止盈（放宽防过早下车）
       ],
     },
 

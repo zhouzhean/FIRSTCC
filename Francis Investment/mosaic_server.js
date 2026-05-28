@@ -67,6 +67,7 @@ function saveLastPipelineResult(result, type) {
     }
     const summary = {
       type: type || 'full',
+      date: new Date().toISOString().slice(0, 10),
       time: new Date().toISOString(),
       totalStocks: result.totalStocks || 0,
       candidates: result.candidates || 0,
@@ -556,6 +557,19 @@ const server = http.createServer(function(req, res) {
     return jsonResponse(res, { ok: false, message: '该日期暂无指数记录', points: [] });
   }
 
+  // Factor Performance API
+  if (pathname === '/api/factors/performance') {
+    try {
+      const factorPerf = require('./mosaic/analysis/factor_performance');
+      const perf = factorPerf.computeFactorPerformance({
+        days: parseInt(url.searchParams.get('days')) || 20,
+      });
+      return jsonResponse(res, { ok: true, ...perf });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // Sector Live Data API
   if (pathname === '/api/sectors/live') {
     const https = require('https');
@@ -635,6 +649,11 @@ const server = http.createServer(function(req, res) {
     if (fs.existsSync(usLatestPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(usLatestPath, 'utf8'));
+        // Always update status with real-time calculation — stored status may be stale
+        try {
+          const usMarket = require('./mosaic/collectors/us_market');
+          data.status = usMarket.formatUSSessionStatus();
+        } catch (_) {}
         return jsonResponse(res, { ok: true, ...data });
       } catch (e) {
         return jsonResponse(res, { ok: false, message: 'Parse error' });
@@ -779,6 +798,13 @@ const server = http.createServer(function(req, res) {
         })),
       };
     } catch (e) { /* ignore */ }
+
+    // Include factor performance
+    try {
+      const factorPerf = require('./mosaic/analysis/factor_performance');
+      data.factorPerformance = factorPerf.computeFactorPerformance({ days: 20 });
+    } catch (e) { /* ignore */ }
+
     return jsonResponse(res, data);
   }
 
@@ -881,7 +907,7 @@ server.listen(PORT, '0.0.0.0', function() {
 
   // Wire scheduler think-tank events to SSE broadcast
   const thinkEvents = ['think_progress', 'think_enrichment', 'think_stock', 'think_stats',
-    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket'];
+    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket', 'think_factor_perf'];
   for (const evt of thinkEvents) {
     scheduler.on(evt, (data) => {
       if (sseClients.size > 0) {
