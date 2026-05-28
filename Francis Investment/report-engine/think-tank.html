@@ -427,9 +427,20 @@
           <div class="info"><span id="progressStep"></span><span id="progressPct">0%</span></div>
         </div>
       </div>
-      <!-- Market Index Static Daily Snapshot (no live refresh) -->
-      <div id="market-index-chart" style="margin-bottom:8px;display:none;">
-        <div style="display:flex;gap:6px;flex-wrap:wrap;" id="market-index-badges"></div>
+      <!-- Market Index Intraday Line Chart -->
+      <div id="market-index-chart" style="margin-bottom:8px;">
+        <div style="display:flex;gap:8px;margin-bottom:4px;align-items:center;" id="index-labels"></div>
+        <canvas id="indexLineCanvas" width="600" height="180" style="width:100%;height:180px;border-radius:4px;background:rgba(0,0,0,0.2);display:block;"></canvas>
+      </div>
+      <!-- Scan Records -->
+      <div id="scan-records-section" style="margin-top:8px;">
+        <div class="panel-header" style="margin-bottom:4px;">
+          <span class="icon">&#9776;</span><span class="title">今日扫描记录</span>
+          <span id="scanRecordsCount" style="margin-left:auto;font-size:10px;color:var(--dim);font-weight:normal;letter-spacing:0;">0 条</span>
+        </div>
+        <div id="scanRecordsList" style="max-height:140px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:var(--border) transparent;font-size:11px;">
+          <div style="color:var(--dim);text-align:center;padding:8px;">暂无扫描记录</div>
+        </div>
       </div>
 
       <div class="thought-log" id="thoughtLog">
@@ -551,51 +562,231 @@ function updateIdleDisplay() {
   }
 }
 
-// ---- Market Index Static Daily Snapshot (fetch once on load) ----
-function fetchMarketIndices() {
-  fetch('/api/sectors/live')
+// ---- Market Index Intraday Line Chart ----
+var indexHistory = { points: [], date: '' };
+var indexPollTimer = null;
+
+function fetchIndexHistory() {
+  fetch('/api/indices/today')
     .then(function(r) { return r.json(); })
     .then(function(data) {
-      if (!data.ok || !data.sectors) return;
-      const container = document.getElementById('market-index-chart');
-      const badges = document.getElementById('market-index-badges');
-      if (!container || !badges) return;
-      container.style.display = 'block';
-
-      // Track only key indices
-      const keyCodes = ['sh000001', 'sz399001', 'bj899050'];
-      const indices = data.sectors.filter(function(s) { return keyCodes.indexOf(s.code) >= 0; });
-      if (indices.length === 0) return;
-
-      // Build a static daily chart card
-      let html = '';
-      for (var i = 0; i < indices.length; i++) {
-        var idx = indices[i];
-        var isUp = idx.changePercent >= 0;
-        var changeColor = isUp ? 'var(--red)' : 'var(--green)';
-        var sign = isUp ? '+' : '';
-        var barW = Math.min(100, Math.max(2, Math.abs(idx.changePercent) * 4));
-        var barColor = isUp ? 'var(--red)' : 'var(--green)';
-
-        html += '<div style="background:rgba(0,0,0,0.25);border-radius:6px;padding:10px 14px;margin-bottom:6px;border:1px solid rgba(255,255,255,0.06);">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;">' +
-          '<span style="color:var(--text-bright);font-weight:bold;font-size:12px;">' + idx.name + '</span>' +
-          '<span style="color:' + changeColor + ';font-weight:bold;font-size:15px;">' + idx.price.toFixed(2) + '</span>' +
-          '<span style="color:' + changeColor + ';font-size:11px;font-weight:600;">' + sign + idx.changePercent.toFixed(2) + '%</span>' +
-          '</div>' +
-          '<div style="margin-top:6px;height:4px;background:rgba(255,255,255,0.08);border-radius:2px;overflow:hidden;">' +
-          '<div style="height:100%;width:' + barW + '%;background:' + barColor + ';border-radius:2px;"></div>' +
-          '</div>' +
-          '</div>';
+      if (data.ok && data.points && data.points.length > 0) {
+        indexHistory = { points: data.points, date: data.date };
       }
-
-      badges.innerHTML = html;
+      drawIndexChart();
+      updateIndexLabels();
     })
-    .catch(function() {});
+    .catch(function() {
+      drawIndexChart();
+      updateIndexLabels();
+    });
 }
 
-// Fetch once on load — no periodic refresh
-setTimeout(fetchMarketIndices, 1000);
+function drawIndexChart() {
+  var canvas = document.getElementById('indexLineCanvas');
+  if (!canvas) return;
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  var W = rect.width;
+  var H = 180;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Background
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillRect(0, 0, W, H);
+
+  var points = indexHistory.points || [];
+  if (points.length < 2) {
+    ctx.fillStyle = 'rgba(160,170,190,0.5)';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(points.length === 0 ? '等待指数数据...' : '数据采集中，请稍后...', W / 2, H / 2);
+    return;
+  }
+
+  var PAD_L = 48, PAD_R = 16, PAD_T = 10, PAD_B = 28;
+  var plotW = W - PAD_L - PAD_R;
+  var plotH = H - PAD_T - PAD_B;
+
+  // Compute base prices (first valid value per series = opening)
+  var series = [
+    { key: 'sh', color: '#ff3b4a', label: '上证' },
+    { key: 'sz', color: '#00d4ff', label: '深证' },
+    { key: 'bj', color: '#00e676', label: '北证' },
+  ];
+
+  var firstVals = {};
+  for (var si = 0; si < series.length; si++) {
+    var sk = series[si].key;
+    for (var pi = 0; pi < points.length; pi++) {
+      if (points[pi][sk] != null) { firstVals[sk] = points[pi][sk]; break; }
+    }
+  }
+
+  // Convert to percentage change from opening
+  var pctPoints = [];
+  for (var i = 0; i < points.length; i++) {
+    var p = {};
+    p.time = points[i].time;
+    for (var si2 = 0; si2 < series.length; si2++) {
+      var k = series[si2].key;
+      if (points[i][k] != null && firstVals[k] != null) {
+        p[k] = (points[i][k] - firstVals[k]) / firstVals[k] * 100;
+      }
+    }
+    pctPoints.push(p);
+  }
+
+  // Compute overall min/max % range
+  var allPct = [];
+  for (var j = 0; j < pctPoints.length; j++) {
+    for (var si3 = 0; si3 < series.length; si3++) {
+      var v = pctPoints[j][series[si3].key];
+      if (v != null) allPct.push(v);
+    }
+  }
+  if (allPct.length === 0) return;
+  var minPct = Math.min.apply(null, allPct);
+  var maxPct = Math.max.apply(null, allPct);
+  var range = maxPct - minPct || 0.5;
+  minPct -= range * 0.1;
+  maxPct += range * 0.1;
+  range = maxPct - minPct;
+
+  function xFor(i) { return PAD_L + (i / (pctPoints.length - 1)) * plotW; }
+  function yFor(v) { return PAD_T + (1 - (v - minPct) / range) * plotH; }
+
+  // Zero line
+  var zeroY = yFor(0);
+  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(PAD_L, zeroY);
+  ctx.lineTo(W - PAD_R, zeroY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 0.5;
+  var gridLines = 4;
+  for (var g = 0; g <= gridLines; g++) {
+    var gy = PAD_T + (g / gridLines) * plotH;
+    var val = maxPct - (g / gridLines) * range;
+    // Skip zero line already drawn
+    if (Math.abs(val) < 0.01) {
+      ctx.fillStyle = 'rgba(160,170,190,0.3)';
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(PAD_L, gy);
+      ctx.lineTo(W - PAD_R, gy);
+      ctx.stroke();
+      ctx.fillStyle = 'rgba(160,170,190,0.7)';
+    }
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(2) + '%', PAD_L - 4, gy + 3);
+  }
+
+  // Time labels
+  var timeLabels = [0, Math.floor((pctPoints.length - 1) / 2), pctPoints.length - 1];
+  ctx.fillStyle = 'rgba(160,170,190,0.5)';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center';
+  for (var ti = 0; ti < timeLabels.length; ti++) {
+    ctx.fillText(pctPoints[timeLabels[ti]].time, xFor(timeLabels[ti]), H - 6);
+  }
+
+  // Draw series lines
+  for (var si = 0; si < series.length; si++) {
+    var s = series[si];
+    var started = false;
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (var pi = 0; pi < pctPoints.length; pi++) {
+      var v = pctPoints[pi][s.key];
+      if (v == null) { started = false; continue; }
+      var cx = xFor(pi);
+      var cy = yFor(v);
+      if (!started) { ctx.moveTo(cx, cy); started = true; }
+      else { ctx.lineTo(cx, cy); }
+    }
+    ctx.stroke();
+
+    // Dot at last value
+    for (var pi2 = pctPoints.length - 1; pi2 >= 0; pi2--) {
+      if (pctPoints[pi2][s.key] != null) {
+        var lx = xFor(pi2);
+        var ly = yFor(pctPoints[pi2][s.key]);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+      }
+    }
+  }
+}
+
+function updateIndexLabels() {
+  var container = document.getElementById('index-labels');
+  if (!container) return;
+  var points = indexHistory.points || [];
+  // Get latest values
+  var latest = { sh: null, sz: null, bj: null };
+  for (var i = points.length - 1; i >= 0; i--) {
+    if (latest.sh == null && points[i].sh != null) latest.sh = points[i].sh;
+    if (latest.sz == null && points[i].sz != null) latest.sz = points[i].sz;
+    if (latest.bj == null && points[i].bj != null) latest.bj = points[i].bj;
+    if (latest.sh != null && latest.sz != null && latest.bj != null) break;
+  }
+  // Get first values for change calc
+  var first = { sh: null, sz: null, bj: null };
+  for (var j = 0; j < points.length; j++) {
+    if (first.sh == null && points[j].sh != null) first.sh = points[j].sh;
+    if (first.sz == null && points[j].sz != null) first.sz = points[j].sz;
+    if (first.bj == null && points[j].bj != null) first.bj = points[j].bj;
+    if (first.sh != null && first.sz != null && first.bj != null) break;
+  }
+
+  var items = [
+    { key: 'sh', name: '上证', color: '#ff3b4a' },
+    { key: 'sz', name: '深证', color: '#00d4ff' },
+    { key: 'bj', name: '北证', color: '#00e676' },
+  ];
+  var html = '';
+  for (var k = 0; k < items.length; k++) {
+    var it = items[k];
+    var price = latest[it.key];
+    var firstPrice = first[it.key];
+    var chgStr = '';
+    if (price != null && firstPrice != null && firstPrice !== 0) {
+      var chg = ((price - firstPrice) / firstPrice * 100);
+      var sign = chg >= 0 ? '+' : '';
+      var clr = chg >= 0 ? '#ff3b4a' : '#00e676';
+      chgStr = ' <span style="color:' + clr + ';font-size:10px;">' + sign + chg.toFixed(2) + '%</span>';
+    }
+    html += '<span style="color:' + it.color + ';font-size:11px;font-weight:bold;">' +
+      it.name + ' ' + (price != null ? price.toFixed(2) : '--') + chgStr + '</span>';
+  }
+  container.innerHTML = html;
+}
+
+function startIndexPolling() {
+  fetchIndexHistory();
+  if (indexPollTimer) clearInterval(indexPollTimer);
+  indexPollTimer = setInterval(fetchIndexHistory, 30000);
+}
+
+// Start index polling on load
+setTimeout(startIndexPolling, 1000);
 
 // ---- Factor bars ----
 const FACTOR_DEFS = [
@@ -854,6 +1045,7 @@ function connectSSE() {
       addTimelineEntry(new Date().toTimeString().slice(0,8), '连接', 'state', 'SSE 已连接到 Franciz 服务器');
     }
     updateIdleDisplay();
+    renderScanRecords();
   });
 
   es.addEventListener('heartbeat', function(e) {
@@ -1019,6 +1211,7 @@ function connectSSE() {
         addTimelineEntry(new Date().toTimeString().slice(0,8), '扫描', 'scan',
           '扫描完成: ' + (d.totalStocks||'?') + '只 → ' + (d.candidates||'?') + '候选 → ' +
           (d.analyzed||'?') + '深析' + (d.duration ? ' (' + d.duration + '秒)' : ''));
+        renderScanRecords();
       }
     } catch(ex) {}
   });
@@ -1322,10 +1515,50 @@ function loadInitialData() {
         updatePositionBar(data.positions);
       }
 
-      // Restore scan records from localStorage if SSE has no fresh data
-      if (!data.lastResult) {
+      // Populate scan records from server (with localStorage fallback)
+      if (data.scanRecords && data.scanRecords.length > 0) {
+        syncServerScanRecords(data.scanRecords);
+      } else if (data.todayEvents && data.todayEvents.length > 0) {
+        // Fallback: extract scan records from today's events
+        var extractedRecords = [];
+        for (var ei = 0; ei < data.todayEvents.length; ei++) {
+          var evt = data.todayEvents[ei];
+          if (evt.type === 'pipeline_complete' || evt.type === 'midscan_complete') {
+            var detail = evt.detail || {};
+            var isFull = evt.type === 'pipeline_complete';
+            var top5Parsed = [];
+            if (detail.top5 && detail.top5.length > 0) {
+              for (var ti = 0; ti < detail.top5.length; ti++) {
+                var parts = detail.top5[ti].split(' ');
+                top5Parsed.push({ code: parts[0], name: parts.slice(1, -1).join(' '), score: parseInt(parts[parts.length - 1]) || 0 });
+              }
+            }
+            extractedRecords.push({
+              type: 'scan_complete',
+              data: {
+                type: isFull ? 'full' : 'mid',
+                totalStocks: detail.totalStocks || 5539,
+                candidates: detail.candidates || (isFull ? detail.totalStocks : detail.topCount || 0),
+                analyzed: detail.analyzed || detail.deepAnalyzed || 20,
+                top5: top5Parsed,
+                avgScore: 0,
+                maxScore: 0,
+              },
+              time: evt.time,
+            });
+          }
+        }
+        if (extractedRecords.length > 0) {
+          var dateKey = getDateKey();
+          var store = { dateKey: dateKey, records: extractedRecords };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+        } else {
+          restoreStateFromStorage();
+        }
+      } else {
         restoreStateFromStorage();
       }
+      renderScanRecords();
     })
     .catch(function() {
       // REST fallback failed — show offline message, SSE will retry
@@ -1343,6 +1576,76 @@ loadInitialData();
 setTimeout(syncTimelineWithCalendar, 500);
 let sse = connectSSE();
 
+// Direct scan records loader — fetches from server API, bypasses localStorage
+(function loadScanRecordsDirect() {
+  fetch('/api/think-tank/initial')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var records = [];
+      // Prefer scanRecords file, fallback to todayEvents
+      if (data.scanRecords && data.scanRecords.length > 0) {
+        records = data.scanRecords.map(function(s) {
+          return { time: s.time, scanType: s.scanType, totalStocks: s.totalStocks, candidates: s.candidates, analyzed: s.analyzed, top5: s.top5 || [] };
+        });
+      } else if (data.todayEvents && data.todayEvents.length > 0) {
+        for (var i = 0; i < data.todayEvents.length; i++) {
+          var e = data.todayEvents[i];
+          if (e.type === 'pipeline_complete') {
+            records.push({ time: e.time, scanType: 'full', totalStocks: (e.detail||{}).totalStocks, candidates: (e.detail||{}).candidates, analyzed: (e.detail||{}).analyzed });
+          } else if (e.type === 'midscan_complete') {
+            records.push({ time: e.time, scanType: 'mid', totalStocks: 5539, candidates: (e.detail||{}).topCount || 250, analyzed: (e.detail||{}).deepAnalyzed || 20 });
+          }
+        }
+      }
+      renderScanRecordsDirect(records);
+    })
+    .catch(function() {
+      // silent
+    });
+})();
+
+function renderScanRecordsDirect(records) {
+  var list = document.getElementById('scanRecordsList');
+  var count = document.getElementById('scanRecordsCount');
+  if (!list || !count) return;
+  count.textContent = records.length + ' 条';
+  if (records.length === 0) {
+    list.innerHTML = '<div style="color:var(--dim);text-align:center;padding:8px;">暂无扫描记录</div>';
+    return;
+  }
+  var html = '';
+  for (var r = 0; r < records.length; r++) {
+    var rec = records[r];
+    var t;
+    try {
+      var d2 = new Date(rec.time);
+      if (rec.time && rec.time.slice(-1) === 'Z') { d2.setHours(d2.getHours() + 8); }
+      t = ('0' + d2.getHours()).slice(-2) + ':' + ('0' + d2.getMinutes()).slice(-2);
+    } catch(e) { t = '--:--'; }
+    var label = rec.scanType === 'full' ? '全量扫描' : '盘中扫描';
+    var color = rec.scanType === 'full' ? 'var(--green)' : 'var(--cyan)';
+    var moreLabel = rec.scanType === 'full' ? ' 深析' : '';
+    html += '<div style="padding:6px 8px;border-bottom:1px solid rgba(26,37,64,0.4);">' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">' +
+      '<span style="color:var(--dim);font-size:11px;">' + t + '</span>' +
+      '<span style="color:' + color + ';font-weight:bold;font-size:11px;">' + label + '</span>' +
+      '<span style="color:var(--text);font-size:11px;">' + (rec.analyzed || rec.candidates || rec.totalStocks || '?') + moreLabel + '</span></div>';
+    if (rec.top5 && rec.top5.length > 0) {
+      var topPills = '';
+      for (var t5 = 0; t5 < rec.top5.length; t5++) {
+        var s = rec.top5[t5];
+        topPills += '<span style="display:inline-block;margin:2px 4px 2px 0;padding:1px 6px;background:rgba(160,170,190,0.08);border-radius:3px;font-size:10px;color:var(--text-bright);">' +
+          '<span style="color:var(--dim)">#' + (t5 + 1) + '</span> ' +
+          escHtml(s.name || '') + ' ' +
+          '<span style="color:var(--amber)">' + (s.score || '?') + '分</span></span>';
+      }
+      html += '<div style="padding-left:4px;">' + topPills + '</div>';
+    }
+    html += '</div>';
+  }
+  list.innerHTML = html;
+}
+
 // Reconnect on visibility change
 document.addEventListener('visibilitychange', function() {
   if (!document.hidden && (sse.readyState === EventSource.CLOSED)) {
@@ -1353,16 +1656,42 @@ document.addEventListener('visibilitychange', function() {
 // ---- Scan Record Persistence (localStorage, auto-clear at midnight) ----
 const STORAGE_KEY = 'franciz_scan_records';
 
+function getDateKey() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function syncServerScanRecords(records) {
+  try {
+    var dateKey = getDateKey();
+    var store = { dateKey: dateKey, records: [] };
+    for (var i = 0; i < records.length; i++) {
+      store.records.push({
+        type: 'scan_complete',
+        data: {
+          type: records[i].scanType || 'full',
+          totalStocks: records[i].totalStocks,
+          candidates: records[i].candidates,
+          analyzed: records[i].analyzed,
+          top5: records[i].top5 || [],
+          avgScore: records[i].avgScore,
+          maxScore: records[i].maxScore,
+        },
+        time: records[i].time,
+      });
+    }
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+  } catch(e) {}
+}
+
 function saveScanRecord(type, data) {
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    let store = { date: today, records: [] };
+    var dateKey = getDateKey();
+    var store = { dateKey: dateKey, records: [] };
     try {
-      const existing = localStorage.getItem(STORAGE_KEY);
+      var existing = localStorage.getItem(STORAGE_KEY);
       if (existing) {
-        const parsed = JSON.parse(existing);
-        // Clear if different day
-        if (parsed.date === today) {
+        var parsed = JSON.parse(existing);
+        if (parsed.dateKey === dateKey) {
           store = parsed;
         }
       }
@@ -1372,24 +1701,68 @@ function saveScanRecord(type, data) {
       data: data,
       time: new Date().toISOString(),
     });
-    // Keep max 50 records
     if (store.records.length > 50) store.records = store.records.slice(-50);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    renderScanRecords();
   } catch(e) {/* silent */}
 }
 
 function loadScanRecords() {
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const raw = localStorage.getItem(STORAGE_KEY);
+    var dateKey = getDateKey();
+    var raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const store = JSON.parse(raw);
-    if (store.date !== today) {
+    var store = JSON.parse(raw);
+    if (store.dateKey !== dateKey) {
       localStorage.removeItem(STORAGE_KEY);
       return [];
     }
     return store.records || [];
   } catch(e) { return []; }
+}
+
+function renderScanRecords() {
+  var list = document.getElementById('scanRecordsList');
+  var count = document.getElementById('scanRecordsCount');
+  if (!list || !count) return;
+  var records = loadScanRecords();
+  var scanRecords = [];
+  for (var i = 0; i < records.length; i++) {
+    if (records[i].type === 'scan_complete') scanRecords.push(records[i]);
+  }
+  count.textContent = scanRecords.length + ' 条';
+  if (scanRecords.length === 0) {
+    list.innerHTML = '<div style="color:var(--dim);text-align:center;padding:8px;">暂无扫描记录</div>';
+    return;
+  }
+  // Sort newest last
+  scanRecords.sort(function(a, b) { return (a.time || '').localeCompare(b.time || ''); });
+  var html = '';
+  for (var r = 0; r < scanRecords.length; r++) {
+    var d = scanRecords[r].data;
+    var recordTime = scanRecords[r].time;
+    var time;
+    try {
+      time = new Date(recordTime).toTimeString().slice(0, 5);
+      // toTimeString returns local time; but server times are CST (UTC+8), so if stored as ISO UTC, convert
+      var d2 = new Date(recordTime);
+      time = ('0' + d2.getHours()).slice(-2) + ':' + ('0' + d2.getMinutes()).slice(-2);
+      // Server sends CST time in ISO format; if ends with Z, it's UTC; check
+      if (recordTime && recordTime.slice(-1) === 'Z') {
+        // UTC time; convert to CST (UTC+8)
+        d2 = new Date(recordTime);
+        d2.setHours(d2.getHours() + 8);
+        time = ('0' + d2.getHours()).slice(-2) + ':' + ('0' + d2.getMinutes()).slice(-2);
+      }
+    } catch(e) { time = '--:--'; }
+    var label = (d.type === 'full' || d.scanType === 'full') ? '全量扫描' : '盘中扫描';
+    var countInfo = (d.analyzed || '?') + ' 只';
+    html += '<div style="display:flex;justify-content:space-between;padding:3px 8px;border-bottom:1px solid rgba(26,37,64,0.3);">' +
+      '<span style="color:var(--dim)">' + time + '</span>' +
+      '<span style="color:var(--cyan);font-weight:bold">' + label + '</span>' +
+      '<span style="color:var(--text-bright)">' + countInfo + '</span></div>';
+  }
+  list.innerHTML = html;
 }
 
 function restoreStateFromStorage() {

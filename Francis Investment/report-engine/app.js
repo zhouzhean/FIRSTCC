@@ -32,7 +32,7 @@ var UP_COLOR = '#dc2626', DOWN_COLOR = '#16a34a', MUTED_COLOR = '#64748b', TEXT_
 var cal = {
   year: 2026,
   month: 5,
-  activeDate: '2026-05-25',
+  activeDate: new Date().toISOString().slice(0, 10),
 };
 
 // Section definitions — v2.2: simfolio first, merged report, holdings greyed
@@ -91,16 +91,18 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
 }
 
 var SECTIONS = [
-  { id: 'simfolio',        label: '模拟交易',         icon: '💰', render: function(d,m) { return renderSimfolioLive(d,m); } },
-  { id: 'newsPolicy',      label: '时政要点',         icon: '📰', render: function(d,m) { return renderNewsPolicySection(d,m); } },
-  { id: 'tradingReport',   label: '交易分析与报告',   icon: '📊', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
-  { id: 'holdingsAnalysis',label: '持仓分析',         icon: '💼', render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
-  { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '🧠', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
+  { id: 'simfolio',        label: '模拟交易',         icon: '', render: function(d,m) { return renderSimfolioLive(d,m); } },
+  { id: 'newsPolicy',      label: '时政要点',         icon: '', render: function(d,m) { return renderNewsPolicySection(d,m); } },
+  { id: 'tradingReport',   label: '交易分析与报告',   icon: '', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
+  { id: 'holdingsAnalysis',label: '持仓分析',         icon: '', disabled: true, render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
+  { id: 'usMarket',        label: '海外市场',         icon: '', render: function(d,m) { renderUSMarketDirect(); return ''; } },
+  { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
+  { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
 
 // -- DOM refs --
 var $contentArea, $contentTitle, $btnSendPdf, $btnGenPDF, $statusBar;
-var $calendarWidget, $reportListItems, $sectionNavList;
+var $calendarWidget, $sectionNavList;
 var $toolbarDate, $pipelineProgress, $pipelineStep, $pipelineBar, $pipelinePct;
 var $aiStatusBadge, $aiStatusDot, $aiStatusLabel;
 var $navSimfolioBadge;
@@ -113,7 +115,7 @@ function initApp() {
   $btnGenPDF       = document.getElementById('btn-gen-pdf');
   $statusBar       = document.getElementById('status-bar');
   $calendarWidget  = document.getElementById('calendar-widget');
-  $reportListItems = document.getElementById('report-list-items');
+
   $sectionNavList  = document.getElementById('section-nav-list');
   $toolbarDate     = document.getElementById('toolbar-date');
   $pipelineProgress = document.getElementById('pipeline-progress');
@@ -206,11 +208,44 @@ function checkServerStatus(callback) {
 // ============ Simfolio Live Section (v2.2) ============
 
 function fetchSimfolioData(callback) {
+  var todayStr = new Date().toISOString().slice(0, 10);
+  var targetDate = (cal.activeDate && cal.activeDate !== todayStr) ? cal.activeDate : null;
+
+  if (targetDate) {
+    // Historical date: load portfolio snapshot from daily summary
+    fetch('/api/daily-summary/latest?date=' + targetDate)
+      .then(function(r) { return r.json(); })
+      .then(function(data) {
+        if (data.ok && data.portfolio) {
+          var p = data.portfolio;
+          callback({
+            snapshot: {
+              totalValue: p.totalValue, cash: p.cash,
+              totalReturn: p.totalReturn, positionValue: p.positionValue,
+              positions: p.positions || [],
+              benchmarkReturn: null, alpha: null, prevDayValue: null,
+            },
+            stats: data.stats || {},
+            tradeHistory: (data.todayTrades || []).map(function(t) {
+              return { code: t.code, name: t.name, action: t.action, price: t.price, shares: t.shares, reason: t.reason, time: t.time };
+            }),
+            dailyNav: [],
+            time: targetDate,
+            isHistorical: true,
+          });
+        } else {
+          callback(null);
+        }
+      })
+      .catch(function() { callback(null); });
+    return;
+  }
+
   fetch('/api/simfolio/status')
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var sfData = {
-        snapshot: { totalValue: data.totalValue, cash: data.cash, totalReturn: data.totalReturn, benchmarkReturn: data.benchmarkReturn, alpha: data.alpha, positions: data.positions, positionValue: data.positionValue },
+        snapshot: { totalValue: data.totalValue, cash: data.cash, totalReturn: data.totalReturn, benchmarkReturn: data.benchmarkReturn, alpha: data.alpha, prevDayValue: data.prevDayValue != null ? data.prevDayValue : null, positions: data.positions, positionValue: data.positionValue },
         stats: data.stats || {},
         tradeHistory: data.tradeHistory || [],
         dailyNav: [],
@@ -319,7 +354,15 @@ function renderSimfolioCards(snap, stats) {
 
   var tvFlash = prevSnap ? flashClass(snap.totalValue, prevSnap.totalValue) : '';
 
-  var html = '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:12px 16px;">';
+  // Daily P&L: today's totalValue vs prevDayValue
+  var dailyPnL = null, dailyPnLPct = null;
+  if (snap.prevDayValue != null && snap.prevDayValue > 0) {
+    dailyPnL = snap.totalValue - snap.prevDayValue;
+    dailyPnLPct = dailyPnL / snap.prevDayValue * 100;
+  }
+  var dpFlash = prevSnap ? flashClass(snap.totalValue, prevSnap.totalValue) : '';
+
+  var html = '<div class="sf-cards-scroll"><div class="sf-cards-row" style="display:grid;grid-template-columns:repeat(5,minmax(155px,1fr));gap:10px;padding:12px 16px;">';
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">总资产</div>';
@@ -333,10 +376,27 @@ function renderSimfolioCards(snap, stats) {
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';">' + (snap.totalValue > 0 ? (snap.cash / snap.totalValue * 100).toFixed(0) : '0') + '% 可用</div>';
   html += '</div>';
 
+  // 今日盈亏 — daily P&L vs previous close
+  html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
+  html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">今日盈亏</div>';
+  if (dailyPnL != null) {
+    html += '<div class="sf-card-value' + dpFlash + '" style="font-size:20px;font-weight:700;color:' + (dailyPnL >= 0 ? UP_COLOR : DOWN_COLOR) + ';">' + (dailyPnL >= 0 ? '+' : '-') + '¥' + formatMoneyCN(Math.abs(dailyPnL)) + '</div>';
+    html += '<div style="font-size:11px;color:' + (dailyPnLPct >= 0 ? UP_COLOR : DOWN_COLOR) + ';">' + (dailyPnLPct >= 0 ? '+' : '') + dailyPnLPct.toFixed(2) + '%</div>';
+  } else {
+    html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + MUTED_COLOR + ';">--</div>';
+    html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';">无参考数据</div>';
+  }
+  html += '</div>';
+
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">超额收益 α</div>';
-  html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + (snap.alpha >= 0 ? UP_COLOR : DOWN_COLOR) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
-  html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';">基准: ' + (snap.benchmarkReturn >= 0 ? '+' : '') + snap.benchmarkReturn.toFixed(2) + '%</div>';
+  if (snap.alpha != null) {
+    html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + (snap.alpha >= 0 ? UP_COLOR : DOWN_COLOR) + ';">' + (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%</div>';
+    html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';">基准: ' + (snap.benchmarkReturn >= 0 ? '+' : '') + snap.benchmarkReturn.toFixed(2) + '%</div>';
+  } else {
+    html += '<div class="sf-card-value" style="font-size:20px;font-weight:700;color:' + MUTED_COLOR + ';">--</div>';
+    html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';">历史快照</div>';
+  }
   html += '</div>';
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
@@ -349,7 +409,7 @@ function renderSimfolioCards(snap, stats) {
   html += '</div>';
   html += '</div>';
 
-  html += '</div>';
+  html += '</div></div>';
   return html;
 }
 
@@ -423,7 +483,7 @@ function renderSectorLiveChart() {
   html += '<h3 style="font-size:14px;color:#1e293b;margin:0;">📊 板块实时走势</h3>';
   html += '<span style="font-size:10px;color:#94a3b8;" id="sector-update-time">加载中...</span>';
   html += '</div>';
-  html += '<div id="sector-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">';
+  html += '<div class="sector-cards-scroll"><div id="sector-grid" style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">';
   // Placeholder cards for hot sectors
   var sectorNames = ['机器人', 'AI/算力', '医药生物', '中证军工', '固态电池', '商业航天', '稀土/有色', '科创50'];
   for (var i = 0; i < sectorNames.length; i++) {
@@ -433,7 +493,7 @@ function renderSectorLiveChart() {
     html += '<div style="font-size:11px;">--</div>';
     html += '</div>';
   }
-  html += '</div></div></div>';
+  html += '</div></div></div></div>';
 
   // Async load sector data
   setTimeout(function() {
@@ -519,7 +579,10 @@ function renderNewsPolicySection(data, mode) {
 function loadNewsIntoDOM() {
   var container = document.getElementById('news-policy-container');
   if (!container) return;
-  fetch('/api/news/latest')
+  var url = '/api/news/latest';
+  var todayStr = new Date().toISOString().slice(0, 10);
+  if (cal.activeDate && cal.activeDate !== todayStr) url += '?date=' + cal.activeDate;
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.ok || !data.news || !data.news.items || data.news.items.length === 0) {
@@ -708,7 +771,10 @@ function renderTradeAnalysisSection(data, mode) {
 function loadTradeAnalysisIntoDOM() {
   var container = document.getElementById('trade-analysis-container');
   if (!container) return;
-  fetch('/api/analysis/latest')
+  var url = '/api/analysis/latest';
+  var todayStr = new Date().toISOString().slice(0, 10);
+  if (cal.activeDate && cal.activeDate !== todayStr) url += '?date=' + cal.activeDate;
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.ok || !data.tradeAnalysis) {
@@ -1110,11 +1176,125 @@ function renderPlaceholder(label, phase) {
   return html;
 }
 
+// ============ US Market Section (v2.7 — overseas market monitor) ============
+function renderUSMarketDirect() {
+  var css = renderSoftwareCSS();
+
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;background:#f5f6fa;';
+
+  var styleEl = document.createElement('style');
+  styleEl.textContent = css;
+  container.appendChild(styleEl);
+
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'report-preview';
+  contentDiv.id = 'us-market-content';
+  contentDiv.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">🌍</div>' +
+    '<div style="font-size:16px;font-weight:600;">正在加载海外市场数据...</div>' +
+    '</div>';
+  container.appendChild(contentDiv);
+  $contentArea.appendChild(container);
+
+  // Async load US market data
+  setTimeout(function() { loadUSMarketIntoDOM(); }, 100);
+}
+
+function loadUSMarketIntoDOM() {
+  var container = document.getElementById('us-market-content');
+  if (!container) return;
+
+  fetch('/api/us-market/current')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        // Also try to load summary
+        fetch('/api/us-market/summary')
+          .then(function(r) { return r.json(); })
+          .then(function(summary) {
+            if (summary.ok) {
+              data.summary = summary;
+            }
+            var sectionHTML = renderUSMarket(null, 'app', data);
+            container.innerHTML = sectionHTML;
+          }).catch(function() {
+            var sectionHTML = renderUSMarket(null, 'app', data);
+            container.innerHTML = sectionHTML;
+          });
+      } else {
+        container.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
+          '<div style="font-size:48px;margin-bottom:16px;">🌍</div>' +
+          '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">海外市场数据暂不可用</div>' +
+          '<div style="font-size:13px;">美股实时数据将在每日晚间（北京时间21:30后）自动采集</div>' +
+          '<div style="font-size:12px;color:#94a3b8;margin-top:8px;">服务器正在启动数据采集，请稍后再试</div>' +
+          '</div>';
+      }
+    }).catch(function() {
+      container.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
+        '<div style="font-size:48px;margin-bottom:16px;">🌍</div>' +
+        '<div style="font-size:16px;font-weight:600;">无法连接服务器</div>' +
+        '</div>';
+    });
+}
+
+// ============ Cross-Market Analysis Section (v2.8 — correlation engine + risk state machine) ============
+function renderCrossMarketDirect() {
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;';
+
+  var styleEl = document.createElement('style');
+  styleEl.textContent = renderCrossMarketCSS();
+  container.appendChild(styleEl);
+
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'cm-dashboard';
+  contentDiv.id = 'cross-market-content';
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">&#x1F52E;</div>' +
+    '<div style="font-size:16px;font-weight:600;">正在加载跨市场分析...</div>' +
+    '</div>';
+  container.appendChild(contentDiv);
+  $contentArea.appendChild(container);
+
+  setTimeout(function() { loadCrossMarketIntoDOM(); }, 100);
+}
+
+function loadCrossMarketIntoDOM() {
+  var container = document.getElementById('cross-market-content');
+  if (!container) return;
+
+  fetch('/api/cross-market/analysis')
+    .then(function(r) { return r.json(); })
+    .then(function(analysis) {
+      if (analysis.ok) {
+        var html = renderCrossMarket(null, 'app', analysis);
+        container.innerHTML = html;
+      } else {
+        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+          '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
+          '<div style="font-size:15px;">' + escHtml(analysis.message || '分析数据暂不可用') + '</div>' +
+          '</div>';
+      }
+    }).catch(function() {
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+        '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
+        '<div style="font-size:15px;">无法连接服务器</div>' +
+        '</div>';
+    });
+}
+
+// ============ Daily Summary Loading ============
 function loadDailySummaryIntoDOM() {
   var container = document.getElementById('daily-summary-container');
   if (!container) return;
 
-  fetch('/api/daily-summary/latest')
+  var url = '/api/daily-summary/latest';
+  var todayStr = new Date().toISOString().slice(0, 10);
+  if (cal.activeDate && cal.activeDate !== todayStr) url += '?date=' + cal.activeDate;
+  fetch(url)
     .then(function(r) { return r.json(); })
     .then(function(data) {
       if (!data.ok) {
@@ -1286,7 +1466,7 @@ function renderHoldingsUnavailable(data, mode) {
 // ============ Live Monitoring (v2.2) ============
 
 var _livePollTimer = null;
-var _lastNotifiedTradeTime = null;
+var _notifiedTradeIds = {};
 
 function startCountdown() {
   if (state.countdownInterval) clearInterval(state.countdownInterval);
@@ -1365,8 +1545,8 @@ function pollLiveStatus() {
             var t = trades[i];
             if (t.triggeredBy && t.time) {
               var tradeId = t.date + 'T' + t.time + '_' + t.code;
-              if (_lastNotifiedTradeTime !== tradeId) {
-                _lastNotifiedTradeTime = tradeId;
+              if (!_notifiedTradeIds[tradeId]) {
+                _notifiedTradeIds[tradeId] = true;
                 showTradeNotification(t);
                 break;
               }
@@ -1563,38 +1743,80 @@ function updateSimfolioDOM(sfData) {
 function showTradeNotification(trade) {
   var isBuy = trade.action === 'buy';
   var isAuto = !!trade.triggeredBy;
-  var icon = isAuto ? '🤖' : (isBuy ? '🔴' : '🟢');
+  var isBuy = trade.action === 'buy';
   var actionLabel = isBuy ? '买入' : '卖出';
-  var autoLabel = isAuto ? '[自动] ' : '';
+  var autoLabel = isAuto ? '自动' : '';
   var pnlText = '';
+  var pnlClass = '';
   if (!isBuy && trade.pnlPct != null) {
-    pnlText = ' | ' + (trade.pnl >= 0 ? '+' : '') + trade.pnlPct.toFixed(2) + '%';
+    pnlClass = trade.pnl >= 0 ? 'win' : 'loss';
+    pnlText = (trade.pnl >= 0 ? '+' : '') + trade.pnlPct.toFixed(2) + '%';
   }
+
+  var borderColor = isAuto ? '#f59e0b' : (isBuy ? '#ef4444' : '#22c55e');
 
   var toast = document.createElement('div');
   toast.className = 'trade-toast';
-  toast.style.cssText = 'position:fixed;top:70px;right:20px;z-index:10000;' +
-    'background:#1e293b;color:#e2e8f0;border-left:4px solid ' + (isAuto ? '#f59e0b' : (isBuy ? '#ef4444' : '#22c55e')) + ';' +
-    'border-radius:8px;padding:12px 18px;font-size:13px;max-width:360px;' +
-    'box-shadow:0 8px 32px rgba(0,0,0,0.4);animation:slideInRight 0.3s ease-out;' +
-    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
+  toast.style.cssText = 'position:fixed;top:80px;right:20px;z-index:10000;' +
+    'background:rgba(30,41,59,0.95);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);' +
+    'color:#e2e8f0;border-left:4px solid ' + borderColor + ';' +
+    'border-radius:12px;padding:14px 40px 14px 18px;font-size:13px;max-width:380px;' +
+    'box-shadow:0 8px 40px rgba(0,0,0,0.5);animation:slideInRight 0.35s cubic-bezier(0.25,0.1,0.25,1);' +
+    'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif;cursor:default;';
 
-  toast.innerHTML = '<div style="font-weight:600;margin-bottom:4px;">' + icon + ' ' + autoLabel + actionLabel + ' · ' + trade.name + ' (' + trade.code + ')</div>' +
-    '<div style="font-size:12px;opacity:0.8;">' +
-    '价格: ¥' + trade.price.toFixed(2) + ' · ' + trade.shares + '股 | 金额: ¥' + formatMoneyCN(trade.amount) + pnlText +
+  var reasonText = trade.reason ? trade.reason : '';
+  if (reasonText.length > 50) reasonText = reasonText.slice(0, 50) + '...';
+
+  toast.innerHTML =
+    '<button onclick="this.parentElement.remove()" style="position:absolute;top:10px;right:10px;' +
+    'width:24px;height:24px;border-radius:50%;border:none;background:rgba(255,255,255,0.1);color:#94a3b8;' +
+    'font-size:14px;line-height:24px;cursor:pointer;transition:all 0.15s;' +
+    '" onmouseover="this.style.background=\'rgba(255,255,255,0.2)\';this.style.color=\'#fff\'" ' +
+    'onmouseout="this.style.background=\'rgba(255,255,255,0.1)\';this.style.color=\'#94a3b8\'">&times;</button>' +
+    '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">' +
+    '<span style="font-weight:700;font-size:14px;">' + actionLabel + '</span>' +
+    (autoLabel ? '<span style="font-size:10px;padding:2px 6px;border-radius:10px;background:rgba(245,158,11,0.2);color:#f59e0b;font-weight:600;">' + autoLabel + '</span>' : '') +
+    '<span style="margin-left:auto;font-size:10px;color:#94a3b8;">' + (trade.time || '') + '</span>' +
     '</div>' +
-    '<div style="font-size:11px;opacity:0.6;margin-top:2px;">' + (trade.date || '') + ' ' + (trade.time || '') + ' ' + (trade.reason || '') + '</div>';
+    '<div style="font-weight:600;font-size:14px;margin-bottom:4px;">' + trade.name + ' <span style="color:#94a3b8;font-weight:400;font-size:12px;">' + trade.code + '</span></div>' +
+    '<div style="font-size:12px;opacity:0.8;display:flex;gap:8px;flex-wrap:wrap;">' +
+    '<span>¥' + trade.price.toFixed(2) + '</span><span>' + trade.shares + '股</span>' +
+    (!isBuy ? '<span style="font-weight:700;color:' + (pnlClass === 'win' ? '#22c55e' : '#ef4444') + ';">' + pnlText + '</span>' : '') +
+    '</div>' +
+    (reasonText ? '<div style="font-size:11px;opacity:0.45;margin-top:4px;">' + reasonText + '</div>' : '');
 
   document.body.appendChild(toast);
 
-  // Remove after 8 seconds
-  setTimeout(function() {
+  // Stack older toasts upward
+  var existingToasts = document.querySelectorAll('.trade-toast');
+  for (var ti = 0; ti < existingToasts.length - 1; ti++) {
+    var et = existingToasts[ti];
+    var curTop = parseInt(et.style.top) || 80;
+    et.style.top = (curTop + 130) + 'px';
+    et.style.transition = 'top 0.3s cubic-bezier(0.25,0.1,0.25,1)';
+  }
+
+  // Remove after 6 seconds
+  var removeTimer = setTimeout(function() {
     toast.style.opacity = '0';
-    toast.style.transition = 'opacity 0.5s';
+    toast.style.transform = 'translateX(120%)';
+    toast.style.transition = 'all 0.4s ease-in';
     setTimeout(function() {
       if (toast.parentNode) toast.parentNode.removeChild(toast);
-    }, 500);
-  }, 8000);
+    }, 400);
+  }, 6000);
+
+  // Click on toast body to dismiss
+  toast.addEventListener('click', function(e) {
+    if (e.target.tagName === 'BUTTON') return;
+    clearTimeout(removeTimer);
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(120%)';
+    toast.style.transition = 'all 0.3s ease-in';
+    setTimeout(function() {
+      if (toast.parentNode) toast.parentNode.removeChild(toast);
+    }, 300);
+  });
 
   // Store in state
   state.tradeNotifications.unshift(trade);
@@ -1616,11 +1838,11 @@ function loadSummaryDates() {
 
 
 // ============ Load Reports Index ============
+function loadReportsIndex() {
   var index = window.__REPORTS_INDEX__;
   if (!index || !index.reports) {
     updateStatus('报告索引加载失败，请检查 data/reports-index.js');
     renderCalendar();
-    renderReportList();
     return;
   }
 
@@ -1631,22 +1853,11 @@ function loadSummaryDates() {
     state.reportsByDate[r.date].push(r);
   });
 
-  // Find the latest viewable report and auto-load it
-  var sorted = index.reports.slice().sort(function(a, b) { return b.date.localeCompare(a.date); });
-  var latest = null;
-  for (var i = 0; i < sorted.length; i++) {
-    if (sorted[i].viewMode !== 'pdf-only') {
-      latest = sorted[i];
-      break;
-    }
-  }
-  if (latest) {
-    cal.activeDate = latest.date;
-    loadReportByMeta(latest);
-  }
+  // Default to today's simfolio live view
+  cal.activeDate = new Date().toISOString().slice(0, 10);
+  setActiveSection('simfolio');
 
   renderCalendar();
-  renderReportList();
 }
 
 function loadReportByMeta(meta) {
@@ -1729,7 +1940,17 @@ function renderCurrentSection() {
     return;
   }
 
-  // News Policy, Trade Analysis, Knowledge Base, History Review: always render directly
+  // US Market + Cross Market: render directly (async DOM manipulation, like simfolio)
+  if (sectionId === 'usMarket') {
+    renderUSMarketDirect();
+    return;
+  }
+  if (sectionId === 'crossMarket') {
+    renderCrossMarketDirect();
+    return;
+  }
+
+  // News Policy, Trade Analysis, Knowledge Base: always render directly
   // These sections handle all states internally
   if (sectionId === 'newsPolicy' || sectionId === 'tradingReport' || sectionId === 'holdingsAnalysis' || sectionId === 'knowledgeBase') {
     renderTimeAwareSectionDirect(sectionId);
@@ -1837,14 +2058,16 @@ function renderSimfolioDirectDOM() {
     tickCountdown();
   }
 
-  // Refresh simfolio data in background
-  fetchSimfolioData(function(freshData) {
-    if (freshData) {
-      var prevSnap = state.simfolioData ? state.simfolioData.snapshot : null;
-      freshData._prevSnapshot = prevSnap;
-      state.simfolioData = freshData;
-    }
-  });
+  // Refresh simfolio data in background (only for today, not historical)
+  if (!sfData || !sfData.isHistorical) {
+    fetchSimfolioData(function(freshData) {
+      if (freshData) {
+        var prevSnap = state.simfolioData ? state.simfolioData.snapshot : null;
+        freshData._prevSnapshot = prevSnap;
+        state.simfolioData = freshData;
+      }
+    });
+  }
 }
 
 // ============ Send PDF to Email ============
@@ -1992,6 +2215,12 @@ function renderCalendar() {
 
   var html = '';
 
+  // Mobile toggle row (hidden on desktop via CSS)
+  html += '<div class="calendar-mobile-row">';
+  html += '<span class="calendar-month-label">' + year + '年 ' + monthNames[month - 1] + '</span>';
+  html += '<button class="cal-toggle-btn" onclick="toggleCalendarMobile(event)">📅 展开</button>';
+  html += '</div>';
+
   html += '<div class="calendar-header">';
   html += '<button class="calendar-nav" onclick="calPrevMonth()">◀</button>';
   html += '<span class="calendar-month-label">' + year + '年 ' + monthNames[month - 1] + '</span>';
@@ -2009,17 +2238,20 @@ function renderCalendar() {
 
   for (var day = 1; day <= daysInMonth; day++) {
     var dateStr = year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
-    var hasReport = state.reportsByDate[dateStr] !== undefined;
+    var dow = new Date(year, month - 1, day).getDay();
+    var isWeekend = dow === 0 || dow === 6;
     var isToday = dateStr === todayStr;
     var isActive = dateStr === cal.activeDate;
     var hasSummary = state.summaryDates && state.summaryDates.indexOf(dateStr) >= 0;
 
-    var cls = 'calendar-day current-month';
+    var cls = 'calendar-day';
+    if (isWeekend) { cls += ' weekend'; }
+    else { cls += ' current-month'; }
     if (isToday) cls += ' today';
-    if (isActive) cls += ' active';
-    if (hasSummary) cls += ' has-summary';
+    if (isActive && !isWeekend) cls += ' active';
+    if (hasSummary && !isWeekend) cls += ' has-summary';
 
-    var clickAttr = ' onclick="onDateClick(\'' + dateStr + '\')"';
+    var clickAttr = isWeekend ? '' : ' onclick="onDateClick(\'' + dateStr + '\')"';
     html += '<div class="' + cls + '"' + clickAttr + '>' + day + '</div>';
   }
 
@@ -2046,9 +2278,27 @@ function calNextMonth() {
   renderCalendar();
 }
 
+function toggleCalendarMobile(e) {
+  if (e) e.stopPropagation();
+  var w = document.getElementById('calendar-widget');
+  if (!w) return;
+  var btn = w.querySelector('.cal-toggle-btn');
+  w.classList.toggle('expanded');
+  if (btn) btn.textContent = w.classList.contains('expanded') ? '📅 收起' : '📅 展开';
+}
+
 function onDateClick(dateStr) {
   cal.activeDate = dateStr;
+  state.simfolioData = null;  // force reload for selected date
   state.activeSection = 'simfolio';
+
+  // On mobile, auto-collapse calendar after selecting a date
+  var w = document.getElementById('calendar-widget');
+  if (w && w.classList.contains('expanded')) {
+    w.classList.remove('expanded');
+    var btn = w.querySelector('.cal-toggle-btn');
+    if (btn) btn.textContent = '📅 展开';
+  }
 
   // If there's a report for this date, load it
   var reports = state.reportsByDate[dateStr];
@@ -2068,66 +2318,6 @@ function onDateClick(dateStr) {
     setActiveSection('simfolio');
   }
   renderCalendar();
-  renderReportList();
-}
-
-// ============ Report List ============
-
-function renderReportList() {
-  if (!$reportListItems) return;
-
-  var sorted = state.reportsIndex.slice().sort(function(a, b) {
-    return b.date.localeCompare(a.date);
-  });
-
-  var badgeClassMap = {
-    daily: 'badge-daily',
-    macro: 'badge-macro',
-    picks: 'badge-picks',
-    portfolio: 'badge-portfolio',
-  };
-
-  var html = '';
-  for (var i = 0; i < sorted.length; i++) {
-    var r = sorted[i];
-    var isActive = r.date === cal.activeDate &&
-                   state.currentReportMeta &&
-                   state.currentReportMeta.date === r.date &&
-                   state.currentReportMeta.title === r.title;
-    var cls = 'report-item' + (isActive ? ' active' : '');
-    var badgeCls = badgeClassMap[r.type] || 'badge-daily';
-    var clickable = r.viewMode !== 'pdf-only';
-
-    var clickHandler = clickable
-      ? ' onclick="onReportItemClick(\'' + r.date + '\',\'' + escAttr(r.title) + '\')"'
-      : '';
-
-    html += '<div class="' + cls + '"' + clickHandler + '>';
-    html += '  <div class="report-item-head">';
-    html += '    <span class="report-item-date">' + formatDateChinese(r.date) + '</span>';
-    html += '    <span class="badge ' + badgeCls + '">' + r.typeLabel + '</span>';
-    html += '  </div>';
-    html += '  <div class="report-item-type">' + escHtml(r.title) + '</div>';
-    html += '</div>';
-  }
-  $reportListItems.innerHTML = html;
-}
-
-function onReportItemClick(dateStr, title) {
-  var reports = state.reportsByDate[dateStr];
-  if (!reports) return;
-
-  var meta = null;
-  for (var i = 0; i < reports.length; i++) {
-    if (reports[i].title === title) { meta = reports[i]; break; }
-  }
-  if (!meta) meta = reports[0];
-
-  cal.activeDate = dateStr;
-  state.activeSection = 'simfolio';
-  loadReportByMeta(meta);
-  renderCalendar();
-  renderReportList();
 }
 
 // ============ PDF Generation ============
@@ -2249,8 +2439,219 @@ function startServerPoll() {
   }, 300000); // 5 min when idle
 }
 
+// ============ Mobile Layout (≤720px) ============
+
+function isMobile() {
+  return window.innerWidth <= 720;
+}
+
+function renderDateStrip() {
+  var strip = document.getElementById('date-strip');
+  if (!strip || !isMobile()) return;
+
+  var today = new Date();
+  var todayStr = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
+  var activeDate = cal.activeDate || todayStr;
+
+  // Generate ~15 days centered on active date (or today if no active)
+  var centerDate = new Date(activeDate + 'T00:00:00');
+  var weekDays = ['日', '一', '二', '三', '四', '五', '六'];
+  var dates = [];
+  for (var offset = -7; offset <= 7; offset++) {
+    var d = new Date(centerDate);
+    d.setDate(d.getDate() + offset);
+    dates.push({
+      dateStr: d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'),
+      day: d.getDate(),
+      weekday: weekDays[d.getDay()],
+      dow: d.getDay(),
+      isWeekend: d.getDay() === 0 || d.getDay() === 6,
+    });
+  }
+  for (var i = 0; i < dates.length; i++) {
+    dates[i].isToday = dates[i].dateStr === todayStr;
+    dates[i].isActive = dates[i].dateStr === activeDate;
+    dates[i].hasSummary = state.summaryDates && state.summaryDates.indexOf(dates[i].dateStr) >= 0;
+  }
+
+  // Build HTML: floating arrows + scroll container
+  var html = '';
+  html += '<button class="strip-arrow arrow-left" onclick="shiftDateStrip(-5)" title="前5天">◀</button>';
+  html += '<button class="strip-arrow arrow-right" onclick="shiftDateStrip(5)" title="后5天">▶</button>';
+  html += '<div id="date-strip-scroll">';
+  for (var i = 0; i < dates.length; i++) {
+    var dt = dates[i];
+    var cls = 'date-pill';
+    if (dt.isActive) cls += ' active';
+    if (dt.isToday && !dt.isActive) cls += ' today';
+    if (dt.isWeekend) cls += ' weekend';
+    if (dt.hasSummary && !dt.isActive) cls += ' has-summary';
+    html += '<div class="' + cls + '" onclick="onDateStripClick(\'' + dt.dateStr + '\')">' +
+      '<span class="pill-day">' + dt.day + '</span>' +
+      '<span class="pill-weekday">' + dt.weekday + '</span>' +
+      '</div>';
+  }
+  html += '<button class="strip-cal-btn" onclick="openCalOverlay()" title="日历">📅</button>';
+  html += '</div>';
+  strip.innerHTML = html;
+
+  // Scroll to active pill after render
+  setTimeout(function() {
+    var scroll = document.getElementById('date-strip-scroll');
+    var active = document.querySelector('#date-strip-scroll .date-pill.active');
+    if (scroll && active) {
+      scroll.scrollLeft = active.offsetLeft - scroll.offsetWidth / 2 + active.offsetWidth / 2;
+    }
+  }, 50);
+}
+
+function shiftDateStrip(dir) {
+  var active = cal.activeDate || new Date().toISOString().slice(0, 10);
+  var d = new Date(active + 'T00:00:00');
+  d.setDate(d.getDate() + dir);
+  var newDate = d.toISOString().slice(0, 10);
+  onDateStripClick(newDate);
+}
+
+function onDateStripClick(dateStr) {
+  onDateClick(dateStr);
+  renderDateStrip();
+}
+
+function openCalOverlay() {
+  // Remove existing overlay
+  var existing = document.getElementById('cal-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'cal-overlay';
+  overlay.className = 'show';
+  overlay.innerHTML = '<div class="cal-popup" id="cal-popup-inner"></div>';
+  overlay.addEventListener('click', function(e) {
+    if (e.target === overlay) closeCalOverlay();
+  });
+  document.body.appendChild(overlay);
+
+  // Render calendar into the popup
+  var popup = document.getElementById('cal-popup-inner');
+  if (popup && typeof renderCalendar === 'function') {
+    // Temporarily redirect calendar widget rendering to popup
+    var origWidget = $calendarWidget;
+    // Create temp container
+    var tempDiv = document.createElement('div');
+    tempDiv.id = 'calendar-widget';
+    popup.appendChild(tempDiv);
+    // Override $calendarWidget
+    $calendarWidget = tempDiv;
+    renderCalendar();
+    $calendarWidget = origWidget;
+
+    // Override click handlers inside overlay
+    var pills = popup.querySelectorAll('.calendar-day.current-month');
+    for (var i = 0; i < pills.length; i++) {
+      var onclick = pills[i].getAttribute('onclick');
+      if (onclick) {
+        pills[i].setAttribute('data-onclick', onclick);
+        pills[i].removeAttribute('onclick');
+        pills[i].addEventListener('click', function() {
+          var oc = this.getAttribute('data-onclick');
+          if (oc) {
+            // Extract date string from onclick
+            var m = oc.match(/'(\d{4}-\d{2}-\d{2})'/);
+            if (m) {
+              onDateStripClick(m[1]);
+              closeCalOverlay();
+            }
+          }
+        });
+      }
+    }
+    // Fix nav buttons in overlay
+    var navBtns = popup.querySelectorAll('.calendar-nav');
+    for (var j = 0; j < navBtns.length; j++) {
+      var oc2 = navBtns[j].getAttribute('onclick');
+      if (oc2) {
+        navBtns[j].setAttribute('data-onclick', oc2);
+        navBtns[j].removeAttribute('onclick');
+        navBtns[j].addEventListener('click', function() {
+          var action = this.getAttribute('data-onclick');
+          if (action && action.indexOf('calPrevMonth') >= 0) calPrevMonth();
+          else if (action && action.indexOf('calNextMonth') >= 0) calNextMonth();
+          // Re-render overlay calendar
+          openCalOverlay();
+        });
+      }
+    }
+  }
+}
+
+function closeCalOverlay() {
+  var overlay = document.getElementById('cal-overlay');
+  if (overlay) overlay.remove();
+  // Restore main calendar
+  if ($calendarWidget && typeof renderCalendar === 'function') {
+    $calendarWidget = document.getElementById('calendar-widget');
+    if ($calendarWidget) renderCalendar();
+  }
+}
+
+function renderSectionTabs() {
+  var tabs = document.getElementById('section-tabs');
+  if (!tabs || !isMobile()) return;
+
+  // Mobile: show all tabs except knowledgeBase and holdingsAnalysis (disabled)
+  var mobileSections = [];
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === 'knowledgeBase' || SECTIONS[i].id === 'holdingsAnalysis') continue;
+    mobileSections.push(SECTIONS[i]);
+  }
+
+  if (state.activeMobileTab == null) state.activeMobileTab = (state.activeSection || 'simfolio');
+
+  var html = '';
+  for (var i = 0; i < mobileSections.length; i++) {
+    var sec = mobileSections[i];
+    var isActive = state.activeMobileTab === sec.id;
+    var cls = 'section-pill' + (isActive ? ' active' : '');
+    html += '<div class="' + cls + '" onclick="onSectionTabClick(\'' + sec.id + '\')">' +
+      '<span class="pill-dot"></span>' + sec.label + '</div>';
+  }
+  tabs.innerHTML = html;
+}
+
+function onSectionTabClick(sectionId) {
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === sectionId && SECTIONS[i].disabled) return;
+  }
+  state.activeMobileTab = sectionId;
+  setActiveSection(sectionId);
+  renderSectionTabs();
+}
+
+function initMobileLayout() {
+  if (!isMobile()) return;
+  renderDateStrip();
+  renderSectionTabs();
+}
+
+// Update mobile elements after state changes
+var _origOnDateClick = onDateClick;
+onDateClick = function(dateStr) {
+  _origOnDateClick(dateStr);
+  if (isMobile()) {
+    renderDateStrip();
+  }
+};
+
+var _origSetActiveSection = setActiveSection;
+setActiveSection = function(sectionId) {
+  _origSetActiveSection(sectionId);
+  if (isMobile()) renderSectionTabs();
+};
+
 // -- Start --
 document.addEventListener('DOMContentLoaded', function() {
   initApp();
   startServerPoll();
+  initMobileLayout();
 });

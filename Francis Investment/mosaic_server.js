@@ -481,12 +481,13 @@ const server = http.createServer(function(req, res) {
 
   // Daily summary report
   if (pathname === '/api/daily-summary/latest') {
-    const today = new Date().toISOString().slice(0, 10);
-    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', targetDate + '.json');
     if (fs.existsSync(summaryPath)) {
       return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(summaryPath, 'utf8')) });
     }
-    return jsonResponse(res, { ok: false, message: '今日总结尚未生成，请于16:00后查看' });
+    return jsonResponse(res, { ok: false, message: '该日期总结尚未生成' });
   }
   const summaryDateMatch = pathname.match(/^\/api\/daily-summary\/(\d{4}-\d{2}-\d{2})$/);
   if (summaryDateMatch) {
@@ -499,13 +500,14 @@ const server = http.createServer(function(req, res) {
 
   // News API — daily financial news feed
   if (pathname === '/api/news/latest') {
-    const today = new Date().toISOString().slice(0, 10);
-    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', targetDate + '.json');
     if (fs.existsSync(summaryPath)) {
       const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
-      return jsonResponse(res, { ok: true, date: today, news: s.news || null });
+      return jsonResponse(res, { ok: true, date: targetDate, news: s.news || null });
     }
-    return jsonResponse(res, { ok: false, message: '今日新闻尚未生成' });
+    return jsonResponse(res, { ok: false, message: '该日期新闻尚未生成' });
   }
   const newsDateMatch = pathname.match(/^\/api\/news\/(\d{4}-\d{2}-\d{2})$/);
   if (newsDateMatch) {
@@ -519,13 +521,14 @@ const server = http.createServer(function(req, res) {
 
   // Trade Analysis API — quant analysis report
   if (pathname === '/api/analysis/latest') {
-    const today = new Date().toISOString().slice(0, 10);
-    const summaryPath = path.join(DATA_DIR, 'summaries', today + '.json');
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'summaries', targetDate + '.json');
     if (fs.existsSync(summaryPath)) {
       const s = JSON.parse(fs.readFileSync(summaryPath, 'utf8'));
-      return jsonResponse(res, { ok: true, date: today, tradeAnalysis: s.tradeAnalysis || null });
+      return jsonResponse(res, { ok: true, date: targetDate, tradeAnalysis: s.tradeAnalysis || null });
     }
-    return jsonResponse(res, { ok: false, message: '今日分析尚未生成' });
+    return jsonResponse(res, { ok: false, message: '该日期分析尚未生成' });
   }
   const analysisDateMatch = pathname.match(/^\/api\/analysis\/(\d{4}-\d{2}-\d{2})$/);
   if (analysisDateMatch) {
@@ -535,6 +538,22 @@ const server = http.createServer(function(req, res) {
       return jsonResponse(res, { ok: true, date: analysisDateMatch[1], tradeAnalysis: s.tradeAnalysis || null });
     }
     return jsonResponse(res, { ok: false, message: '该日期分析不存在' });
+  }
+
+  // Index intraday history API
+  if (pathname === '/api/indices/today') {
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const indexPath = path.join(DATA_DIR, 'simfolio', 'index_history_' + targetDate + '.json');
+    if (fs.existsSync(indexPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+        return jsonResponse(res, { ok: true, date: targetDate, points: data });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: 'Parse error' });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '该日期暂无指数记录', points: [] });
   }
 
   // Sector Live Data API
@@ -610,6 +629,105 @@ const server = http.createServer(function(req, res) {
     }
   }
 
+  // US Market API — current snapshot
+  if (pathname === '/api/us-market/current') {
+    const usLatestPath = path.join(DATA_DIR, 'us_market', 'us_latest.json');
+    if (fs.existsSync(usLatestPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(usLatestPath, 'utf8'));
+        return jsonResponse(res, { ok: true, ...data });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: 'Parse error' });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '美股数据尚未采集，请等待美股开盘' });
+  }
+
+  // US Market status
+  if (pathname === '/api/us-market/status') {
+    try {
+      const usMarket = require('./mosaic/collectors/us_market');
+      return jsonResponse(res, { ok: true, ...usMarket.formatUSSessionStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // US Market overnight summary
+  if (pathname === '/api/us-market/summary') {
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const summaryPath = path.join(DATA_DIR, 'us_market', 'us_close_' + targetDate + '.json');
+    if (fs.existsSync(summaryPath)) {
+      try {
+        return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(summaryPath, 'utf8')) });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: 'Parse error' });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '该日期美股总结尚未生成' });
+  }
+
+  // US Market intraday history
+  if (pathname === '/api/us-market/intraday') {
+    const dateParam = url.searchParams.get('date');
+    const targetDate = dateParam || new Date().toISOString().slice(0, 10);
+    const intradayPath = path.join(DATA_DIR, 'us_market', 'us_intraday_' + targetDate + '.json');
+    if (fs.existsSync(intradayPath)) {
+      try {
+        return jsonResponse(res, { ok: true, points: JSON.parse(fs.readFileSync(intradayPath, 'utf8')) });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: 'Parse error' });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '暂无日内数据', points: [] });
+  }
+
+  // Cross-Market Analysis — risk state + correlation matrix
+  if (pathname === '/api/cross-market/analysis') {
+    try {
+      const crossMarket = require('./mosaic/analysis/cross_market');
+      const usLatestPath = path.join(DATA_DIR, 'us_market', 'us_latest.json');
+      var usData = null;
+      if (fs.existsSync(usLatestPath)) {
+        usData = JSON.parse(fs.readFileSync(usLatestPath, 'utf8'));
+      }
+      const analysis = crossMarket.getFullAnalysis(usData);
+      return jsonResponse(res, { ok: true, ...analysis });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // Cross-Market — risk state only (lighter endpoint)
+  if (pathname === '/api/cross-market/risk-state') {
+    try {
+      const crossMarket = require('./mosaic/analysis/cross_market');
+      const usLatestPath = path.join(DATA_DIR, 'us_market', 'us_latest.json');
+      var usData = null;
+      if (fs.existsSync(usLatestPath)) {
+        usData = JSON.parse(fs.readFileSync(usLatestPath, 'utf8'));
+      }
+      const macro = usData ? (usData.macro || []) : [];
+      const riskState = crossMarket.computeRiskState(macro);
+      return jsonResponse(res, { ok: true, ...riskState });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // Cross-Market — correlation matrix only
+  if (pathname === '/api/cross-market/correlation') {
+    try {
+      const crossMarket = require('./mosaic/analysis/cross_market');
+      const history = crossMarket.loadCorrelationHistory();
+      const matrix = crossMarket.computeCorrelationMatrix(history);
+      return jsonResponse(res, { ok: true, ...matrix });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
     const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
@@ -637,6 +755,14 @@ const server = http.createServer(function(req, res) {
     const todayStr2 = new Date().toISOString().slice(0, 10);
     data.todayEvents = loadDailyEvents(todayStr2);
     data.eventDates = listEventDates();
+
+    // Include scan records for today
+    try {
+      const scanFile = path.join(DATA_DIR, 'simfolio', 'scan_records_' + todayStr2 + '.json');
+      if (fs.existsSync(scanFile)) {
+        data.scanRecords = JSON.parse(fs.readFileSync(scanFile, 'utf8'));
+      }
+    } catch (e) { /* ignore */ }
 
     // Include position snapshot
     try {
@@ -755,7 +881,7 @@ server.listen(PORT, '0.0.0.0', function() {
 
   // Wire scheduler think-tank events to SSE broadcast
   const thinkEvents = ['think_progress', 'think_enrichment', 'think_stock', 'think_stats',
-    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert'];
+    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket'];
   for (const evt of thinkEvents) {
     scheduler.on(evt, (data) => {
       if (sseClients.size > 0) {

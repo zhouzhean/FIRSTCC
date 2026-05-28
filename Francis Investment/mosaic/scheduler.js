@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const config = require('./config');
+const { IndexRecorder } = require('./collectors/index_recorder');
 
 const STATE_FILE = path.join(config.DATA_DIR, 'simfolio', 'scheduler_state.json');
 const SC = config.SCHEDULER;
@@ -22,10 +23,14 @@ class Scheduler extends EventEmitter {
     this._events = [];              // 事件日志环形缓冲区
     this._scheduledOps = new Set(); // 今日已执行的操作（防重复）
     this._lastPipelineTime = null;
+    this._indexRecorder = new IndexRecorder();
     this._lastMidScanTime = null;
     this._lastPositionCheck = null;
     this._positionAlerts = [];      // 当前活跃的风控警报
     this._positionCheckFailures = 0;// 连续失败计数
+    this._usDataToday = [];         // 美股当日分钟线数据
+    this._lastUSRecord = null;      // 上次美股记录时间
+    this._usOpsRunning = false;     // 美股操作锁
   }
 
   // ==================== 公开 API ====================
@@ -48,6 +53,7 @@ class Scheduler extends EventEmitter {
   stop() {
     if (this._nextTickTimer) clearTimeout(this._nextTickTimer);
     this._nextTickTimer = null;
+    if (this._indexRecorder) this._indexRecorder.stop();
     this._saveState();
     this._logEvent('scheduler_stop', { state: this._state });
   }
@@ -81,7 +87,14 @@ class Scheduler extends EventEmitter {
     if (this._nextTickTimer) clearTimeout(this._nextTickTimer);
 
     const isActive = this._state === 'morning_session' || this._state === 'afternoon_session';
-    const interval = isActive ? SC.activeTickMs : SC.idleTickMs;
+    let interval;
+    if (isActive) {
+      interval = SC.activeTickMs;
+    } else if (this._isUSMarketActive()) {
+      interval = 60000; // 60s during US market hours
+    } else {
+      interval = SC.idleTickMs;
+    }
 
     this._nextTickTime = Date.now() + interval;
     this._nextTickTimer = setTimeout(() => this._tick(), interval);
@@ -124,6 +137,23 @@ class Scheduler extends EventEmitter {
       this._runDailySummary();
     }
 
+    // US Market: record intraday data during US active hours
+    if (this._isUSMarketActive(now)) {
+      const usKey = 'us_record_' + dateStr + '_' + String(now.getMinutes()).padStart(2, '0');
+      const lastRec = this._lastUSRecord;
+      const shouldRecord = !lastRec || (now - lastRec) >= 55000; // ~60s
+      if (shouldRecord && !this._usOpsRunning) {
+        this._lastUSRecord = now;
+        this._recordUSMarkets(dateStr);
+      }
+    }
+
+    // US Market: 5:00 AM generate overnight summary
+    if (hourNow === 5 && !this._scheduledOps.has('us_summary_' + dateStr)) {
+      this._scheduledOps.add('us_summary_' + dateStr);
+      this._runOvernightSummary(dateStr);
+    }
+
     this._saveState();
     this._scheduleNextTick();
   }
@@ -158,6 +188,30 @@ class Scheduler extends EventEmitter {
     return d >= 1 && d <= 5;
   }
 
+  /** Check if US market is currently in regular trading (21:30-04:00 CST on weekdays). */
+  _isUSMarketActive(now) {
+    if (!now) now = new Date();
+    const day = now.getDay();
+    if (day === 0 || day === 6) return false; // US market closed weekends
+    // US regular session: 9:30 AM - 4:00 PM ET
+    // EDT (UTC-4): 21:30 - 04:00 CST
+    // EST (UTC-5): 22:30 - 05:00 CST
+    // We approximate: active if 21:30 - 05:00 CST on Mon-Thu nights
+    // (Mon night = Tue early morning in CST)
+    const h = now.getHours();
+    const m = now.getMinutes();
+    const t = h * 60 + m;
+    // Friday night US market closes, but it's Saturday CST morning
+    // US closes Friday 4PM ET = Saturday ~4-5AM CST
+    // For simplicity: active hours 21:30-05:00, and skip Friday night
+    const isFriNight = day === 5 && h >= 21;
+    if (isFriNight) return false;
+    // Sunday night US futures open but cash market closed — skip
+    const isSunNight = day === 0 && h < 5;
+    if (isSunNight) return false;
+    return t >= 21 * 60 + 30 || t < 5 * 60;
+  }
+
   _transition(newState, reason) {
     const oldState = this._state;
     this._state = newState;
@@ -177,6 +231,17 @@ class Scheduler extends EventEmitter {
     if (oldState === 'morning_session' || oldState === 'afternoon_session') {
       if (newState !== 'morning_session' && newState !== 'afternoon_session') {
         this._positionAlerts = [];
+      }
+    }
+
+    // Index recorder: start during trading states, stop otherwise
+    if (newState === 'morning_session' || newState === 'afternoon_session') {
+      if (!this._indexRecorder.isRunning) {
+        this._indexRecorder.start();
+      }
+    } else {
+      if (this._indexRecorder.isRunning) {
+        this._indexRecorder.stop();
       }
     }
 
@@ -861,6 +926,12 @@ class Scheduler extends EventEmitter {
         analysisGenerated: !!analysisData,
       });
 
+      // Record cross-market correlation snapshot (US ETF → A-stock sector)
+      try {
+        const crossMarket = require('./analysis/cross_market');
+        crossMarket.recordDailyCorrelationSnapshot(dateStr).catch(function() {});
+      } catch (e) { /* silent */ }
+
       // Broadcast to SSE clients
       this.emit('think_scan', {
         type: 'daily_summary',
@@ -869,6 +940,124 @@ class Scheduler extends EventEmitter {
       });
     } catch (err) {
       this._logEvent('daily_summary_error', { error: err.message });
+    }
+  }
+
+  // ==================== 操作：美股记录 ====================
+
+  async _recordUSMarkets(dateStr) {
+    if (this._usOpsRunning) return;
+    this._usOpsRunning = true;
+
+    try {
+      const usMarket = require('./collectors/us_market');
+      const data = await Promise.race([
+        usMarket.fetchAllUSMonitors(),
+        this._timeout(45000, '美股采集超时'),
+      ]);
+
+      if (!data) { this._usOpsRunning = false; return; }
+
+      // Strip heavy nested objects for storage (keep only essentials)
+      const point = {
+        time: new Date().toISOString(),
+        status: data.status,
+        indices: (data.indices || []).map(q => ({ s: q.symbol, p: q.price, cp: q.changePercent })),
+        macro: (data.macro || []).map(q => ({ s: q.symbol, p: q.price, cp: q.changePercent })),
+      };
+
+      this._usDataToday.push(point);
+      // Keep max 500 points per day (~8 hours of 60s recording)
+      if (this._usDataToday.length > 500) this._usDataToday = this._usDataToday.slice(-500);
+
+      // Persist full data to file
+      try {
+        const fullData = {
+          time: data.time,
+          status: data.status,
+          indices: data.indices || [],
+          macro: data.macro || [],
+          futures: data.futures || [],
+          adrs: data.adrs || [],
+          sectorETFs: data.sectorETFs || [],
+          sentiment: data.sentiment || [],
+        };
+        const dir = path.join(config.DATA_DIR, 'us_market');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(
+          path.join(dir, 'us_latest.json'),
+          JSON.stringify(fullData, null, 2),
+          'utf8'
+        );
+      } catch (e) { /* silent */ }
+
+      // SSE broadcast
+      this.emit('think_usmarket', {
+        type: 'us_update',
+        indices: data.indices || [],
+        macro: data.macro || [],
+        status: data.status,
+        time: data.time,
+      });
+    } catch (err) {
+      // silent — US market recording is non-critical
+    } finally {
+      this._usOpsRunning = false;
+    }
+  }
+
+  // ==================== 操作：美股隔夜总结 ====================
+
+  async _runOvernightSummary(dateStr) {
+    this._logEvent('us_summary_start', { date: dateStr });
+
+    try {
+      const usMarket = require('./collectors/us_market');
+      const usMacro = require('./analysis/us_macro');
+
+      // Fetch fresh snapshot
+      const usData = await Promise.race([
+        usMarket.fetchAllUSMonitors(),
+        this._timeout(60000, '美股总结采集超时'),
+      ]);
+
+      if (!usData) {
+        this._logEvent('us_summary_skip', { reason: 'no_data' });
+        return;
+      }
+
+      const summary = usMacro.generateOvernightSummary(usData, dateStr);
+      if (!summary) return;
+
+      // Persist summary
+      const dir = path.join(config.DATA_DIR, 'us_market');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, 'us_close_' + dateStr + '.json'),
+        JSON.stringify(summary, null, 2),
+        'utf8'
+      );
+
+      // Also save latest snapshot
+      fs.writeFileSync(
+        path.join(dir, 'us_latest.json'),
+        JSON.stringify(usData, null, 2),
+        'utf8'
+      );
+
+      this._logEvent('us_summary_complete', {
+        sentiment: summary.aStockSentiment ? summary.aStockSentiment.score : null,
+        level: summary.aStockSentiment ? summary.aStockSentiment.level : null,
+      });
+
+      // Broadcast
+      this.emit('think_usmarket', {
+        type: 'us_summary',
+        summary: summary,
+        time: new Date().toISOString(),
+      });
+    } catch (err) {
+      this._logEvent('us_summary_error', { error: err.message });
     }
   }
 
@@ -920,6 +1109,28 @@ class Scheduler extends EventEmitter {
 
       const filePath = path.join(dir, 'last_pipeline_result.json');
       fs.writeFileSync(filePath, JSON.stringify(summary, null, 2), 'utf8');
+
+      // Also append to today's scan records file for think-tank display
+      const scanRecordsDir = path.join(config.DATA_DIR, 'simfolio');
+      const scanFile = path.join(scanRecordsDir, 'scan_records_' + this._todayDate + '.json');
+      let records = [];
+      if (fs.existsSync(scanFile)) {
+        try { records = JSON.parse(fs.readFileSync(scanFile, 'utf8')); } catch (e2) {}
+      }
+      records.push({
+        time: new Date().toISOString(),
+        scanType: type || 'full',
+        totalStocks: result.totalStocks || 0,
+        candidates: result.candidates || 0,
+        analyzed: result.analyzed || 0,
+        top5: (result.top5 || []).slice(0, 5).map(s => ({
+          code: s.code, name: s.name, score: s.compositeScore || s.score, rating: s.rating,
+        })),
+        avgScore: summary.avgScore,
+        maxScore: summary.maxScore,
+      });
+      if (records.length > 20) records = records.slice(-20);
+      fs.writeFileSync(scanFile, JSON.stringify(records, null, 2), 'utf8');
     } catch (e) {
       // 静默失败
     }

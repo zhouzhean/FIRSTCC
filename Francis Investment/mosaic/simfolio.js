@@ -99,6 +99,19 @@ function getSnapshot(pf) {
     benchmarkReturn = last.benchmarkReturn || 0;
   }
 
+  // Previous day's closing NAV for daily P&L
+  const today = new Date().toISOString().slice(0, 10);
+  let prevDayValue = null;
+  for (let i = pf.dailyNav.length - 1; i >= 0; i--) {
+    if (pf.dailyNav[i].date < today) {
+      prevDayValue = pf.dailyNav[i].nav;
+      break;
+    }
+  }
+  if (prevDayValue === null && pf.dailyNav.length === 0) {
+    prevDayValue = pf.meta.initialCapital;
+  }
+
   return {
     date: new Date().toISOString().slice(0, 10),
     cash: pf.cash,
@@ -107,6 +120,7 @@ function getSnapshot(pf) {
     totalReturn: Math.round(totalReturn * 100) / 100,
     benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
     alpha: Math.round((totalReturn - benchmarkReturn) * 100) / 100,
+    prevDayValue: prevDayValue,
     positions: posWithPnL,
     tradeCount: pf.tradeHistory.length,
   };
@@ -615,6 +629,7 @@ function updateTrailingStop(pf, priceMap) {
 
 function checkRiskThresholds(pf, priceMap) {
   const alerts = [];
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   for (const pos of pf.positions) {
     const live = priceMap[pos.code];
@@ -622,8 +637,9 @@ function checkRiskThresholds(pf, priceMap) {
 
     const currentPrice = live.price;
     const pnlPct = (currentPrice - pos.avgCost) / pos.avgCost * 100;
+    const isBoughtToday = pos.entryDate === todayStr;
 
-    // 1. 硬止损：-8%
+    // 1. 硬止损：-8%（T+1当天唯一可触发的卖出）
     if (pnlPct <= -8) {
       alerts.push({
         code: pos.code,
@@ -636,6 +652,9 @@ function checkRiskThresholds(pf, priceMap) {
       });
       continue;
     }
+
+    // T+1: 当天买入的股票除了硬止损外不生成任何卖出警报
+    if (isBoughtToday) continue;
 
     // 2. 移动止盈触发
     if (pos.trailingStopPrice != null && currentPrice <= pos.trailingStopPrice) {
@@ -691,6 +710,13 @@ function executeRiskTrade(pf, alert, priceMap) {
   const position = pf.positions.find(p => p.code === alert.code);
   if (!position) return null;
 
+  // T+1 compliance: stocks bought today cannot be sold today
+  // Only hard stop-loss (-8%) can override T+1
+  const todayStr = new Date().toISOString().slice(0, 10);
+  if (position.entryDate === todayStr && alert.action !== 'stop_loss') {
+    return null;
+  }
+
   const price = alert.currentPrice;
   const amount = position.shares * price;
   const commission = amount * config.SIMFOLIO.commissionRate;
@@ -722,7 +748,7 @@ function executeRiskTrade(pf, alert, priceMap) {
   pf.tradeHistory.push(trade);
 
   // 记录每日净值
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayStr;
   const existing = pf.dailyNav.find(n => n.date === today);
   const snap = getSnapshot(pf);
   if (existing) {

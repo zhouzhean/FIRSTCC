@@ -21,4 +21,4 @@ Static web project — no build tools, no package manager, no tests. HTML/CSS/JS
 
 - Remote: `https://github.com/zhouzhean/FIRSTCC`
 - Auth: HTTPS via GitHub CLI (`gh auth login`)
-- **Runtime data files (never commit)**: `portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`
+- **Runtime data files (never commit)**: `portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `us_market/*.json`, `correlation_history.json`, `index_history_*.json`

@@ -28,10 +28,10 @@
         <rect x="3" y="3" width="38" height="38" rx="9" fill="none" stroke="#fff" stroke-opacity="0.2" stroke-width="1.5"/>
         <text x="22" y="30" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-weight="bold" font-size="23" fill="#fff" letter-spacing="1">FI</text>
       </svg>
-      <span class="toolbar-title">Francis <span class="accent">Investment</span></span>
-      <span class="toolbar-divider">|</span>
-      <span id="toolbar-date" class="toolbar-date">2026年5月15日</span>
-
+      <div class="toolbar-title-wrap">
+        <span class="toolbar-title">Francis <span class="accent">Investment</span></span>
+        <span id="toolbar-date" class="toolbar-date">2026年5月15日</span>
+      </div>
     </div>
     <div class="toolbar-right">
       <div id="ai-status-badge" style="display:flex;align-items:center;gap:8px;padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;white-space:nowrap;">
@@ -39,7 +39,6 @@
         <span id="ai-status-label">量化交易 · 就绪</span>
       </div>
       <a id="btn-think-tank" class="btn btn-outline" href="/think-tank.html" target="_blank" title="打开AI思考舱 — 实时监盘与量化分析可视化" style="color:#00d4ff;border-color:#00d4ff;font-weight:bold;text-decoration:none;">&#9678; AI 思考舱</a>
-      <button id="btn-calendar-toggle" class="btn btn-outline" title="切换日历显示" style="display:none;color:var(--accent);border-color:var(--accent);">📅 日历</button>
     </div>
   </div>
 
@@ -49,6 +48,12 @@
       <div id="pipeline-bar" style="height:100%;width:0%;background:linear-gradient(90deg,#b8942c,#d4a843);border-radius:2px;transition:width 0.3s;"></div>
     </div>
     <span id="pipeline-pct" style="margin-left:8px;color:#94a3b8;">0%</span>
+  </div>
+
+  <!-- Mobile top bar (hidden on desktop, replaces sidebar on mobile) -->
+  <div id="mobile-top-bar">
+    <div id="date-strip"></div>
+    <div id="section-tabs"></div>
   </div>
 
   <!-- Main layout: Sidebar + Content -->
@@ -65,31 +70,34 @@
         <div class="section-nav-title">核心面板</div>
         <div class="section-nav-list" id="section-nav-list">
           <div class="section-nav-item active" data-section="simfolio">
-            <span class="section-nav-icon">💰</span>
+            <span class="section-nav-dot"></span>
             <span class="section-nav-label">模拟交易</span>
             <span id="nav-simfolio-badge" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;background:#fef3c7;color:#92400e;display:none;">LIVE</span>
           </div>
           <div class="section-nav-item" data-section="newsPolicy">
-            <span class="section-nav-icon">📰</span>
+            <span class="section-nav-dot"></span>
             <span class="section-nav-label">时政要点</span>
           </div>
           <div class="section-nav-item" data-section="tradingReport">
-            <span class="section-nav-icon">📊</span>
+            <span class="section-nav-dot"></span>
             <span class="section-nav-label">交易分析与报告</span>
           </div>
           <div class="section-nav-item section-nav-disabled" data-section="holdingsAnalysis">
-            <span class="section-nav-icon">💼</span>
+            <span class="section-nav-dot"></span>
             <span class="section-nav-label">持仓分析</span>
             <span style="margin-left:auto;font-size:10px;padding:2px 6px;border-radius:8px;background:#f1f5f9;color:#94a3b8;">暂不可用</span>
+          </div>
+          <div class="section-nav-item" data-section="usMarket">
+            <span class="section-nav-dot"></span>
+            <span class="section-nav-label">海外市场</span>
+          </div>
+          <div class="section-nav-item" data-section="crossMarket">
+            <span class="section-nav-dot"></span>
+            <span class="section-nav-label">跨市场分析</span>
           </div>
         </div>
       </div>
 
-      <!-- Report List -->
-      <div id="report-list">
-        <div class="report-list-title">已有报告</div>
-        <div id="report-list-items"></div>
-      </div>
     </div>
 
     <!-- ====== CONTENT AREA ====== -->
@@ -120,6 +128,8 @@
 <script src="templates/risk-matrix.js"></script>
 <script src="templates/recommendation-history.js"></script>
 <script src="templates/simfolio.js"></script>
+<script src="templates/us-market.js"></script>
+<script src="templates/cross-market.js"></script>
 <script src="templates/disclaimer-footer.js"></script>
 <script src="data/reports-index.js"></script>
 <script src="data/recommendation-history.js"></script>

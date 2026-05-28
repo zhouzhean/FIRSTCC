@@ -141,4 +141,36 @@ module.exports = {
     knowledgeBaseDays: 30,
     similarityThreshold: 0.6,
   },
+
+  // ---- 海外市场监控 ----
+  US_MARKET: {
+    enabled: true,
+    regularOpenEST: { hour: 9, minute: 30 },
+    regularCloseEST: { hour: 16, minute: 0 },
+    recordIntervalMs: 60000,
+    idleRecordIntervalMs: 300000,
+    overnightSummaryTime: { hour: 5, minute: 0 },
+    symbols: {
+      indices: ['SPY', 'QQQ', 'DIA', 'IWM'],
+      macro: ['VXX', 'UUP', 'TLT'],
+      adrs: ['BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'XPEV', 'LI', 'BILI', 'TME', 'IQ'],
+      sectorETFs: ['SMH', 'XBI', 'TAN', 'ARKQ', 'XLE', 'XLF', 'XAR'],
+      sentiment: ['NVDA', 'AAPL', 'TSLA', 'MSFT', 'GOOGL'],
+    },
+    macroMapping: {
+      'VXX': { name: 'VIX恐慌指数(代理)', desc: 'iPath标普500 VIX ETF — 数值越高=市场越恐慌' },
+      'UUP': { name: '美元指数(代理)', desc: 'PowerShares美元看多ETF — 数值越高=美元越强' },
+      'TLT': { name: '美债20年+(代理)', desc: 'iShares 20+年国债ETF — 价格跌=收益率升=紧缩' },
+    },
+    sectorMapping: {
+      'SMH': '半导体/AI算力', 'XBI': '创新药/AI医疗', 'TAN': '固态电池/储能',
+      'ARKQ': '机器人/具身智能', 'XLE': '有色金属/稀土', 'XLF': '金融',
+      'XAR': '军工/商业航天',
+    },
+    adrMapping: {
+      'BABA': '阿里系/云计算', 'JD': '消费/零售', 'PDD': '消费降级/跨境电商',
+      'BIDU': 'AI/自动驾驶', 'NIO': '新能源车', 'XPEV': '新能源车',
+      'LI': '新能源车', 'BILI': '游戏/Z世代', 'TME': '娱乐/内容', 'IQ': '娱乐/内容',
+    },
+  },
 };
