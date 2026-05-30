@@ -1,6 +1,6 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 + 跨市场分析引擎。Node.js 零外部依赖，24/7 阿里云 ECS 运行，全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪。
+A股量化交易系统 + 跨市场分析引擎 + 周末深度分析。Node.js 零外部依赖，24/7 阿里云 ECS 运行，全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪+周末历史学习。
 
 ---
 
@@ -32,6 +32,7 @@ curl http://8.153.101.112:8765/api/us-market/current
 curl http://8.153.101.112:8765/api/cross-market/analysis
 curl http://8.153.101.112:8765/api/news/latest
 curl http://8.153.101.112:8765/api/factors/performance
+curl http://8.153.101.112:8765/api/weekend-analysis/status
 
 # 手动触发相关性快照（补录丢失的数据点）
 ssh root@8.153.101.112 "cd '/root/FIRSTCC/Francis Investment' && node -e \"
@@ -72,14 +73,15 @@ Francis Investment/
 │   ├── factors/                 #   评分引擎
 │   │   ├── hidden_signals.js    #   ★ H1-H9 隐藏因子（9个）→ computeHiddenSignals()
 │   │   └── composite.js         #   ★ 5维综合评分 → computeCompositeScore()
-│   └── analysis/                #   盘后分析
+│   └── analysis/                #   盘后+周末分析
 │       ├── quant_report.js      #   交易归因+新闻预测
 │       ├── knowledge_base.js    #   因子追踪知识库
 │       ├── cross_market.js      #   ★ 跨市场相关性引擎 + 风险状态机
 │       ├── us_macro.js          #   ★ 美股隔夜总结生成器
-│       └── factor_performance.js #   ★ 因子绩效追踪引擎（命中率/平均收益/趋势）
+│       ├── factor_performance.js #   ★ 因子绩效追踪引擎（命中率/平均收益/趋势）
+│       └── weekend_analyzer.js  #   ★ 周末深度分析引擎（4阶段：聚合→K线→分析→上下文）
 ├── report-engine/               # ★ 前端（纯静态）
-│   ├── index.html               #   主仪表板（7个section，含海外市场+跨市场分析）
+│   ├── index.html               #   主仪表板（8个section，含海外市场+跨市场分析+周末深度分析）
 │   ├── think-tank.html          #   ★ AI 思考舱（SSE实时+Canvas指数折线图+扫描记录+因子绩效追踪）
 │   ├── app.js                   #   ★ 前端控制器（section导航+异步直渲染+移动端组件+日期过滤）
 │   ├── style.css                #   仪表板样式（桌面端+移动端≤720px重写）
@@ -87,10 +89,12 @@ Francis Investment/
 │   │   ├── css.js               #   报告内容样式
 │   │   ├── us-market.js         #   ★ 海外市场模板（玻璃拟态白主题）
 │   │   ├── cross-market.js      #   ★ 跨市场分析模板（Canvas半圆仪表盘+相关性矩阵）
+│   │   ├── weekend-analysis.js  #   ★ 周末深度分析模板（相似度卡片+危机仪表盘+板块轮动矩阵+因子效能）
 │   │   └── ...                  #   (其他模板: simfolio, news-policy, holdings-analysis, etc.)
 │   └── data/
-│       ├── simfolio/            #   ★ 运行时：portfolio.json + scheduler_state.json + factor_performance.json
+│       ├── simfolio/            #   ★ 运行时：portfolio.json + scheduler_state.json + factor_performance.json + weekend_context.json
 │       ├── us_market/           #   ★ 运行时：us_latest.json + correlation_history.json + us_close_*.json
+│       ├── market_history/      #   ★ 历史K线存档：indices/sh000001.json + sz399001.json + sz399006.json (Eastmoney日线)
 │       ├── events/              #   每日事件日志 YYYY-MM-DD.json
 │       ├── summaries/           #   每日盘后总结 YYYY-MM-DD.json
 │       └── knowledge_base/      #   AI 知识库
@@ -113,6 +117,7 @@ Francis Investment/
 - `_runDailySummary()` 异步 fire-and-forget；16:00 触发 → 盘后总结 + **相关性快照**（US ETF → A股板块）
 - 事件日志仅内存保存，`stop()` 时才写入磁盘
 - **因子绩效追踪**：每次全量扫描完成后计算并广播因子绩效数据 → SSE `factor_perf` 事件
+- **周末深度分析**：周六/周日自动启动→每15分钟一轮→拉取8年历史K线→历史相似度匹配+危机预警+板块轮动+因子效能→生成 `weekend_context.json` 供周一交易决策使用
 
 ### 因子绩效追踪（factor_performance.js）
 
@@ -153,6 +158,8 @@ Francis Investment/
 - 卖出：硬止损 -8% / 软止损 评分<50 / 移动止盈
 - **T+1 严格限制**：当天买入的股票只有硬止损(-8%)可触发卖出，移动止盈/止盈/预警当天不生效
 - `checkRiskThresholds` 中 `isBoughtToday` 检查 → 跳过非止损警报
+- **周末上下文注入**：`loadWeekendContext()` 读取 `weekend_context.json` → `cross_market`（恐慌/避险全市场-3分+仓位×0.5）、`sector_preference`（`WEEKEND_SECTOR_KEYWORDS` 中文关键词匹配板块+3分）、`position_sizing`（防守×0.5）、`regime_alert`（风险惩罚）
+- `WEEKEND_SECTOR_KEYWORDS` 使用中文板块名直接匹配（如"半导体/AI算力"），不再需要英中转译
 - **portfolio.json.bak** 自动备份
 
 ### 数据源（见 config.js 完整配置）
@@ -176,6 +183,31 @@ Francis Investment/
 
 ⚠️ 需要 5 个交易日数据后相关性矩阵才有统计意义。16:00 快照若被服务器重启中断，当天数据会丢失（fire-and-forget）。
 
+### 周末深度分析引擎（analysis/weekend_analyzer.js）
+
+周六/周日全天自动运行，4 阶段分析循环，**所有输出为中文（无 emoji）**：
+
+**Phase 1 — 数据聚合**：加载所有 summaries/events/knowledge_base/portfolio/correlation_history/factor_performance → 构建市场画像
+
+**Phase 2 — 历史K线采集**：从 Eastmoney API 拉取上证/深证/创业板日K线（首次~2000条=~8年），存到 `data/market_history/indices/`，后续增量更新
+
+**Phase 3 — 深度分析**：
+- **历史相似度**：Z-score 标准化 6 维特征向量（涨跌幅/量比/上涨天数占比/量趋势/ATR/新高新低比）→ 余弦相似度匹配 → top 5 最相似时期（5日滑动窗口），展示后续 5/10/20 日走势。相似度标签：极高(>80%)/高(60-80%)/中等(40-60%)/低(<40%)
+- **危机预警**：6 维度加权评分（流动性25%/估值20%/市场宽度20%/北向15%/两融10%/波动率10%）→ 综合0-100分 → 5 档中文标签（高风险/风险偏高/风险适中/低风险/极低风险）+ 仓位建议
+- **板块轮动**：8×8 领先/滞后/同步矩阵（中文板块名+中文关系值）。矩阵行=该板块相对其他板块的关系（横向读判断谁是龙头），列=其他板块相对该板块的关系（纵向读判断谁被拖着走）。阶段判定：防御期/周期扩散/回调洗牌，`_SECTOR_DISPLAY` 映射中英文板块名
+- **因子效能**：9 因子 H1-H9 全中文名+分类（技术/基本面/市场），命中率/信号次数/趋势，数据不足时 hitRate 为 null
+
+**Phase 4 — 增强上下文**：生成 `data/simfolio/weekend_context.json`（insights数组，全中文，有效期覆盖到周一），周一 `simfolio.makeTradingDecisions()` 自动读取并注入：
+- `cross_market` → 恐慌/避险时全市场 -3 分 + 仓位 ×0.5（新增）
+- `regime_alert` → 额外风险惩罚
+- `sector_preference` → `WEEKEND_SECTOR_KEYWORDS` 中文直接匹配偏好板块买入候选 +3 分
+- `position_sizing` → 现金分配系数调整（防守模式 ×0.5）
+- `historical_parallel` → 历史相似窗口方向提示
+
+**循环机制**：首轮执行 Phase 1-4（含K线拉取），后续每 15 分钟执行 Phase 3-4，每 2 小时增量拉取 K 线。
+
+**集成点**：scheduler `_tick()` 检测周末→`startWeekendAnalysis()`；非周末→`stopWeekendAnalysis()`；SSE `weekend` 事件广播进度。
+
 ### 盘后总结生成流程
 
 `16:00后 tick` → `_runDailySummary()` → 采集指数+持仓+交易+新闻 → `quantReport.buildTradeAnalysis()` → 写入 `summaries/YYYY-MM-DD.json` + `knowledge_base/YYYY-MM-DD.json` + 触发相关性快照
@@ -187,7 +219,7 @@ Francis Investment/
 ### Section 导航（index.html / app.js）
 
 **桌面端**：左侧 sidebar 苹果风玻璃按钮（毛玻璃 `backdrop-filter: blur` + 半透明白底 + 渐变小圆点替代 emoji + 金色激活态发光）
-**移动端 (≤720px)**：顶部 sticky `#mobile-top-bar`，包含 date-strip + section-tabs（5标签页：模拟交易/时政要点/交易分析与报告/海外市场/跨市场分析，可左右滑动）。持仓分析和 AI 知识库不在移动端 tabs 中显示。
+**移动端 (≤720px)**：顶部 sticky `#mobile-top-bar`，包含 date-strip + section-tabs（模拟交易/时政要点/交易分析与报告/海外市场/跨市场分析，周末增加"周末分析"，可左右滑动）。持仓分析和 AI 知识库不在移动端 tabs 中显示。
 
 | ID | 标签 | 渲染方式 | 时间限制 |
 |----|------|---------|---------|
@@ -197,11 +229,12 @@ Francis Investment/
 | `holdingsAnalysis` | 持仓分析 | `renderSectionByTime()` | 16:00后 |
 | `usMarket` | 海外市场 | `renderUSMarketDirect()` → API `/api/us-market/current` | 始终可用 |
 | `crossMarket` | 跨市场分析 | `renderCrossMarketDirect()` → API `/api/cross-market/analysis` | 始终可用 |
+| `weekendAnalysis` | 周末深度分析 | `renderWeekendAnalysisDirect()` → API `/api/weekend-analysis/report` | 仅周末显示 |
 | `knowledgeBase` | AI 知识库 | `renderKnowledgeBaseSection()` → API | 始终可用 |
 
-自动交易 toast 通知：右上角滑入，毛玻璃背景 + 关闭按钮 + 点击关闭 + 6s 自动消失 + 多条堆叠不覆盖 + `_notifiedTradeIds` 对象防重复弹窗。
+自动交易 toast 通知：右上角滑入，毛玻璃背景 + 关闭按钮 + 点击关闭 + 6s 自动消失 + 多条堆叠不覆盖。`_notifiedTradeIds` 存 localStorage，按日期隔离——当天弹过的交易不再弹，过了当天自动清除。页面刷新/跨天不会重复弹窗。
 
-`usMarket` 和 `crossMarket` 使用**异步直渲染模式**：清空 contentArea → 创建容器 → `setTimeout` 后 fetch API → 填充 DOM。绕过 `renderTimeAwareSectionDirect()`，在 `renderCurrentSection()` 中直接分发。
+`usMarket`、`crossMarket` 和 `weekendAnalysis` 使用**异步直渲染模式**：清空 contentArea → 创建容器 → `setTimeout` 后 fetch API → 填充 DOM。绕过 `renderTimeAwareSectionDirect()`，在 `renderCurrentSection()` 中直接分发。
 
 ### 日历与历史日期（app.js）
 
@@ -234,17 +267,32 @@ AI 思考舱，独立页面。两栏布局：
 - 实时思维显示（扫描线动画 + 思维内容 + 进度条）
 - **指数分钟折线图**（Canvas 百分比模式：上证红/深证蓝/北证绿，30s 轮询）
 - **今日扫描记录**：显示当日扫描历史（次数 + TOP5 股票名称）
-- **因子绩效追踪**：3×3 卡片网格，每个因子一张卡片，含 Canvas 圆形仪表盘（命中率%）+ 微型折线图（信号趋势）+ 状态标签（HOT/STABLE/COLD）。数据来自 `/api/factors/performance` + SSE `factor_perf` 事件，页面加载 1.5s 后自动拉取
+- **因子绩效追踪**：3×3 卡片网格，每个因子一张卡片，含 Canvas 圆形仪表盘（命中率%）+ 微型折线图（信号趋势）+ 状态标签（HOT/STABLE/COLD）。数据来自 `/api/factors/performance` + SSE `factor_perf` 事件
 
 **右侧 — 隐藏因子扫描**：
 - H1-H9 因子柱状图（触发次数）
 - 评分分布直方图（<50/50-60/60-70/70-80/80+）
 - 市场情报（LHB数/板块资金/北向情绪）
 - TOP 5 最新推荐
+- **智能风险中枢**：3张动态卡片（资金面热度/波动率状态/Smart Money），数据来自 `/api/market/microstructure`，60s 轮询，含脉冲呼吸灯+柱状图+波动率指针+板块标签等动态效果
 
 **底部**：事件时间线 + 持仓监控条
 
 SSE 实时事件流：`scan_start` → `progress` → `stock_analyzed` → `stats` → `scan_complete` → `factor_perf` + trade/position/state/alert/usmarket
+
+### 智能风险中枢（/api/market/microstructure）
+
+聚合 A 股资金面 + 波动率数据，一次请求返回三个维度：
+
+| 卡片 | 指标 | 数据源 |
+|------|------|--------|
+| **资金面热度** | 北向情绪（bullish/slightly_bullish/neutral/bearish）+ 连续流入天数 + 5日方向柱状图 | `north_bound.js` → Eastmoney kamt.kline |
+| **波动率状态** | 上证 20 日年化历史波动率 + 5档标签（低/正常/偏高/高）+ 渐变色指针 | 每日总结 `summaries/YYYY-MM-DD.json` 指数收盘价 |
+| **Smart Money** | 主力（超大单）vs 散户（小单）资金背离度 + 板块流入/流出标签 | `capital_flow.js` → Eastmoney 板块资金流 |
+
+- 北向数据 `computeSentiment()` 分类：连续 ≥5 日流入 = bullish，≥3 日 = slightly_bullish，单日流出 >50 亿 = bearish
+- 波动率从 daily summary 的指数 close price 计算 log return → annualized HV
+- `computeFlowPerformance()` 在 `factor_performance.js` 中预留了资金面信号准确率追踪接口
 
 ### 关键 API（详见 mosaic_server.js）
 
@@ -271,7 +319,12 @@ SSE 实时事件流：`scan_start` → `progress` → `stock_analyzed` → `stat
 | `/api/cross-market/risk-state` | 风险状态机单独查询 |
 | `/api/cross-market/correlation` | 相关性矩阵单独查询 |
 | `/api/factors/performance` | ★ 因子绩效追踪数据 |
+| `/api/market/microstructure` | ★ 智能风险中枢（北向+波动率+Smart Money） |
 | `/api/sectors/live` | 板块实时行情（Sina 实时，仅当日） |
+| `/api/weekend-analysis/status` | ★ 周末分析进度/状态 |
+| `/api/weekend-analysis/report` | ★ 周末完整报告（相似度+危机+轮动+因子） |
+| `/api/weekend-analysis/context` | ★ 周末增强上下文（simfolio 周一读取） |
+| `/api/weekend-analysis/history` | 历史相似度匹配结果 |
 
 ---
 
@@ -282,8 +335,13 @@ SSE 实时事件流：`scan_start` → `progress` → `stock_analyzed` → `stat
 - 每只潜力股单独查询，PE 亏损写 "亏损" 或 null
 - section5、recommendation-history、section6 三处数据完全一致
 
+### 部署优先级
+- **云端永远优先**：任何新功能/修复完成后，立即 scp 到 `root@8.153.101.112:/root/FIRSTCC/Francis Investment/` 并 `systemctl restart mosaic`
+- 部署文件清单：`mosaic_server.js`, `mosaic/` 下所有改动, `report-engine/` 下所有前端文件
+- 部署后必须 curl 验证云端 API 返回正确
+
 ### 文件修改规则
-- **绝不提交运行时数据**：`portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `us_close_*.json`, `us_intraday_*.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`
+- **绝不提交运行时数据**：`portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `us_close_*.json`, `us_intraday_*.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`
 - **config.js 是唯一配置入口**：改阈值/权重/时间表/US_MARKET符号表只需改这一个文件
 - **前端无 fetch polyfill**：旧浏览器可能不支持
 - **`report-engine/data/` 是 DATA_DIR**：所有运行时数据在此目录下，不在 `mosaic/` 下
@@ -312,3 +370,8 @@ SSE 实时事件流：`scan_start` → `progress` → `stock_analyzed` → `stat
 - **美股 Sina gb_ API 无官方文档**：延迟或限流时可能返回空数据，采集器已设超时
 - **因子绩效追踪需 ≥2 天数据**：命中率在积累 2 天 scan_records 后才开始计算，首日只显示信号计数
 - **scan_records 文件的 signalCounts**：全量扫描（full）写入信号计数，盘中扫描（mid）记录 `signals` 字段（非 `hiddenSignals`），`_saveLastPipelineResult` 同时兼容两种字段名
+- **周末分析中文化**：所有输出（API + UI 模板）均为中文，无 emoji。`weekend_context.json` 中板块名用中文，simfolio 用 `WEEKEND_SECTOR_KEYWORDS` 中文匹配
+- **cross_market 风险状态 5 档**：panic(恐慌)/risk_off(避险)/risk_on(风险偏好)/slightly_bullish(温和看涨)/neutral(中性)，全部有中文映射
+- **因子命中率需要 ≥2 天 scan_records**：`factor_performance.json` 中 `factors` 为数组（非对象），需用 `Array.find` 查找。数据不足时 hitRate 为 null
+- **correlation_history.json 不含"金融"板块**：8×8 矩阵中金融行/列全为 "-"（22 个），是数据源限制而非 bug
+- **周末分析引擎 `_runFullCycle` 为 async 自循环**：通过 setInterval 调用，错误不会冒泡。首次K线拉取 ~3-5s（3只指数 × Eastmoney API），后续增量仅拉差异天数。`weekend_context.json` 有效期 3 天覆盖到周一
