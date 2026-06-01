@@ -1,6 +1,6 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 + 跨市场分析引擎 + 周末深度分析。Node.js 零外部依赖，24/7 阿里云 ECS 运行，全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪+周末历史学习。
+A股量化交易系统 + 跨市场分析引擎 + 周末深度分析。Node.js 零外部依赖，24/7 阿里云 ECS 运行，全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪+周末历史学习。**所有分析面板均回馈到模拟交易引擎，形成"学习循环"。**
 
 ---
 
@@ -79,7 +79,8 @@ Francis Investment/
 │       ├── cross_market.js      #   ★ 跨市场相关性引擎 + 风险状态机
 │       ├── us_macro.js          #   ★ 美股隔夜总结生成器
 │       ├── factor_performance.js #   ★ 因子绩效追踪引擎（命中率/平均收益/趋势）
-│       └── weekend_analyzer.js  #   ★ 周末深度分析引擎（4阶段：聚合→K线→分析→上下文）
+│       ├── weekend_analyzer.js  #   ★ 周末深度分析引擎（4阶段：聚合→K线→分析→上下文+验证反馈）
+│       ├── weekend_verifier.js  #   ★ 周末分析验证引擎（相似度/危机/板块/因子 4维验证→反馈到下周）
 ├── report-engine/               # ★ 前端（纯静态）
 │   ├── index.html               #   主仪表板（8个section，含海外市场+跨市场分析+周末深度分析）
 │   ├── think-tank.html          #   ★ AI 思考舱（SSE实时+Canvas指数折线图+扫描记录+因子绩效追踪）
@@ -162,6 +163,23 @@ Francis Investment/
 - `WEEKEND_SECTOR_KEYWORDS` 使用中文板块名直接匹配（如"半导体/AI算力"），不再需要英中转译
 - **portfolio.json.bak** 自动备份
 
+### 反馈闭环（4条"学习回路"）
+
+所有分析面板的结果均回馈到模拟交易引擎，形成 AI 量化交易员持续进化的循环：
+
+| # | 回路 | 数据流 | 核心文件 |
+|---|------|--------|---------|
+| **1** | 周末验证→分析引擎 | 上周验证报告→`_loadLastVerification()`→调整本周 insight 权重/门槛/方向（5维：危机门槛±10/相似度降权/板块权重归零/板块偏好翻转/仓位建议抑制）→`weekend_context.json` | `weekend_analyzer.js` + `weekend_verifier.js` |
+| **2** | 北向资金→评分降权 | Pipeline 记录 NB sentiment→`updateNBSentimentRecord()`→计算命中率→`getNBPerformance()`→`composite.js` 按 HOT/COLD 动态调整 NB 权重（COLD=×0.33） | `factor_performance.js` + `composite.js` + `pipeline.js` + `scheduler.js` |
+| **3** | 知识库→交易决策 | 每日分析存入 knowledge_base→`getKnowledgeSummary()`→`checkThinkTankGate()` 检查历史高效因子当前是否偏冷→触发防御模式 | `knowledge_base.js` + `simfolio.js` |
+| **4** | 思考舱→防御门 | 4维综合评分（因子健康+持仓压力+跨市场风险+知识库历史）→score≥3→防御模式→跳过所有买入（仅允许卖出） | `simfolio.js` (`checkThinkTankGate()`) + `mosaic_server.js` (`generateTodaysVerdict()`) |
+
+**关键设计原则**：
+- **闭环 1+2 是"学习回路"**：系统从过去的预测错误中学习，自动调整参数——周末分析的验证结果反馈到下一周的预测，北向资金的命中率反馈到综合评分权重
+- **闭环 3+4 是"防御回路"**：系统综合多个维度判断当前市场是否适合交易——知识库的历史经验、因子信号的健康度、持仓的压力状态、跨市场的宏观风险——形成"思维舱"的防御性判断
+- 所有回路需要真实交易数据积累才能生效（验证反馈需1-2周，NB绩效需≥5信号日，知识库需≥2天）
+- `checkThinkTankGate()` 在 `makeTradingDecisions()` 的 Step 3.5（市场方向门之后、宏观惩罚之前）执行
+
 ### 数据源（见 config.js 完整配置）
 
 腾讯 `qt.gtimg.cn`（主力，含PE）+ Sina `hq.sinajs.cn`（备选，无PE）+ Eastmoney（资金流/龙虎榜/北向）+ Sina 财经 roll（新闻）
@@ -197,11 +215,12 @@ Francis Investment/
 - **板块轮动**：8×8 领先/滞后/同步矩阵（中文板块名+中文关系值）。矩阵行=该板块相对其他板块的关系（横向读判断谁是龙头），列=其他板块相对该板块的关系（纵向读判断谁被拖着走）。阶段判定：防御期/周期扩散/回调洗牌，`_SECTOR_DISPLAY` 映射中英文板块名
 - **因子效能**：9 因子 H1-H9 全中文名+分类（技术/基本面/市场），命中率/信号次数/趋势，数据不足时 hitRate 为 null
 
-**Phase 4 — 增强上下文**：生成 `data/simfolio/weekend_context.json`（insights数组，全中文，有效期覆盖到周一），周一 `simfolio.makeTradingDecisions()` 自动读取并注入：
+**Phase 4 — 增强上下文（含验证反馈）**：`_loadLastVerification()` 读取上周验证报告→5维调整本周 insight（危机门槛、相似度权重、板块偏好权重/方向、仓位建议）→生成 `data/simfolio/weekend_context.json`（insights数组+verificationContext，全中文，有效期覆盖到周一），周一 `simfolio.makeTradingDecisions()` 自动读取并注入：
 - `cross_market` → 恐慌/避险时全市场 -3 分 + 仓位 ×0.5（新增）
-- `regime_alert` → 额外风险惩罚
-- `sector_preference` → `WEEKEND_SECTOR_KEYWORDS` 中文直接匹配偏好板块买入候选 +3 分
-- `position_sizing` → 现金分配系数调整（防守模式 ×0.5）
+- `regime_alert` → 额外风险惩罚（验证反馈可能调整门槛和权重）
+- `sector_preference` → `WEEKEND_SECTOR_KEYWORDS` 中文直接匹配偏好板块买入候选 +3 分（验证反馈可能降权归零或翻转方向）
+- `position_sizing` → 现金分配系数调整（防守模式 ×0.5，验证反馈可能抑制过度减仓）
+- `historical_parallel` → 历史相似窗口方向提示（验证反馈 D/F 级时权重归零）
 - `historical_parallel` → 历史相似窗口方向提示
 
 **循环机制**：首轮执行 Phase 1-4（含K线拉取），后续每 15 分钟执行 Phase 3-4，每 2 小时增量拉取 K 线。
@@ -341,7 +360,7 @@ SSE 实时事件流：`scan_start` → `progress` → `stock_analyzed` → `stat
 - 部署后必须 curl 验证云端 API 返回正确
 
 ### 文件修改规则
-- **绝不提交运行时数据**：`portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `us_close_*.json`, `us_intraday_*.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`
+- **绝不提交运行时数据**：`portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `us_close_*.json`, `us_intraday_*.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`, `weekend_archive/*.json`
 - **config.js 是唯一配置入口**：改阈值/权重/时间表/US_MARKET符号表只需改这一个文件
 - **前端无 fetch polyfill**：旧浏览器可能不支持
 - **`report-engine/data/` 是 DATA_DIR**：所有运行时数据在此目录下，不在 `mosaic/` 下
