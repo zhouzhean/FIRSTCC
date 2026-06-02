@@ -402,7 +402,14 @@ async function fetchIndices() {
 
   // If Eastmoney failed, try Tencent for indices
   if (indices.length === 0) {
-    return fetchIndicesTencent();
+    indices.push(...(await fetchIndicesTencent()));
+  }
+
+  // Normalize codes: remove sh/sz/s_ prefixes for consistent lookup
+  for (const idx of indices) {
+    if (idx.code) {
+      idx.code = idx.code.replace(/^(s_)?(sh|sz)/, '');
+    }
   }
 
   return indices;
@@ -528,8 +535,45 @@ async function fetchKline(code, days = 30) {
 
 /**
  * Fetch detailed financial data for a single stock.
+ * Dual-source: push2 API (fast) + datacenter API (more complete fundamental data).
+ * Merges both sources — V2 fills in any null fields from V1.
  */
 async function fetchStockDetail(code) {
+  // V1: push2 API (fast, broad coverage)
+  let detailV1 = null;
+  try {
+    detailV1 = await _fetchStockDetailV1(code);
+  } catch (e) { /* continue to V2 */ }
+
+  // V2: datacenter financial API (more complete ROE/debt/revenue data)
+  let detailV2 = null;
+  try {
+    detailV2 = await _fetchStockDetailV2(code);
+  } catch (e) { /* use V1 only */ }
+
+  const d1 = detailV1 || {};
+  const d2 = detailV2 || {};
+
+  // Merge: V2 fills any null fields in V1
+  return {
+    roe: d1.roe != null ? d1.roe : (d2.roe != null ? d2.roe : null),
+    npGrowth: d1.npGrowth != null ? d1.npGrowth : (d2.npGrowth != null ? d2.npGrowth : null),
+    netProfit: d1.netProfit != null ? d1.netProfit : (d2.netProfit != null ? d2.netProfit : null),
+    revenue: d1.revenue != null ? d1.revenue : (d2.revenue != null ? d2.revenue : null),
+    revenueGrowth: d1.revenueGrowth != null ? d1.revenueGrowth : (d2.revenueGrowth != null ? d2.revenueGrowth : null),
+    debtRatio: d1.debtRatio != null ? d1.debtRatio : (d2.debtRatio != null ? d2.debtRatio : null),
+    npm: d1.npm != null ? d1.npm : (d2.npm != null ? d2.npm : null),
+    ocfPerShare: d1.ocfPerShare != null ? d1.ocfPerShare : (d2.ocfPerShare != null ? d2.ocfPerShare : null),
+    dividendYield: d1.dividendYield != null ? d1.dividendYield : (d2.dividendYield != null ? d2.dividendYield : null),
+    industry: d1.industry || d2.industry || null,
+    sector: d1.sector || d2.sector || null,
+  };
+}
+
+/**
+ * V1: push2 API — fast, may have nulls for fundamental fields.
+ */
+async function _fetchStockDetailV1(code) {
   const market = code.startsWith('6') ? '1' : '0';
   const secid = market + '.' + code;
 
@@ -565,14 +609,59 @@ async function fetchStockDetail(code) {
   }
 }
 
+/**
+ * V2: Eastmoney datacenter financial main-indicator API.
+ * Often provides more complete ROE, debt ratio, revenue growth data.
+ */
+async function _fetchStockDetailV2(code) {
+  const url = 'https://datacenter-web.eastmoney.com/api/data/v1/get' +
+    '?reportName=RPT_DMSK_FN_MAININDICATOR' +
+    '&columns=SECURITY_CODE,ROE_WEIGHT,DEBT_ASSET_RATIO,' +
+    'OPERATE_INCOME_YOY,NETPROFIT_YOY,SALE_GROSS_MARGIN,' +
+    'OPERATE_CASH_FLOW_PER_SHARE,FCFF' +
+    '&filter=(SECURITY_CODE=%22' + code + '%22)' +
+    '&pageSize=1&sortColumns=REPORT_DATE&sortTypes=-1';
+
+  try {
+    const res = await fetchJSON(url);
+    if (!res || !res.result || !res.result.data || res.result.data.length === 0) return null;
+
+    const d = res.result.data[0];
+    return {
+      roe: d.ROE_WEIGHT != null ? parseFloat(d.ROE_WEIGHT) : null,
+      npGrowth: d.NETPROFIT_YOY != null ? parseFloat(d.NETPROFIT_YOY) : null,
+      netProfit: null,   // not available in this endpoint
+      revenue: null,     // not available in this endpoint
+      revenueGrowth: d.OPERATE_INCOME_YOY != null ? parseFloat(d.OPERATE_INCOME_YOY) : null,
+      debtRatio: d.DEBT_ASSET_RATIO != null ? parseFloat(d.DEBT_ASSET_RATIO) : null,
+      npm: d.SALE_GROSS_MARGIN != null ? parseFloat(d.SALE_GROSS_MARGIN) : null,
+      ocfPerShare: d.OPERATE_CASH_FLOW_PER_SHARE != null ? parseFloat(d.OPERATE_CASH_FLOW_PER_SHARE) : null,
+      dividendYield: null, // not available
+      industry: null,
+      sector: null,
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
 // ---- Primary fetchAllStocks (with fallback) ----
 
 /**
  * Fetch all A-share stocks.
- * Tries Tencent (has PE) first, then Sina, then Eastmoney.
+ * Eastmoney first — provides PE/PB/capital flow data (majorNetFlow etc.) for ALL stocks.
+ * Tencent fallback — PE/PB but no flow data. Sina last resort — stable but no PE.
  */
 async function fetchAllStocks() {
-  // 1. Tencent first (provides PE)
+  // 1. Eastmoney first: provides PE, PB, turnoverRate AND capital flow data
+  try {
+    const stocks = await fetchAllStocksEastmoney();
+    if (stocks && stocks.length > 500) return stocks;
+  } catch (e) {
+    // Eastmoney failed, continue to Tencent
+  }
+
+  // 2. Tencent fallback (provides PE, no flow data)
   try {
     const stocks = await fetchAllStocksTencent();
     if (stocks && stocks.length > 500) return stocks;
@@ -580,7 +669,7 @@ async function fetchAllStocks() {
     // Tencent failed, continue
   }
 
-  // 2. Sina fallback (no PE but stable)
+  // 3. Sina last resort (stable but no PE)
   return fetchAllStocksSina();
 }
 

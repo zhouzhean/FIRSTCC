@@ -17,6 +17,7 @@ const config = require('./config');
 const SIMFOLIO_DIR = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
 const PORTFOLIO_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json');
 const PORTFOLIO_BAK_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json.bak');
+const WEEKEND_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'weekend_context.json');
 
 // ---- Portfolio Management ----
 
@@ -174,6 +175,147 @@ function getSectorExposure(pf, targetSector, excludeStockCode) {
  * @param {Array} indices - Market index data (for benchmark tracking)
  * @param {Object} macroContext - Optional macro risk context from cross-market engine
  */
+
+/**
+ * Load weekend analysis context from disk.
+ * Returns null if file not found, expired, or invalid.
+ */
+function loadWeekendContext() {
+  if (!fs.existsSync(WEEKEND_CONTEXT_FILE)) return null;
+  try {
+    const ctx = JSON.parse(fs.readFileSync(WEEKEND_CONTEXT_FILE, 'utf8'));
+    const now = new Date().toISOString().slice(0, 10);
+    if (ctx.validUntil >= now && ctx.insights && ctx.insights.length > 0) {
+      return ctx;
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
+ * Think-Tank defensive gate — the system's own "brain" evaluates whether
+ * conditions are too risky for new buys, regardless of individual stock scores.
+ *
+ * Checks three dimensions:
+ *   1. Factor health: ≥2 COLD factors → signals may be unreliable (was ≥3)
+ *   2. Portfolio stress: ≥3 positions AND total return < -3% → already hurting
+ *   3. Consecutive loss days: ≥3 days of NAV decline → persistent drawdown
+ *   4. Cross-market risk: panic/risk_off regime → macro headwinds
+ *   5. Signal-score divergence: many signals triggered but none reach buy threshold
+ *
+ * Returns { defensive: bool, reason: string, score: number }
+ * When defensive=true, ALL buy decisions are skipped (sells still allowed).
+ */
+function checkThinkTankGate(pf, pipelineResults) {
+  let score = 0;
+  const reasons = [];
+
+  // 1. Factor health check — lowered threshold: 2+ COLD factors is meaningful degradation
+  try {
+    const factorPerf = require('./analysis/factor_performance');
+    const coldFactors = factorPerf.getColdFactors();
+    if (coldFactors.size >= 2) {
+      score += 3;
+      reasons.push('因子信号大面积偏冷(' + coldFactors.size + '/9个COLD)');
+    } else if (coldFactors.size >= 1) {
+      score += 1;
+      reasons.push('存在' + coldFactors.size + '个冷因子');
+    }
+  } catch (_) { /* factor_performance not available */ }
+
+  // 2. Portfolio stress check
+  const snapshot = getSnapshot(pf);
+  const posCount = pf.positions.length;
+  const totalReturn = snapshot.totalReturn;
+  if (posCount >= 3 && totalReturn < -3) {
+    score += 3;
+    reasons.push('持仓' + posCount + '只浮亏' + totalReturn.toFixed(1) + '%');
+  } else if (totalReturn < -5) {
+    score += 2;
+    reasons.push('总收益低于-5%');
+  }
+
+  // 3. Consecutive loss days — persistent drawdown indicates systemic issues
+  const navs = pf.dailyNav || [];
+  let consecutiveLossDays = 0;
+  for (let i = navs.length - 1; i >= 0; i--) {
+    const ret = navs[i].return_ != null ? navs[i].return_ : 0;
+    if (ret < 0) consecutiveLossDays++;
+    else break;
+  }
+  if (consecutiveLossDays >= 3) {
+    score += 2;
+    reasons.push('连续' + consecutiveLossDays + '日净值回撤');
+  }
+
+  // 4. Cross-market risk check
+  try {
+    const weekendCtx = loadWeekendContext();
+    if (weekendCtx) {
+      for (const insight of (weekendCtx.insights || [])) {
+        if (insight.type === 'cross_market') {
+          const txt = (insight.suggestedAction || '') + (insight.detail || '');
+          if (txt.includes('防御模式') || txt.includes('恐慌') || txt.includes('避险')) {
+            score += 2;
+            reasons.push('跨市场风险：防御模式');
+            break;
+          }
+        }
+        if (insight.type === 'regime_alert' && insight.weight >= 3) {
+          score += 1;
+          reasons.push('周末危机预警活跃');
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 5. Signal-score divergence: many signals triggered but none reach buy threshold
+  // This means the market is generating noise signals but no actionable opportunities
+  if (pipelineResults && pipelineResults.length > 0) {
+    const analyzed = pipelineResults.length;
+    const highSignalCount = pipelineResults.filter(r =>
+      r.hiddenSignals && r.hiddenSignals.length >= 2).length;
+    const buyEligible = pipelineResults.filter(r =>
+      r.compositeScore >= 55).length;
+    if (analyzed >= 20 && buyEligible === 0 && highSignalCount >= 5) {
+      score += 2;
+      reasons.push('信号-评分背离：' + highSignalCount + '只触发信号但0只达买入标准');
+    }
+  }
+
+  // 6. Knowledge base — historical factor combo check
+  try {
+    const knowledgeBase = require('./analysis/knowledge_base');
+    const summary = knowledgeBase.getKnowledgeSummary();
+    if (summary && summary.totalDays >= 2 && summary.factorTracker) {
+      const ranked = (summary.factorTracker.factors || []).slice(0, 3).map(f => f.id);
+      const coldNow = [];
+      try {
+        const fp = require('./analysis/factor_performance');
+        const cold = fp.getColdFactors();
+        for (const fid of ranked) {
+          if (cold.has(fid)) coldNow.push(fid);
+        }
+      } catch (_) {}
+      if (coldNow.length >= 2) {
+        score += 1;
+        reasons.push('知识库：历史高效因子' + coldNow.join('/') + '当前均偏冷');
+      }
+    }
+  } catch (_) { /* knowledge_base not available */ }
+
+  // Decision: score >= 2 → defensive (was >= 3, lowered for earlier protection)
+  const defensive = score >= 2;
+
+  return {
+    defensive,
+    score,
+    reason: defensive
+      ? '思维舱综合评分' + score + '分：' + reasons.join('；') + ' — 跳过所有买入'
+      : (reasons.length > 0 ? '思维舱关注：' + reasons.join('；') : '思维舱评估：信号正常'),
+  };
+}
+
 function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
@@ -204,19 +346,92 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
-  // ---- Step 3: Apply macro risk penalty ----
+  // ---- Step 3: Market direction gate ----
+  // If Shanghai Composite is down more than 0.5%, skip all buy decisions.
+  // Sells are still allowed — if we need to cut losses, we do it regardless.
+  // This prevents buying into a falling market.
+  const shIdx = indices && indices.find(i => i.code === '000001' || i.code === 'sh000001');
+  if (shIdx && shIdx.changePercent != null && shIdx.changePercent < -0.5) {
+    // Market is falling — skip buys, only process sells
+    const sellDecisions = decisions.filter(d => d.action === 'sell');
+    const executedTrades = [];
+    for (const dec of sellDecisions) {
+      if (dec.action === 'sell') {
+        const trade = executeSell(pf, dec, today);
+        if (trade) executedTrades.push(trade);
+      }
+    }
+
+    // Update position prices and NAV even when skipping buys
+    for (const pos of pf.positions) {
+      const stockData = pipelineResults.find(r => r.code === pos.code);
+      if (stockData) pos.currentPrice = stockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+
+    // Log the gate event
+    const pf2 = loadPortfolio(); // re-read to get updated state
+    return {
+      decisions: sellDecisions,
+      executed: executedTrades,
+      snapshot: getSnapshot(pf),
+      marketGateActive: true,
+      marketGateReason: '上证跌幅' + shIdx.changePercent.toFixed(2) + '%超过-0.5%阈值，跳过所有买入',
+    };
+  }
+
+  // ---- Step 3.5: Think-Tank defensive gate ----
+  // Synthesizes factor health, portfolio status, and cross-market risk
+  // into a single defensive-or-not decision. When defensive, skip all buys
+  // regardless of market direction — the system's own "brain" says don't trade.
+  const thinkTankGate = checkThinkTankGate(pf, pipelineResults);
+  if (thinkTankGate.defensive) {
+    const sellDecisions = decisions.filter(d => d.action === 'sell');
+    const executedTrades = [];
+    for (const dec of sellDecisions) {
+      if (dec.action === 'sell') {
+        const trade = executeSell(pf, dec, today);
+        if (trade) executedTrades.push(trade);
+      }
+    }
+
+    for (const pos of pf.positions) {
+      const stockData = pipelineResults.find(r => r.code === pos.code);
+      if (stockData) pos.currentPrice = stockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+
+    return {
+      decisions: sellDecisions,
+      executed: executedTrades,
+      snapshot: getSnapshot(pf),
+      thinkTankDefensive: true,
+      thinkTankReason: thinkTankGate.reason,
+    };
+  }
+
+  // ---- Step 4: Apply macro risk penalty + risk-regime sizing multiplier ----
   // Risk-off regime: reduce all composite scores by 5-8 points
+  // Risk-regime sizing: scale position sizes to match risk appetite
   var macroPenalty = 0;
+  var riskSizingMultiplier = 1.0; // from config positionSizing riskRegimeMultipliers
   if (macroContext && macroContext.riskState) {
     const regime = macroContext.riskState.regime;
     if (regime === 'risk_off' || regime === 'panic') {
       macroPenalty = 8;
     } else if (regime === 'slightly_bullish') {
-      macroPenalty = 0;  // no penalty in slightly bullish regime
+      macroPenalty = 0;
     } else if (regime === 'neutral') {
       macroPenalty = 2;
     }
-    // risk_on: macroPenalty stays 0
+    // Sizing multiplier from config
+    const sizing = config.SIMFOLIO.positionSizing || {};
+    const multipliers = sizing.riskRegimeMultipliers || {};
+    if (multipliers[regime] != null) {
+      riskSizingMultiplier = multipliers[regime];
+    }
   }
   if (macroPenalty > 0) {
     for (const r of pipelineResults) {
@@ -226,7 +441,105 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
-  // ---- Step 4: Look for buy candidates ----
+  // ---- Step 4.5: Apply weekend analysis context ----
+  const weekendContext = loadWeekendContext();
+  let weekendSectorBonus = new Map();   // sector -> bonus points
+  let weekendSectorPenalty = new Map(); // sector -> penalty points
+  let weekendPositionMultiplier = 1.0;   // cash allocation multiplier
+
+  // P1-1: Factor performance feedback — penalize stocks triggering COLD factors
+  let coldFactors = new Set();
+  try {
+    const factorPerf = require('./analysis/factor_performance');
+    coldFactors = factorPerf.getColdFactors();
+  } catch (_) { /* factor_performance not available */ }
+
+  // Apply cold factor penalty to pipeline results BEFORE sorting/buying
+  if (coldFactors.size > 0) {
+    for (const r of pipelineResults) {
+      if (r.compositeScore == null) continue;
+      const signals = r.hiddenSignals || [];
+      for (const s of signals) {
+        if (coldFactors.has(s.id)) {
+          // Each COLD factor that triggered = -3 points
+          r.compositeScore = Math.max(0, r.compositeScore - 3);
+        }
+      }
+    }
+  }
+
+  // 周末分析输出的中文板块名 -> classifySector 使用的中文板块名（一致，直接匹配）
+  const WEEKEND_SECTOR_KEYWORDS = {
+    '半导体/AI算力': ['半导体/AI算力', '半导体', 'AI算力'],
+    '创新药/AI医疗': ['创新药/AI医疗', '创新药', 'AI医疗'],
+    '固态电池/储能': ['固态电池/储能', '固态电池', '储能'],
+    '机器人/具身智能': ['机器人/具身智能', '机器人', '具身智能'],
+    '有色金属/稀土': ['有色金属/稀土', '有色金属', '稀土'],
+    '金融': ['金融'],
+    '军工/商业航天': ['军工/商业航天', '军工', '商业航天'],
+    '新型电力基建': ['新型电力基建', '电力基建'],
+  };
+
+  if (weekendContext) {
+    for (const insight of weekendContext.insights) {
+      if (insight.type === 'sector_preference') {
+        // 在 insight 文本中匹配中文板块名
+        const actionText = (insight.suggestedAction || '') + (insight.detail || '') + (insight.title || '');
+        for (const [cnSector, keywords] of Object.entries(WEEKEND_SECTOR_KEYWORDS)) {
+          if (keywords.some(kw => actionText.includes(kw))) {
+            weekendSectorBonus.set(cnSector, 3);
+          }
+        }
+        // 防守板块额外加分
+        if (actionText.includes('防守') || actionText.includes('金融') ||
+            actionText.includes('有色金属') || actionText.includes('电力基建')) {
+          for (const defSector of ['金融', '有色金属/稀土', '新型电力基建']) {
+            weekendSectorBonus.set(defSector, (weekendSectorBonus.get(defSector) || 0) + 2);
+          }
+        }
+      }
+      if (insight.type === 'position_sizing') {
+        // Adjust cash allocation multiplier
+        if (insight.suggestedAction.includes('50%') || insight.weight >= 2) {
+          weekendPositionMultiplier = 0.5;
+        }
+      }
+      if (insight.type === 'regime_alert') {
+        // Additional risk penalty for all stocks
+        for (const r of pipelineResults) {
+          if (r.compositeScore != null) {
+            r.compositeScore = Math.max(0, r.compositeScore - insight.weight);
+          }
+        }
+      }
+      if (insight.type === 'cross_market') {
+        // 跨市场风险：恐慌/避险时全市场减分
+        const actionText = (insight.suggestedAction || '') + (insight.detail || '');
+        if (actionText.includes('防御模式') || actionText.includes('恐慌') || actionText.includes('避险')) {
+          for (const r of pipelineResults) {
+            if (r.compositeScore != null) {
+              r.compositeScore = Math.max(0, r.compositeScore - 3);
+            }
+          }
+          weekendPositionMultiplier = Math.min(weekendPositionMultiplier, 0.5);
+        }
+      }
+    }
+  }
+
+  // Apply sector bonuses from weekend context
+  if (weekendSectorBonus.size > 0 || weekendSectorPenalty.size > 0) {
+    for (const r of pipelineResults) {
+      const sector = classifySector(r.name);
+      const bonus = weekendSectorBonus.get(sector) || 0;
+      const penalty = weekendSectorPenalty.get(sector) || 0;
+      if (r.compositeScore != null && (bonus > 0 || penalty > 0)) {
+        r.compositeScore = Math.max(0, r.compositeScore + bonus - penalty);
+      }
+    }
+  }
+
+  // ---- Step 5: Look for buy candidates ----
   // Score all pipeline results, compute percentile thresholds
   const scoredWithScores = pipelineResults
     .filter(r => r.compositeScore != null)
@@ -269,18 +582,37 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // How many slots available?
   const availableSlots = config.SIMFOLIO.maxPositions - pf.positions.length + decisions.filter(d => d.action === 'sell').length;
 
-  for (const candidate of buyCandidates) {
-    if (decisions.filter(d => d.action === 'buy').length >= availableSlots) break;
+  // P1-3: Staggered position building rules
+  // Rule 1: Max 2 new positions per day (no more first-day rampage)
+  const MAX_BUYS_PER_DAY = 2;
+  // Rule 2: If portfolio has 3+ positions AND total return is negative, don't add more
+  const snapshot = getSnapshot(pf);
+  const portfolioInLoss = snapshot.totalReturn < 0 && pf.positions.length >= 3;
+  // Rule 3: If already have 3+ positions, max 1 new buy per day
+  const effectiveMaxBuys = pf.positions.length >= 3 ? 1 : MAX_BUYS_PER_DAY;
 
-    // Strong buy: top percentile AND hasStrongSignal AND meets minStrongScore
-    const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
-    const buyDecision = checkBuySignal(candidate, pf, isStrong);
-    if (buyDecision) {
-      decisions.push(buyDecision);
+  if (portfolioInLoss) {
+    // Skip all buys — portfolio is losing money with 3+ positions.
+    // Focus on managing existing positions before adding new ones.
+    // This is logged in the trade_skip event below.
+  } else if (availableSlots > 0 && effectiveMaxBuys > 0) {
+    for (const candidate of buyCandidates) {
+      const buyDecisionsSoFar = decisions.filter(d => d.action === 'buy').length;
+      if (buyDecisionsSoFar >= effectiveMaxBuys) break;
+      if (buyDecisionsSoFar >= availableSlots) break;
+
+      // Strong buy: top percentile AND hasStrongSignal AND meets minStrongScore
+      const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
+      // Combine weekend multiplier and risk regime multiplier
+      const combinedMultiplier = weekendPositionMultiplier * riskSizingMultiplier;
+      const buyDecision = checkBuySignal(candidate, pf, isStrong, combinedMultiplier);
+      if (buyDecision) {
+        decisions.push(buyDecision);
+      }
     }
   }
 
-  // ---- Step 5: Execute decisions ----
+  // ---- Step 6: Execute decisions ----
   const executedTrades = [];
   for (const dec of decisions) {
     if (dec.action === 'sell') {
@@ -292,7 +624,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
-  // ---- Step 6: Update position prices ----
+  // ---- Step 7: Update position prices ----
   for (const pos of pf.positions) {
     const stockData = pipelineResults.find(r => r.code === pos.code);
     if (stockData) {
@@ -300,7 +632,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
-  // ---- Step 7: Record daily NAV ----
+  // ---- Step 8: Record daily NAV ----
   recordDailyNAV(pf, today);
 
   savePortfolio(pf);
@@ -327,9 +659,9 @@ function checkSellSignal(position, stockData, isBoughtToday, isFullScan) {
 
   // Soft stop: composite score dropped significantly
   // Only during FULL pipeline scans — mid-scan scores are less reliable
-  // Threshold: < 45 for full scan (was 50, made more conservative)
-  if (isFullScan && stockData.compositeScore < 45) {
-    return '软止损：综合评分降至' + stockData.compositeScore + '分（<45）';
+  // Threshold: < 35 (new score scale — was 45 when scores ran 76-81, now 55+ is good)
+  if (isFullScan && stockData.compositeScore < 35) {
+    return '软止损：综合评分降至' + stockData.compositeScore + '分（<35）';
   }
 
   // Take profit: up > 20% with weakening signals
@@ -377,36 +709,96 @@ function buildBuyReason(stockData, isStrong) {
   return parts.join(' ');
 }
 
-function checkBuySignal(stockData, pf, isStrong) {
-  if (isStrong) {
-    // Strong conviction: top percentile + strong signal
-    const allocation = Math.min(
-      pf.cash * 0.20,
-      pf.meta.initialCapital * config.SIMFOLIO.maxSinglePositionPct
-    );
-    const shares = Math.floor(allocation / stockData.price / 100) * 100;
-    if (shares < 100) return null;
+// ---- Trend Filter ----
 
-    return {
-      action: 'buy',
-      code: stockData.code,
-      name: stockData.name,
-      shares: shares,
-      price: stockData.price,
-      reason: buildBuyReason(stockData, true),
-      strength: 'strong',
-      analysisContext: {
-        compositeScore: stockData.compositeScore,
-        rating: stockData.rating,
-        hiddenSignals: stockData.hiddenSignals || [],
-        rawScores: stockData.rawScores || {},
-        dimensionScores: stockData.dimensionScores || {},
-      },
-    };
+/**
+ * Check if a stock is in an uptrend based on its K-line data.
+ * Returns { passed: true/false, reason: '' }.
+ *
+ * Filters: price must be above MA20 (20-day moving average).
+ * If K-line data has < 20 bars, requires at least MA5 confirmation.
+ */
+function checkTrendFilter(stockData) {
+  const klines = stockData.klines;
+  if (!klines || klines.length === 0) {
+    // No K-line data at all — reject (can't verify trend)
+    return { passed: false, reason: '无K线数据，无法判断趋势' };
   }
 
-  // Normal buy: meets percentile threshold
-  const allocation = Math.min(pf.cash * 0.10, pf.meta.initialCapital * 0.15);
+  const closes = klines.map(k => k.close);
+  const price = stockData.price || closes[closes.length - 1];
+
+  if (closes.length >= 20) {
+    const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    if (price < ma20) {
+      return { passed: false, reason: '股价¥' + price.toFixed(2) + '低于MA20(¥' + ma20.toFixed(2) + ')，不在上升趋势' };
+    }
+  } else if (closes.length >= 5) {
+    // Fallback: use MA5 as minimum trend check
+    const ma5 = closes.slice(-5).reduce((a, b) => a + b, 0) / 5;
+    if (price < ma5) {
+      return { passed: false, reason: '股价¥' + price.toFixed(2) + '低于MA5(¥' + ma5.toFixed(2) + ')，短期趋势不佳' };
+    }
+  } else {
+    // < 5 bars — insufficient data, skip
+    return { passed: false, reason: 'K线不足5日(仅' + closes.length + '条)，趋势数据不足' };
+  }
+
+  return { passed: true, reason: '' };
+}
+
+function checkBuySignal(stockData, pf, isStrong, combinedMultiplier) {
+  const multiplier = (typeof combinedMultiplier === 'number' && combinedMultiplier > 0) ? combinedMultiplier : 1.0;
+
+  // P0-2: Trend filter — reject stocks not in uptrend
+  const trendCheck = checkTrendFilter(stockData);
+  if (!trendCheck.passed) {
+    return null; // silently skip, don't log per stock
+  }
+
+  // Tiered position sizing based on composite score and signal diversity
+  const sizing = config.SIMFOLIO.positionSizing || {};
+  const score = stockData.compositeScore || 0;
+  const signalCount = (stockData.hiddenSignals || []).length;
+
+  let allocationPct;
+  if (isStrong) {
+    const tiers = sizing.strongTiers || [
+      { minScore: 85, allocation: 0.25 },
+      { minScore: 75, allocation: 0.20 },
+      { minScore: 65, allocation: 0.15 },
+    ];
+    allocationPct = 0.15; // fallback
+    for (const tier of tiers) {
+      if (score >= tier.minScore) { allocationPct = tier.allocation; break; }
+    }
+  } else {
+    const tiers = sizing.normalTiers || [
+      { minScore: 65, allocation: 0.12 },
+      { minScore: 55, allocation: 0.08 },
+    ];
+    allocationPct = 0.08; // fallback
+    for (const tier of tiers) {
+      if (score >= tier.minScore) { allocationPct = tier.allocation; break; }
+    }
+  }
+
+  // Signal diversity bonus: more distinct signals = higher conviction
+  if (signalCount > 2) {
+    const bonus = (sizing.signalCountBonus || 0.02) * (signalCount - 2);
+    allocationPct += bonus;
+  }
+
+  const maxAllocation = sizing.maxAllocation || config.SIMFOLIO.maxSinglePositionPct || 0.30;
+  allocationPct = Math.min(allocationPct, maxAllocation);
+
+  // Apply combined multiplier (weekend × risk regime)
+  allocationPct = allocationPct * multiplier;
+
+  const allocation = Math.min(
+    pf.cash * allocationPct,
+    pf.meta.initialCapital * maxAllocation
+  );
   const shares = Math.floor(allocation / stockData.price / 100) * 100;
   if (shares < 100) return null;
 
@@ -416,8 +808,9 @@ function checkBuySignal(stockData, pf, isStrong) {
     name: stockData.name,
     shares: shares,
     price: stockData.price,
-    reason: buildBuyReason(stockData, false),
-    strength: 'normal',
+    reason: buildBuyReason(stockData, isStrong),
+    strength: isStrong ? 'strong' : 'normal',
+    allocationPct: Math.round(allocationPct * 10000) / 100, // for logging
     analysisContext: {
       compositeScore: stockData.compositeScore,
       rating: stockData.rating,
@@ -848,4 +1241,5 @@ module.exports = {
   updateTrailingStop,
   checkRiskThresholds,
   executeRiskTrade,
+  loadWeekendContext,
 };

@@ -71,11 +71,13 @@ class Pipeline extends EventEmitter {
       const marketDown = indices.length > 0 && (indices[0].changePercent || 0) < -0.3;
 
       // === Step 3b: Fetch enrichment data (LHB, sector flow, north-bound) ===
-      this._setProgress(47, '正在获取龙虎榜+板块资金流+北向资金...');
-      const [lhbMap, sectorFlows, nbFlowData] = await Promise.all([
+      this._setProgress(47, '正在获取龙虎榜+板块资金流+北向资金+两融数据...');
+      const marginData = require('./collectors/margin_data');
+      const [lhbMap, sectorFlows, nbFlowData, marginFlowData] = await Promise.all([
         dragonTiger.fetchLHBDailyMap().catch(() => new Map()),
         capitalFlow.fetchSectorFlow().catch(() => []),
         northBound.fetchNorthBoundFlow(20).catch(() => []),
+        marginData.fetchMarginData(20).catch(() => []),
       ]);
 
       // Build sector flow map
@@ -87,13 +89,36 @@ class Pipeline extends EventEmitter {
       // Compute north-bound sentiment
       const nbSentiment = northBound.computeSentiment(nbFlowData);
 
-      this._setProgress(49, '龙虎榜:' + lhbMap.size + '只 板块:' + sectorFlows.length + '个 北向:' + (nbSentiment.available ? nbSentiment.sentiment : 'N/A'));
+      // Compute margin sentiment
+      const marginSentiment = marginData.computeMarginSentiment(marginFlowData);
+
+      this._setProgress(49, '龙虎榜:' + lhbMap.size + '只 板块:' + sectorFlows.length + '个 北向:' + (nbSentiment.available ? nbSentiment.sentiment : 'N/A') + ' 两融:' + (marginSentiment.available ? marginSentiment.sentiment : 'N/A'));
+
+      // Build LHB detail summary for enrichment
+      let lhbNetBuyCount = 0, lhbNetSellCount = 0;
+      const lhbTopStocks = [];
+      for (const [code, info] of lhbMap) {
+        if (info.netBuy > 0) lhbNetBuyCount++;
+        else if (info.netBuy < 0) lhbNetSellCount++;
+        if (lhbTopStocks.length < 5) {
+          lhbTopStocks.push({ code, name: info.name || code, netBuy: info.netBuy || 0 });
+        }
+      }
 
       this.emit('enrichment', {
         lhbCount: lhbMap.size,
+        lhbDetail: {
+          netBuyCount: lhbNetBuyCount,
+          netSellCount: lhbNetSellCount,
+          topStocks: lhbTopStocks,
+        },
         sectorCount: sectorFlows.length,
         nbSentiment: nbSentiment.available ? nbSentiment.sentiment : 'N/A',
         nbAvailable: nbSentiment.available,
+        marginScore: marginSentiment.available ? marginSentiment.score : null,
+        marginSentiment: marginSentiment.available ? marginSentiment.sentiment : 'N/A',
+        marginAvailable: marginSentiment.available,
+        marginSignals: marginSentiment.signals || [],
         topSectors: sectorFlows.slice(0, 5).map(s => ({
           name: s.name || s.code,
           netFlow: s.majorNetFlow || 0,
@@ -101,13 +126,67 @@ class Pipeline extends EventEmitter {
       });
 
       // === Step 4: Sort by preliminary score and take top N for detail ===
-      // Pre-score using available fields for ranking
-      const preScored = candidates.map(s => ({
-        ...s,
-        preScore: (s.pe && s.pe > 0 && s.pe < 20 ? 20 : 0) +
-                  (s.changePercent > 0 ? 10 : -5) +
-                  (s.turnover > 3e8 ? 15 : 0),
-      })).sort((a, b) => b.preScore - a.preScore);
+      // Enhanced pre-score: 8-dimension approximation using bulk data already fetched.
+      // This determines which stocks get deep analysis — better pre-score = better selection.
+      const preScored = candidates.map(s => {
+        let score = 0;
+
+        // 1. Valuation: PE-based (0-25)
+        const pe = s.peTTM || s.pe;
+        if (pe && pe > 0 && pe < 12) score += 25;
+        else if (pe && pe > 0 && pe < 18) score += 18;
+        else if (pe && pe > 0 && pe < 25) score += 10;
+        else if (pe && pe > 0 && pe < 40) score += 3;
+        else if (!pe) score += 8;   // loss-making — neutral (keep in pipeline)
+        else score -= 3;            // negative PE
+
+        // 2. PB value check (0-10)
+        if (s.pb && s.pb > 0 && s.pb < 1.0) score += 10;
+        else if (s.pb && s.pb > 0 && s.pb < 2.0) score += 5;
+
+        // 3. Price momentum — moderate up is ideal (-5 to +12)
+        const chg = s.changePercent || 0;
+        if (chg > 1 && chg < 5) score += 12;
+        else if (chg > 0 && chg <= 1) score += 6;
+        else if (chg > -1 && chg <= 0) score += 2;   // flat
+        else if (chg > -3) score -= 2;
+        else score -= 5;                              // big drop
+
+        // 4. Liquidity: turnover-based (0-20)
+        const to = s.turnover || 0;
+        if (to > 5e8) score += 20;       // >5亿
+        else if (to > 2e8) score += 14;
+        else if (to > 1e8) score += 8;
+        else if (to > 5e7) score += 2;
+
+        // 5. Turnover rate — moderate is ideal (0-8)
+        const tr = s.turnoverRate || 0;
+        if (tr >= 1 && tr <= 5) score += 8;
+        else if (tr > 0.5 && tr < 1) score += 4;
+        else if (tr > 5 && tr < 10) score += 2;
+
+        // 6. Amplitude — some range signals activity (0-5)
+        const ampl = s.amplitude || 0;
+        if (ampl > 2 && ampl < 6) score += 5;
+        else if (ampl >= 1 && ampl <= 2) score += 2;
+
+        // 7. Capital flow bonus — if Eastmoney flow data is present (+/-10)
+        if (s.majorNetFlow != null && to > 0) {
+          const flowRatio = s.majorNetFlow / to;
+          if (flowRatio > 0.05) score += 10;
+          else if (flowRatio > 0.02) score += 6;
+          else if (flowRatio > 0) score += 3;
+          else if (flowRatio < -0.05) score -= 8;
+          else if (flowRatio < -0.02) score -= 4;
+        }
+
+        // 8. Circ market cap — mid/small-cap bias for A-share alpha (0-5)
+        const cmv = s.circCap || 0;
+        if (cmv > 2e9 && cmv < 5e10) score += 5;      // 20亿-500亿: small-mid sweet spot
+        else if (cmv >= 5e10 && cmv < 1e11) score += 2; // 500亿-1000亿: decent
+
+        return { ...s, preScore: score };
+      }).sort((a, b) => b.preScore - a.preScore);
 
       const topCount = Math.min(config.API.maxDetailFetches, preScored.length);
       const finalists = preScored.slice(0, topCount);
@@ -140,6 +219,21 @@ class Pipeline extends EventEmitter {
           // Detail fetch failed, continue without it
         }
 
+        // Fetch per-stock flow history for consecutive-inflow scoring
+        // Only fetch when there's meaningful flow to evaluate (|majorNetFlow/turnover| > 1%)
+        let stockFlowHistory = [];
+        const toForFlow = stock.turnover || 0;
+        if (stock.majorNetFlow != null && toForFlow > 0) {
+          const flowRatio = Math.abs(stock.majorNetFlow / toForFlow);
+          if (flowRatio > 0.01) {
+            try {
+              stockFlowHistory = await capitalFlow.fetchStockFlowHistory(stock.code, 5);
+            } catch (e) {
+              // Flow history fetch failed, continue without it
+            }
+          }
+        }
+
         // Compute hidden signals (with fundamental data for H4, H5, H6, H8, H9)
         const hiddenResult = hiddenSignals.computeHiddenSignals(stock, detail, klines, marketDown);
 
@@ -149,6 +243,8 @@ class Pipeline extends EventEmitter {
           sectorFlowMap,
           lhbSignal,
           northBoundSentiment: nbSentiment,
+          marginSentiment: marginSentiment,  // 两融情绪
+          stockFlowHistory: stockFlowHistory, // 个股资金流历史（连续流入天数）
         };
 
         // Compute composite score with full context
@@ -194,6 +290,17 @@ class Pipeline extends EventEmitter {
             capitalFlow: stockResult.capitalFlowScore,
             event: stockResult.eventScore,
           },
+          capitalFlow: {
+            majorNetFlow: stock.majorNetFlow || 0,
+            flowRatio: (stock.majorNetFlow != null && stock.turnover > 0) ? +(stock.majorNetFlow / stock.turnover).toFixed(4) : null,
+            consecutiveInflow: (stockFlowHistory || []).filter(d => d.netFlow > 0).length || 0,
+          },
+          lhb: lhbSignal ? {
+            onList: lhbSignal.onList || false,
+            netBuy: lhbSignal.netBuy || 0,
+            netSell: lhbSignal.netSell || 0,
+            reason: lhbSignal.reason || '',
+          } : null,
         });
 
         // Rate limit
@@ -264,6 +371,7 @@ class Pipeline extends EventEmitter {
         sectorPicks: sectorPicks,
         top5: top5,
         allResults: results,
+        nbSentiment: nbSentiment,        // 北向情绪（供因子绩效追踪使用）
         duration: Math.round((Date.now() - this.startTime) / 1000),
       };
 

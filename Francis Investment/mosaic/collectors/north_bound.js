@@ -56,20 +56,59 @@ async function fetchNorthBoundFlow(days = 20) {
 
   try {
     const res = await fetchJSON(url, 'https://data.eastmoney.com/hsgt/index.html');
-    if (!res || !res.data || !res.data.klines) return [];
+    if (!res || !res.data) return [];
 
-    return res.data.klines.map(line => {
-      const parts = line.split(',');
-      return {
-        date: parts[0],
-        shFlow: parseFloat(parts[1]) || 0,       // 沪股通净流入
-        shCumulative: parseFloat(parts[2]) || 0,  // 沪股通累计
-        szFlow: parseFloat(parts[3]) || 0,        // 深股通净流入
-        szCumulative: parseFloat(parts[4]) || 0,  // 深股通累计
-        totalFlow: parseFloat(parts[5]) || 0,     // 北向合计净流入
-        totalCumulative: parseFloat(parts[6]) || 0, // 北向合计累计
-      };
-    }).reverse(); // oldest first
+    // New API format: data.hk2sh, data.hk2sz (fields: date, dailyFlow?, ?, cumulative)
+    // Old format: data.klines (fields: f51..f57)
+    if (res.data.hk2sh && res.data.hk2sz) {
+      const shData = res.data.hk2sh || [];
+      const szData = res.data.hk2sz || [];
+      const dateMap = {};
+
+      for (const line of shData) {
+        const parts = line.split(',');
+        const d = parts[0];
+        dateMap[d] = {
+          date: d,
+          shFlow: parseFloat(parts[1]) || 0,
+          shCumulative: parseFloat(parts[3]) || parseFloat(parts[2]) || 0,
+          szFlow: 0,
+          szCumulative: 0,
+          totalFlow: 0,
+          totalCumulative: 0,
+        };
+      }
+      for (const line of szData) {
+        const parts = line.split(',');
+        const d = parts[0];
+        if (dateMap[d]) {
+          dateMap[d].szFlow = parseFloat(parts[1]) || 0;
+          dateMap[d].szCumulative = parseFloat(parts[3]) || parseFloat(parts[2]) || 0;
+          dateMap[d].totalFlow = dateMap[d].shFlow + dateMap[d].szFlow;
+          dateMap[d].totalCumulative = dateMap[d].shCumulative + dateMap[d].szCumulative;
+        }
+      }
+
+      return Object.values(dateMap).sort((a, b) => a.date.localeCompare(b.date));
+    }
+
+    // Fallback: old klines format
+    if (res.data.klines) {
+      return res.data.klines.map(line => {
+        const parts = line.split(',');
+        return {
+          date: parts[0],
+          shFlow: parseFloat(parts[1]) || 0,
+          shCumulative: parseFloat(parts[2]) || 0,
+          szFlow: parseFloat(parts[3]) || 0,
+          szCumulative: parseFloat(parts[4]) || 0,
+          totalFlow: parseFloat(parts[5]) || 0,
+          totalCumulative: parseFloat(parts[6]) || 0,
+        };
+      }).reverse();
+    }
+
+    return [];
   } catch (e) {
     console.error('  [NorthBound] Flow fetch failed:', e.message);
     return [];

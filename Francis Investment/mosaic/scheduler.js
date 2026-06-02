@@ -31,6 +31,8 @@ class Scheduler extends EventEmitter {
     this._usDataToday = [];         // 美股当日分钟线数据
     this._lastUSRecord = null;      // 上次美股记录时间
     this._usOpsRunning = false;     // 美股操作锁
+    this._weekendAnalysisRunning = false; // 周末分析运行标记
+    this._broadcastSSE = null;      // SSE 广播函数引用
   }
 
   // ==================== 公开 API ====================
@@ -79,6 +81,16 @@ class Scheduler extends EventEmitter {
 
   getEvents(limit) {
     return this._events.slice(-(limit || 100));
+  }
+
+  /** Set SSE broadcast function (called by mosaic_server) */
+  setSSEBroadcast(fn) {
+    this._broadcastSSE = fn;
+    // Also propagate to weekend analyzer if available
+    try {
+      const weekendAnalyzer = require('./analysis/weekend_analyzer');
+      weekendAnalyzer.setSSEBroadcast(fn);
+    } catch (_) {}
   }
 
   // ==================== 时钟 ====================
@@ -154,6 +166,23 @@ class Scheduler extends EventEmitter {
       this._runOvernightSummary(dateStr);
     }
 
+    // 周末深度分析：周六/周日全天运行
+    if (this._isWeekend(now) && !this._weekendAnalysisRunning) {
+      this._startWeekendAnalysis();
+    } else if (!this._isWeekend(now) && this._weekendAnalysisRunning) {
+      this._stopWeekendAnalysis();
+    }
+
+    // 周五 15:30 后：触发周末分析验证
+    const VConfig = config.WEEKEND_VERIFICATION || {};
+    const vHour = (VConfig.verificationSchedule && VConfig.verificationSchedule.hour) || 15;
+    const vMinute = (VConfig.verificationSchedule && VConfig.verificationSchedule.minute) || 30;
+    if (now.getDay() === 5 && hourNow === vHour && now.getMinutes() >= vMinute &&
+        !this._scheduledOps.has('weekend_verification_' + dateStr)) {
+      this._scheduledOps.add('weekend_verification_' + dateStr);
+      this._runWeekendVerification();
+    }
+
     this._saveState();
     this._scheduleNextTick();
   }
@@ -186,6 +215,70 @@ class Scheduler extends EventEmitter {
   _isTradingDay(date) {
     const d = date.getDay();
     return d >= 1 && d <= 5;
+  }
+
+  _isWeekend(date) {
+    if (!date) date = new Date();
+    const d = date.getDay();
+    return d === 0 || d === 6;
+  }
+
+  _startWeekendAnalysis() {
+    if (this._weekendAnalysisRunning) return;
+    try {
+      const weekendAnalyzer = require('./analysis/weekend_analyzer');
+      // Inject SSE broadcast function
+      if (typeof this._broadcastSSE === 'function') {
+        weekendAnalyzer.setSSEBroadcast(this._broadcastSSE);
+      }
+      weekendAnalyzer.startWeekendAnalysis();
+      this._weekendAnalysisRunning = true;
+      this._logEvent('weekend_analysis_start', { date: this._todayDate });
+      console.log('[Scheduler] 周末深度分析已启动');
+    } catch (e) {
+      console.error('[Scheduler] 启动周末分析失败:', e.message);
+    }
+  }
+
+  _stopWeekendAnalysis() {
+    if (!this._weekendAnalysisRunning) return;
+    try {
+      const weekendAnalyzer = require('./analysis/weekend_analyzer');
+      weekendAnalyzer.stopWeekendAnalysis();
+      this._weekendAnalysisRunning = false;
+      this._logEvent('weekend_analysis_stop', { date: this._todayDate });
+      console.log('[Scheduler] 周末深度分析已停止');
+    } catch (e) {
+      console.error('[Scheduler] 停止周末分析失败:', e.message);
+    }
+  }
+
+  async _runWeekendVerification() {
+    console.log('[Scheduler] 周五盘后: 触发周末分析验证...');
+    try {
+      const verifier = require('./analysis/weekend_verifier');
+      const results = await verifier.verifyAllPending();
+      const successCount = results.filter(r => r.ok).length;
+      console.log('[Scheduler] 周末分析验证完成: ' + successCount + '/' + results.length + ' 成功');
+      this._logEvent('weekend_verification', {
+        date: this._todayDate,
+        totalArchives: results.length,
+        verified: successCount,
+      });
+
+      // Broadcast via SSE if available
+      if (typeof this._broadcastSSE === 'function') {
+        this._broadcastSSE({
+          type: 'weekend_verification',
+          message: '周末分析验证完成',
+          verified: successCount,
+          total: results.length,
+        });
+      }
+    } catch (e) {
+      console.error('[Scheduler] 周末分析验证失败:', e.message);
+      this._logEvent('weekend_verification_error', { date: this._todayDate, error: e.message });
+    }
   }
 
   /** Check if US market is currently in regular trading (21:30-04:00 CST on weekdays). */
@@ -364,6 +457,15 @@ class Scheduler extends EventEmitter {
           }
         }
         factorPerf.updatePerformanceCache(this._todayDate, signalCounts, result.analyzed);
+
+        // Record north-bound sentiment for performance tracking
+        // This data feeds back into composite.js — if NB proves unreliable, its weight is reduced
+        if (result.nbSentiment && result.nbSentiment.available) {
+          try {
+            factorPerf.updateNBSentimentRecord(this._todayDate, result.nbSentiment.sentiment);
+          } catch (_) {}
+        }
+
         const perf = factorPerf.computeFactorPerformance({ days: 20 });
         this.emit('think_factor_perf', perf);
       } catch (_) {}
@@ -465,13 +567,53 @@ class Scheduler extends EventEmitter {
         .sort((a, b) => (b.turnover || 0) - (a.turnover || 0))
         .slice(0, SC.midScanTopCount);
 
-      // 预评分
-      const preScored = topByTurnover.map(s => ({
-        ...s,
-        preScore: (s.pe && s.pe > 0 && s.pe < 20 ? 20 : 0) +
-                  (s.changePercent > 0 ? 10 : -5) +
-                  (s.turnover > 3e8 ? 15 : 0),
-      })).sort((a, b) => b.preScore - a.preScore);
+      // 预评分 — 使用增强的8维评分（与Full Pipeline一致）
+      const preScored = topByTurnover.map(s => {
+        let score = 0;
+        // 1. PE估值
+        const pe = s.peTTM || s.pe;
+        if (pe && pe > 0 && pe < 12) score += 25;
+        else if (pe && pe > 0 && pe < 18) score += 18;
+        else if (pe && pe > 0 && pe < 25) score += 10;
+        else if (pe && pe > 0 && pe < 40) score += 3;
+        else if (!pe) score += 8;
+        else score -= 3;
+        // 2. PB
+        if (s.pb && s.pb > 0 && s.pb < 1.0) score += 10;
+        else if (s.pb && s.pb > 0 && s.pb < 2.0) score += 5;
+        // 3. 动量
+        const chg = s.changePercent || 0;
+        if (chg > 1 && chg < 5) score += 12;
+        else if (chg > 0 && chg <= 1) score += 6;
+        else if (chg > -1 && chg <= 0) score += 2;
+        else if (chg > -3) score -= 2;
+        else score -= 5;
+        // 4. 流动性
+        const to = s.turnover || 0;
+        if (to > 5e8) score += 20;
+        else if (to > 2e8) score += 14;
+        else if (to > 1e8) score += 8;
+        // 5. 换手率
+        const tr = s.turnoverRate || 0;
+        if (tr >= 1 && tr <= 5) score += 8;
+        else if (tr > 0.5 && tr < 1) score += 4;
+        // 6. 振幅
+        const ampl = s.amplitude || 0;
+        if (ampl > 2 && ampl < 6) score += 5;
+        else if (ampl >= 1 && ampl <= 2) score += 2;
+        // 7. 资金流
+        if (s.majorNetFlow != null && to > 0) {
+          const fr = s.majorNetFlow / to;
+          if (fr > 0.05) score += 10;
+          else if (fr > 0.02) score += 6;
+          else if (fr > 0) score += 3;
+          else if (fr < -0.05) score -= 8;
+        }
+        // 8. 流通市值
+        const cmv = s.circCap || 0;
+        if (cmv > 2e9 && cmv < 5e10) score += 5;
+        return { ...s, preScore: score };
+      }).sort((a, b) => b.preScore - a.preScore);
 
       // 对 Top N 进行深析
       const deepList = preScored.slice(0, SC.midScanDeepAnalyze);
@@ -526,6 +668,14 @@ class Scheduler extends EventEmitter {
       });
       // Persist mid-scan result for think-tank
       this._saveLastPipelineResult({ totalStocks: allStocks.length, candidates: candidates.length, analyzed: results.length, top5: results.slice(0, 5), allResults: results }, 'mid');
+
+      // Record north-bound sentiment for mid-scan too
+      if (nbSentiment && nbSentiment.available) {
+        try {
+          const factorPerf = require('./analysis/factor_performance');
+          factorPerf.updateNBSentimentRecord(this._todayDate, nbSentiment.sentiment);
+        } catch (_) {}
+      }
 
       this.emit('think_scan', {
         type: 'scan_complete',

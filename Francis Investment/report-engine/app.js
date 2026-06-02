@@ -97,6 +97,7 @@ var SECTIONS = [
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '', disabled: true, render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
   { id: 'usMarket',        label: '海外市场',         icon: '', render: function(d,m) { renderUSMarketDirect(); return ''; } },
   { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
+  { id: 'weekendAnalysis', label: '周末深度分析',     icon: '', render: function(d,m) { renderWeekendAnalysisDirect(); return ''; } },
   { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
 
@@ -169,6 +170,9 @@ function initApp() {
       window.open('/think-tank.html', 'mosaic_think_tank', 'width=1400,height=900');
     }
   });
+
+  // Update weekend analysis visibility
+  updateWeekendAnalysisVisibility();
 
   // Section nav delegation
   $sectionNavList.addEventListener('click', function(e) {
@@ -306,7 +310,25 @@ function renderSimfolioLivePanel(sfData) {
   // Build sector live chart (replaces NAV chart)
   var sectorHTML = renderSectorLiveChart();
 
-  var html = countdownHTML + cardsHTML + feedHTML + posHTML + sectorHTML;
+  // Market sentiment indicators
+  var sentimentHTML = '<div id="market-sentiment-indicators" style="margin:0 16px 8px;padding:0;">' +
+    '<div style="font-size:14px;color:#1e293b;margin-bottom:8px;">📡 市场情绪指标</div>' +
+    '<div id="sentiment-indicators-content" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">' +
+    '<div style="background:#fff;border-radius:6px;padding:10px;border:1px solid #e2e5eb;text-align:center;">' +
+    '<div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">两融情绪</div>' +
+    '<div style="font-size:16px;font-weight:700;color:#64748b;" id="sent-margin">--</div></div>' +
+    '<div style="background:#fff;border-radius:6px;padding:10px;border:1px solid #e2e5eb;text-align:center;">' +
+    '<div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">北向资金</div>' +
+    '<div style="font-size:16px;font-weight:700;color:#64748b;" id="sent-nb">--</div></div>' +
+    '<div style="background:#fff;border-radius:6px;padding:10px;border:1px solid #e2e5eb;text-align:center;">' +
+    '<div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">Smart Money</div>' +
+    '<div style="font-size:16px;font-weight:700;color:#64748b;" id="sent-sm">--</div></div>' +
+    '</div></div>';
+
+  var html = countdownHTML + cardsHTML + feedHTML + posHTML + sectorHTML + sentimentHTML;
+
+  // Async load sentiment data
+  setTimeout(function() { loadMarketSentimentIndicators(); }, 500);
 
   // Wrap in a container
   return '<div id="simfolio-live-panel">' + html + '</div>';
@@ -661,10 +683,32 @@ function renderNewsDigest(news, date) {
     var catColor = catColors[item.category] || '#64748b';
     var timeHHMM = item.time ? new Date(item.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) : '';
 
+    // News sentiment label
+    var sent = item.sentiment;
+    var sentLabel = '', sentBg = '', sentColor = '#64748b';
+    if (sent && sent.sentiment) {
+      var sentMap = {
+        'strongly_positive': { label: '强正👍', bg: 'rgba(220,38,38,0.08)', color: '#dc2626' },
+        'positive': { label: '利好', bg: 'rgba(234,88,12,0.06)', color: '#ea580c' },
+        'slightly_positive': { label: '偏正', bg: 'rgba(245,158,11,0.05)', color: '#d97706' },
+        'neutral': { label: '中性', bg: 'rgba(100,116,139,0.05)', color: '#64748b' },
+        'slightly_negative': { label: '偏负', bg: 'rgba(22,163,74,0.05)', color: '#16a34a' },
+        'negative': { label: '利空', bg: 'rgba(5,150,105,0.06)', color: '#059669' },
+        'strongly_negative': { label: '强负👎', bg: 'rgba(22,163,74,0.08)', color: '#16a34a' },
+      };
+      var sm = sentMap[sent.sentiment] || sentMap['neutral'];
+      sentLabel = sm.label;
+      sentBg = sm.bg;
+      sentColor = sm.color;
+    }
+
     html += '<div class="news-item" data-category="' + item.category + '" style="display:flex;gap:14px;padding:12px 0;border-bottom:1px solid #f1f5f9;">';
     html += '<div style="min-width:48px;font-size:11px;color:#94a3b8;padding-top:2px;">' + timeHHMM + '</div>';
     html += '<div style="flex:1;">';
-    html += '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;color:#fff;background:' + catColor + ';margin-right:6px;">' + item.category + '</span>';
+    html += '<span style="display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;color:#fff;background:' + catColor + ';margin-right:4px;">' + item.category + '</span>';
+    if (sentLabel) {
+      html += '<span style="display:inline-block;padding:1px 5px;border-radius:3px;font-size:9px;color:' + sentColor + ';background:' + sentBg + ';margin-right:4px;">' + sentLabel + '</span>';
+    }
     html += '<a href="' + (item.url || '#') + '" target="_blank" style="font-size:13px;color:#1e293b;text-decoration:none;font-weight:500;" onmouseover="this.style.color=\'#b8942c\'" onmouseout="this.style.color=\'#1e293b\'">' + escHtml(item.title) + '</a>';
     html += '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">来源: ' + escHtml(item.source) + '</div>';
     if (item.summary) {
@@ -1305,6 +1349,236 @@ function loadCrossMarketIntoDOM() {
     });
 }
 
+// ============ Weekend Analysis Section ============
+function renderWeekendAnalysisDirect() {
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;';
+
+  var isWeekend = (new Date().getDay() === 0 || new Date().getDay() === 6);
+
+  var styleEl = document.createElement('style');
+  if (typeof renderWeekendAnalysisCSS === 'function') {
+    styleEl.textContent = renderWeekendAnalysisCSS();
+  }
+  container.appendChild(styleEl);
+
+  // Also inject verification CSS
+  if (typeof renderWeekendVerificationCSS === 'function') {
+    var verifStyleEl = document.createElement('style');
+    verifStyleEl.textContent = renderWeekendVerificationCSS();
+    container.appendChild(verifStyleEl);
+  }
+
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'wa-dashboard';
+  contentDiv.id = 'weekend-analysis-content';
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">🔬</div>' +
+    '<div style="font-size:16px;font-weight:600;">正在加载深度分析...</div>' +
+    '</div>';
+  container.appendChild(contentDiv);
+
+  // On weekdays, show a subtle banner above the content
+  if (!isWeekend) {
+    var banner = document.createElement('div');
+    banner.style.cssText = 'text-align:center;padding:10px 16px;background:#fef3c7;color:#92400e;' +
+      'font-size:12px;border-radius:8px;margin:12px 16px 0 16px;';
+    banner.textContent = '⚠️ 当前非周末，以下为上次周末分析结果，仅供参考。新分析将在周六自动运行。';
+    contentDiv.insertBefore(banner, contentDiv.firstChild);
+  }
+
+  $contentArea.appendChild(container);
+
+  setTimeout(function() { loadWeekendAnalysisIntoDOM(); }, 100);
+}
+
+function loadWeekendAnalysisIntoDOM() {
+  var container = document.getElementById('weekend-analysis-content');
+  if (!container) return;
+
+  fetch('/api/weekend-analysis/report')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.ok) {
+        if (typeof renderWeekendAnalysis === 'function') {
+          var html = renderWeekendAnalysis(data, 'app', null);
+          container.innerHTML = html;
+          // Render sparkline canvases after DOM is updated
+          setTimeout(function() { renderWeekendSparklines(); }, 100);
+
+          // Load verification data for this weekend
+          var generatedAt = data.generatedAt;
+          if (generatedAt) {
+            var d = new Date(generatedAt);
+            // Adjust to Saturday of that weekend
+            var dayOfWeek = d.getDay();
+            if (dayOfWeek === 0) d.setDate(d.getDate() - 1); // Sunday → Saturday
+            else if (dayOfWeek >= 1 && dayOfWeek <= 5) d.setDate(d.getDate() - dayOfWeek - 1);
+            var verifyWeek = d.toISOString().slice(0, 10);
+
+            fetch('/api/weekend-analysis/verification?week=' + verifyWeek)
+              .then(function(r) { return r.json(); })
+              .then(function(vData) {
+                if (vData.ok && typeof renderWeekendVerification === 'function') {
+                  var vHtml = renderWeekendVerification(vData);
+                  container.insertAdjacentHTML('beforeend', vHtml);
+                  _loadWeekendTrendBars(container);
+                }
+              }).catch(function() { /* verification is optional */ });
+          }
+
+          // Load weekend context (verification → this week's parameter adjustments)
+          loadWeekendFeedbackChain(container);
+        } else {
+          container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+            '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
+            '<div style="font-size:15px;">模板未加载</div></div>';
+        }
+      } else {
+        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+          '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
+          '<div style="font-size:15px;">' + escHtml(data.message || '周末分析引擎尚未启动') + '</div>' +
+          '<div style="font-size:12px;color:#94a3b8;margin-top:8px;">分析将在周末自动运行</div>' +
+          '</div>';
+      }
+    }).catch(function() {
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+        '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
+        '<div style="font-size:15px;">无法连接服务器</div></div>';
+    });
+}
+
+// ============ Weekend Verification → Feedback Chain ============
+function loadWeekendFeedbackChain(container) {
+  fetch('/api/weekend-analysis/context')
+    .then(function(r) { return r.json(); })
+    .then(function(ctx) {
+      if (!ctx.ok || !ctx.verificationContext) return;
+
+      var vc = ctx.verificationContext;
+      var html = '<div style="margin-top:16px;padding:14px 18px;background:rgba(167,139,250,0.04);border:1px solid rgba(167,139,250,0.15);border-radius:8px;">';
+      html += '<div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:10px;">🔗 验证反馈 → 下周参数调整</div>';
+
+      var adjustments = [
+        { label: '危机门槛', before: '50分', after: vc.crisisThreshold || 50, unit: '分', up: (vc.crisisThreshold || 50) > 50 },
+        { label: '相似度权重', before: '默认', after: (vc.similarityWeight != null ? (vc.similarityWeight * 100).toFixed(0) + '%' : '默认'), unit: '', up: (vc.similarityWeight || 0.5) > 0.5 },
+        { label: '板块偏好', before: '正常', after: vc.sectorBias || '正常', unit: '', up: vc.sectorBias === 'enhanced' },
+        { label: '仓位建议', before: '正常', after: vc.positionAdvice || '正常', unit: '', up: vc.positionAdvice === 'aggressive' },
+        { label: '板块权重', before: '1.0x', after: vc.sectorWeight != null ? vc.sectorWeight.toFixed(1) + 'x' : '1.0x', unit: '', up: (vc.sectorWeight || 1.0) > 1.0 },
+      ];
+
+      for (var i = 0; i < adjustments.length; i++) {
+        var adj = adjustments[i];
+        var arrow = adj.up ? ' ↑' : (adj.after !== adj.before ? ' ↓' : ' →');
+        var arrowColor = adj.up ? '#dc2626' : (adj.after !== adj.before ? '#16a34a' : '#94a3b8');
+        html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;">';
+        html += '<span style="color:#64748b;min-width:64px;">' + adj.label + '</span>';
+        html += '<span style="color:#94a3b8;">' + adj.before + ' → </span>';
+        html += '<span style="color:' + (adj.after !== adj.before ? '#1e293b' : '#94a3b8') + ';font-weight:' + (adj.after !== adj.before ? '600' : 'normal') + ';">' + adj.after + adj.unit + '</span>';
+        html += '<span style="color:' + arrowColor + ';">' + arrow + '</span>';
+        html += '</div>';
+      }
+
+      html += '<div style="font-size:10px;color:#94a3b8;margin-top:6px;">基于上周验证报告自动调整 · 有效期至周一</div>';
+      html += '</div>';
+
+      container.insertAdjacentHTML('beforeend', html);
+    })
+    .catch(function() { /* context not available */ });
+}
+
+function _loadWeekendTrendBars(container) {
+  fetch('/api/weekend-analysis/verification-history')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.ok || !data.history || data.history.length < 2) return;
+      var trendDiv = document.getElementById('wv-weekly-trend');
+      if (!trendDiv) {
+        // Create trend panel after the last wv-panel
+        var panels = container.querySelectorAll('.wv-panel');
+        var lastPanel = panels.length > 0 ? panels[panels.length - 1] : null;
+        var html = '<div class="wv-panel"><div class="wv-panel-header" onclick="toggleVerificationPanel(this)">' +
+          '<span class="wv-panel-arrow">▶</span>' +
+          '<span class="wv-panel-title">多周准确度趋势</span>' +
+          '<span style="font-size:12px;color:#94a3b8;">' + data.history.length + ' 周</span></div>' +
+          '<div class="wv-panel-body" id="wv-weekly-trend">';
+
+        // Build bar chart
+        var maxScore = 0;
+        for (var i = 0; i < data.history.length; i++) {
+          if (data.history[i].overallScore > maxScore) maxScore = data.history[i].overallScore;
+        }
+        if (maxScore < 50) maxScore = 50;
+        if (maxScore > 100) maxScore = 100;
+
+        html += '<div class="wv-trend-bars">';
+        for (var j = 0; j < data.history.length; j++) {
+          var entry = data.history[j];
+          var score = entry.overallScore || 0;
+          var grade = entry.overallGrade || 'C';
+          var barH = Math.max(4, (score / maxScore) * 120);
+          var weekendLabel = (entry.weekend || '').slice(5); // MM-DD
+          html += '<div class="wv-trend-bar-wrap">';
+          html += '<div class="wv-trend-bar grade-' + grade + '" style="height:' + barH.toFixed(0) + 'px;" title="' + weekendLabel + ': ' + score.toFixed(0) + '分 (' + grade + ')"></div>';
+          html += '<div class="wv-trend-bar-score">' + score.toFixed(0) + '</div>';
+          html += '<div class="wv-trend-bar-label">' + weekendLabel + '</div>';
+          html += '</div>';
+        }
+        html += '</div></div></div>';
+
+        if (lastPanel) {
+          lastPanel.insertAdjacentHTML('afterend', html);
+        } else {
+          container.insertAdjacentHTML('beforeend', html);
+        }
+      }
+    }).catch(function() { /* optional */ });
+}
+
+function renderWeekendSparklines() {
+  // Render mini sparkline charts for similarity cards
+  var canvases = document.querySelectorAll('.wa-sim-canvas');
+  for (var i = 0; i < canvases.length; i++) {
+    var canvas = canvases[i];
+    var valuesStr = canvas.getAttribute('data-values');
+    if (!valuesStr) continue;
+    var values = valuesStr.split(',').map(Number);
+    if (values.length === 0) continue;
+
+    var ctx = canvas.getContext('2d');
+    var w = canvas.offsetWidth;
+    var h = canvas.offsetHeight;
+    canvas.width = w * (window.devicePixelRatio || 1);
+    canvas.height = h * (window.devicePixelRatio || 1);
+    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+    var min = Math.min.apply(null, values.concat([0]));
+    var max = Math.max.apply(null, values.concat([0]));
+    var range = max - min || 1;
+
+    ctx.strokeStyle = values[values.length - 1] >= 0 ? '#059669' : '#dc2626';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (var j = 0; j < values.length; j++) {
+      var x = (j / (values.length - 1)) * w;
+      var y = h - ((values[j] - min) / range) * h * 0.8 - h * 0.1;
+      if (j === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+
+    // Zero line
+    var zeroY = h - ((0 - min) / range) * h * 0.8 - h * 0.1;
+    ctx.strokeStyle = '#e2e8f0';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, zeroY);
+    ctx.lineTo(w, zeroY);
+    ctx.stroke();
+  }
+}
+
 // ============ Daily Summary Loading ============
 function loadDailySummaryIntoDOM() {
   var container = document.getElementById('daily-summary-container');
@@ -1485,7 +1759,20 @@ function renderHoldingsUnavailable(data, mode) {
 // ============ Live Monitoring (v2.2) ============
 
 var _livePollTimer = null;
-var _notifiedTradeIds = {};
+var _notifiedTradeIds = (function() {
+  try {
+    var raw = localStorage.getItem('_notifiedTradeIds');
+    var data = raw ? JSON.parse(raw) : {};
+    // Only keep today's entries
+    var today = new Date().toISOString().slice(0, 10);
+    if (data._date !== today) return { _date: today };
+    return data;
+  } catch (e) { return { _date: new Date().toISOString().slice(0, 10) }; }
+})();
+
+function _persistNotifiedTradeIds() {
+  try { localStorage.setItem('_notifiedTradeIds', JSON.stringify(_notifiedTradeIds)); } catch (e) {}
+}
 
 function startCountdown() {
   if (state.countdownInterval) clearInterval(state.countdownInterval);
@@ -1528,6 +1815,59 @@ function tickCountdown() {
 
 }
 
+// ============ Market Sentiment Indicators ============
+function loadMarketSentimentIndicators() {
+  var elMargin = document.getElementById('sent-margin');
+  var elNb = document.getElementById('sent-nb');
+  var elSm = document.getElementById('sent-sm');
+  if (!elMargin && !elNb && !elSm) return; // not on simfolio page
+
+  // Fetch margin + microstructure in parallel
+  Promise.all([
+    fetch('/api/margin/status').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/market/microstructure').then(function(r) { return r.json(); }).catch(function() { return null; }),
+  ]).then(function(results) {
+    var margin = results[0];
+    var micro = results[1];
+
+    // Margin sentiment
+    if (elMargin) {
+      if (margin && margin.ok && margin.available) {
+        var mgLabel = { bullish: '看多', bearish: '看空', neutral: '中性' }[margin.sentiment] || '--';
+        var mgColor = margin.sentiment === 'bullish' ? '#dc2626' : (margin.sentiment === 'bearish' ? '#16a34a' : '#64748b');
+        elMargin.innerHTML = '<span style="color:' + mgColor + ';">' + mgLabel + '</span>';
+        elMargin.style.fontSize = '16px';
+        elMargin.style.fontWeight = '700';
+        elMargin.style.color = mgColor;
+      }
+    }
+
+    // North-bound
+    if (elNb && micro && micro.ok && micro.northBound) {
+      var nb = micro.northBound;
+      var nbLabel = { bullish: '强力流入', slightly_bullish: '温和流入', neutral: '中性', bearish: '持续流出' }[nb.sentiment] || '--';
+      var nbColor = nb.sentiment === 'bullish' ? '#dc2626' : (nb.sentiment === 'slightly_bullish' ? '#ea580c' : (nb.sentiment === 'bearish' ? '#16a34a' : '#64748b'));
+      var flowStr = nb.lastDayFlow != null ? (nb.lastDayFlow >= 0 ? '+' : '') + nb.lastDayFlow.toFixed(1) + '亿' : '';
+      elNb.innerHTML = '<span style="color:' + nbColor + ';">' + nbLabel + '</span>' + (flowStr ? '<br><span style="font-size:10px;color:#94a3b8;">' + flowStr + ' 连续' + (nb.consecutiveInflow || 0) + '日</span>' : '');
+      elNb.style.fontSize = '14px';
+      elNb.style.fontWeight = '700';
+      elNb.style.color = nbColor;
+    }
+
+    // Smart Money
+    if (elSm && micro && micro.ok && micro.capitalFlow) {
+      var cf = micro.capitalFlow;
+      var smLabel = { strong_buy: '强力吸筹', buy: '偏多', neutral: '中性', sell: '偏空', strong_sell: '强力出货', no_data: '无数据' }[cf.smartMoneySignal] || '--';
+      var smColor = cf.smartMoneySignal === 'strong_buy' ? '#dc2626' : (cf.smartMoneySignal === 'buy' ? '#ea580c' : (cf.smartMoneySignal === 'strong_sell' || cf.smartMoneySignal === 'sell' ? '#16a34a' : '#64748b'));
+      var smValue = cf.smartMoneyDivergence != null ? (cf.smartMoneyDivergence >= 0 ? '+' : '') + cf.smartMoneyDivergence.toFixed(1) + '亿' : '';
+      elSm.innerHTML = '<span style="color:' + smColor + ';">' + smLabel + '</span>' + (smValue ? '<br><span style="font-size:10px;color:#94a3b8;">' + smValue + '</span>' : '');
+      elSm.style.fontSize = '14px';
+      elSm.style.fontWeight = '700';
+      elSm.style.color = smColor;
+    }
+  });
+}
+
 function startLivePoll() {
   if (_livePollTimer) clearTimeout(_livePollTimer);
   state.liveMode = true;
@@ -1566,6 +1906,7 @@ function pollLiveStatus() {
               var tradeId = t.date + 'T' + t.time + '_' + t.code;
               if (!_notifiedTradeIds[tradeId]) {
                 _notifiedTradeIds[tradeId] = true;
+                _persistNotifiedTradeIds();
                 showTradeNotification(t);
                 break;
               }
@@ -1740,7 +2081,13 @@ function updateSimfolioDOM(sfData) {
   if (snap && cards.length >= 4) {
     cards[0].textContent = '¥' + formatMoneyCN(snap.totalValue);
     cards[1].textContent = '¥' + formatMoneyCN(snap.cash);
-    cards[2].textContent = (snap.alpha >= 0 ? '+' : '') + snap.alpha.toFixed(2) + '%';
+    // Card 2: 今日盈亏 — daily P&L amount (not alpha %)
+    if (snap.prevDayValue != null && snap.prevDayValue > 0) {
+      var dailyPnL = snap.totalValue - snap.prevDayValue;
+      cards[2].textContent = (dailyPnL >= 0 ? '+' : '-') + '¥' + formatMoneyCN(Math.abs(dailyPnL));
+    } else {
+      cards[2].textContent = '--';
+    }
   }
 
   // Update positions table if present
@@ -1966,6 +2313,10 @@ function renderCurrentSection() {
   }
   if (sectionId === 'crossMarket') {
     renderCrossMarketDirect();
+    return;
+  }
+  if (sectionId === 'weekendAnalysis') {
+    renderWeekendAnalysisDirect();
     return;
   }
 
@@ -2619,7 +2970,9 @@ function renderSectionTabs() {
   if (!tabs || !isMobile()) return;
 
   // Mobile: show all tabs except knowledgeBase and holdingsAnalysis (disabled)
+  // weekendAnalysis shows on weekdays too, but marked as disabled
   var mobileSections = [];
+  var isWeekend = (new Date().getDay() === 0 || new Date().getDay() === 6);
   for (var i = 0; i < SECTIONS.length; i++) {
     if (SECTIONS[i].id === 'knowledgeBase' || SECTIONS[i].id === 'holdingsAnalysis') continue;
     mobileSections.push(SECTIONS[i]);
@@ -2631,11 +2984,86 @@ function renderSectionTabs() {
   for (var i = 0; i < mobileSections.length; i++) {
     var sec = mobileSections[i];
     var isActive = state.activeMobileTab === sec.id;
-    var cls = 'section-pill' + (isActive ? ' active' : '');
+    var isWADisabled = (sec.id === 'weekendAnalysis' && !isWeekend);
+    var cls = 'section-pill' + (isActive ? ' active' : '') + (isWADisabled ? ' disabled' : '');
+    var label = isWADisabled ? (sec.label + '（暂不可用）') : sec.label;
     html += '<div class="' + cls + '" onclick="onSectionTabClick(\'' + sec.id + '\')">' +
-      '<span class="pill-dot"></span>' + sec.label + '</div>';
+      '<span class="pill-dot"></span>' + label + '</div>';
   }
   tabs.innerHTML = html;
+}
+
+function updateWeekendAnalysisVisibility() {
+  var navItem = document.getElementById('nav-weekend-analysis');
+  if (!navItem) return;
+
+  var today = new Date();
+  var isWeekend = today.getDay() === 0 || today.getDay() === 6;
+
+  // Always show the nav item; on weekdays mark as unavailable
+  navItem.style.display = '';
+
+  // Update label suffix
+  var label = navItem.querySelector('.section-nav-label');
+  if (label) {
+    if (isWeekend) {
+      label.textContent = '周末深度分析';
+    } else {
+      label.textContent = '周末深度分析（暂不可用）';
+    }
+  }
+  // Dim the dot on weekdays
+  var dot = navItem.querySelector('.section-nav-dot');
+  if (dot) {
+    dot.style.opacity = isWeekend ? '1' : '0.4';
+  }
+  // Always allow click — weekdays show last weekend's cached analysis
+  navItem.classList.remove('section-nav-disabled');
+
+  if (isWeekend) {
+    var nowHour = today.getHours();
+    // On weekends before 16:00, suggest weekend analysis
+    if (state.activeSection === 'simfolio' && nowHour < 16) {
+      // Only auto-switch if we haven't already picked a section this session
+      if (!state.hasSwitchedSection) {
+        setActiveSection('weekendAnalysis');
+        state.hasSwitchedSection = true;
+      }
+    }
+    // Start polling for status updates
+    pollWeekendAnalysisStatus();
+  }
+
+  // Also update mobile tabs
+  if (isMobile()) renderSectionTabs();
+}
+
+var _weekendPollTimer = null;
+function pollWeekendAnalysisStatus() {
+  if (_weekendPollTimer) clearInterval(_weekendPollTimer);
+  _weekendPollTimer = setInterval(function() {
+    var badge = document.getElementById('nav-weekend-badge');
+    if (!badge) { clearInterval(_weekendPollTimer); return; }
+
+    fetch('/api/weekend-analysis/status')
+      .then(function(r) { return r.json(); })
+      .then(function(s) {
+        if (s.ok) {
+          if (s.running && s.phase !== 'complete') {
+            badge.style.display = '';
+            badge.textContent = '分析中';
+          } else if (s.phase === 'complete') {
+            badge.style.display = '';
+            badge.textContent = '已完成';
+            setTimeout(function() { badge.style.display = 'none'; }, 5000);
+          } else {
+            badge.style.display = 'none';
+          }
+        }
+      }).catch(function() {
+        // Server not ready yet, retry next poll
+      });
+  }, 30000); // every 30s
 }
 
 function onSectionTabClick(sectionId) {

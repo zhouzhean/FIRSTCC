@@ -391,4 +391,241 @@ function loadCachedPerformance() {
   }
 }
 
-module.exports = { computeFactorPerformance, updatePerformanceCache, loadCachedPerformance, FACTORS };
+/**
+ * Compute flow-based signal performance by reading north-bound data
+ * directly and checking if NB inflow predicted next-day market direction.
+ *
+ * @returns {object} { northBound, smartMoney, updatedAt }
+ */
+function computeFlowPerformance() {
+  const dates = getAvailableDates();
+  const result = {
+    available: false,
+    northBound: { hitRate: null, signalDays: 0, status: 'stable' },
+    smartMoney: { hitRate: null, signalDays: 0, status: 'stable' },
+    updatedAt: new Date().toISOString(),
+  };
+
+  if (dates.length < 2) {
+    result.message = '至少需要2天数据';
+    return result;
+  }
+
+  // Try to load north-bound data from the cached factor_performance.json
+  const cachePath = path.join(DATA_DIR, 'factor_performance.json');
+  let nbSignals = [];
+  let smSignals = [];
+
+  if (fs.existsSync(cachePath)) {
+    try {
+      const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+      if (cache.flowSignals) {
+        nbSignals = cache.flowSignals.northBound || [];
+        smSignals = cache.flowSignals.smartMoney || [];
+      }
+    } catch (_) {}
+  }
+
+  // If no cached flow signals, compute from scan records and daily summaries
+  if (nbSignals.length === 0) {
+    for (let i = 0; i < dates.length - 1; i++) {
+      const date = dates[i];
+      const nextReturn = getNextDayReturn(date);
+      if (nextReturn == null) continue;
+
+      // Check if any daily summary has north-bound info for this date
+      const summary = loadDailySummary(date);
+      if (!summary || !summary.northBound) continue;
+
+      // If summary contains north-bound sentiment, use it
+      if (summary.northBound.sentiment) {
+        const isBullish = ['bullish', 'slightly_bullish'].includes(summary.northBound.sentiment);
+        nbSignals.push({ date, signal: isBullish, result: nextReturn > 0 ? 1 : 0 });
+      }
+    }
+  }
+
+  const nbValid = nbSignals.filter(s => s.signal);
+  const nbHits = nbValid.filter(s => s.result === 1);
+  result.northBound = {
+    hitRate: nbValid.length > 0 ? nbHits.length / nbValid.length : null,
+    signalDays: nbValid.length,
+    status: nbValid.length > 0 ? (nbHits.length / nbValid.length >= 0.55 ? 'hot' : nbHits.length / nbValid.length < 0.40 ? 'cold' : 'stable') : 'stable',
+  };
+
+  const smValid = smSignals.filter(s => s.signal);
+  const smHits = smValid.filter(s => s.result === 1);
+  result.smartMoney = {
+    hitRate: smValid.length > 0 ? smHits.length / smValid.length : null,
+    signalDays: smValid.length,
+    status: smValid.length > 0 ? (smHits.length / smValid.length >= 0.55 ? 'hot' : smHits.length / smValid.length < 0.40 ? 'cold' : 'stable') : 'stable',
+  };
+
+  result.available = nbValid.length > 0 || smValid.length > 0;
+  return result;
+}
+
+/**
+ * Get the set of factor IDs that have historically underperformed (COLD).
+ * Returns a Set of factor IDs like Set{'H2','H7'} that should be penalized.
+ * Returns empty Set if data is insufficient (< 5 valid signal days).
+ */
+function getColdFactors() {
+  const perf = computeFactorPerformance({ days: 20 });
+  const cold = new Set();
+  if (!perf.factors) return cold;
+
+  for (const f of perf.factors) {
+    // Only penalize if: status is COLD AND we have meaningful data
+    // (>= 3 valid signal days — otherwise it's just noise)
+    const validDays = (f.hitHistory || []).filter(h => h >= 0).length;
+    if (f.status === 'cold' && validDays >= 3 && f.hitRate != null && f.hitRate < 0.40) {
+      cold.add(f.id);
+    }
+  }
+  return cold;
+}
+
+// ==================== 北向资金绩效追踪 ====================
+
+/**
+ * 记录每日北向资金 sentiment（由 scheduler 在每次 pipeline 运行后调用）。
+ * sentiment 是 pipeline 中 computeSentiment() 的输出，直接影响 composite 评分 ±3~±5。
+ *
+ * 存储到 factor_performance.json 的 nbSentimentHistory 字段。
+ *
+ * @param {string} date - YYYY-MM-DD
+ * @param {string} sentiment - 'bullish' | 'slightly_bullish' | 'neutral' | 'bearish'
+ */
+function updateNBSentimentRecord(date, sentiment) {
+  const cachePath = path.join(DATA_DIR, 'factor_performance.json');
+  let cache = { dailySnapshots: [], nbSentimentHistory: [] };
+  if (fs.existsSync(cachePath)) {
+    try {
+      cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    } catch (_) {}
+  }
+
+  if (!cache.nbSentimentHistory) cache.nbSentimentHistory = [];
+
+  // Upsert: replace same-date entry (pipeline may run multiple times/day,
+  // take the most recent sentiment — usually mid-day sentiment is more informed)
+  const existing = cache.nbSentimentHistory.find(e => e.date === date);
+  if (existing) {
+    existing.sentiment = sentiment;
+    existing.updatedAt = new Date().toISOString();
+  } else {
+    cache.nbSentimentHistory.push({
+      date,
+      sentiment,
+      recordedAt: new Date().toISOString(),
+    });
+  }
+
+  // Keep last 60 entries
+  if (cache.nbSentimentHistory.length > 60) {
+    cache.nbSentimentHistory = cache.nbSentimentHistory.slice(-60);
+  }
+  cache.nbSentimentHistory.sort((a, b) => a.date.localeCompare(b.date));
+
+  // Compute NB performance and embed in cache
+  const nbPerf = _computeNBPerformanceFromHistory(cache.nbSentimentHistory);
+  cache.nbPerformance = nbPerf;
+
+  try {
+    fs.writeFileSync(cachePath, JSON.stringify(cache, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+/**
+ * Compute north-bound sentiment prediction accuracy.
+ * For each day with bullish/slightly_bullish sentiment, check if next trading day's
+ * market return was positive. For bearish, check if negative.
+ * Neutral days are NOT counted (no directional prediction).
+ *
+ * @param {Array} history - [{ date, sentiment }, ...]
+ * @returns {object} { hitRate, signalDays, totalDays, status }
+ */
+function _computeNBPerformanceFromHistory(history) {
+  if (!history || history.length < 2) {
+    return { available: false, hitRate: null, signalDays: 0, totalDays: 0, status: 'stable',
+      message: '至少需要2天数据' };
+  }
+
+  const signals = [];
+  for (let i = 0; i < history.length - 1; i++) {
+    const entry = history[i];
+    const sentiment = entry.sentiment;
+
+    // Only count directional signals
+    let predictedUp = null;
+    if (sentiment === 'bullish' || sentiment === 'slightly_bullish') {
+      predictedUp = true;
+    } else if (sentiment === 'bearish') {
+      predictedUp = false;
+    } else {
+      // neutral — no directional prediction, skip
+      continue;
+    }
+
+    // Get next-day market return
+    const nextReturn = getNextDayReturn(entry.date);
+    if (nextReturn == null) continue;
+
+    const actualUp = nextReturn > 0;
+    signals.push({
+      date: entry.date,
+      sentiment,
+      predictedUp,
+      nextReturn: +nextReturn.toFixed(2),
+      hit: predictedUp === actualUp,
+    });
+  }
+
+  const hits = signals.filter(s => s.hit).length;
+  const total = signals.length;
+  const hitRate = total > 0 ? +(hits / total).toFixed(2) : null;
+
+  let status = 'stable';
+  if (hitRate != null && total >= 3) {
+    if (hitRate >= 0.55) status = 'hot';
+    else if (hitRate < 0.40) status = 'cold';
+  }
+
+  return {
+    available: total > 0,
+    hitRate,
+    signalDays: total,
+    totalDays: history.length,
+    status,
+    recentSignals: signals.slice(-10),
+  };
+}
+
+/**
+ * Get cached NB performance (fast path). Used by composite.js to adjust
+ * north-bound sentiment weight in scoring.
+ *
+ * @returns {object|null}
+ */
+function getNBPerformance() {
+  const cachePath = path.join(DATA_DIR, 'factor_performance.json');
+  if (!fs.existsSync(cachePath)) return null;
+  try {
+    const cache = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    return cache.nbPerformance || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+module.exports = {
+  computeFactorPerformance,
+  updatePerformanceCache,
+  loadCachedPerformance,
+  computeFlowPerformance,
+  getColdFactors,
+  updateNBSentimentRecord,
+  getNBPerformance,
+  FACTORS,
+};

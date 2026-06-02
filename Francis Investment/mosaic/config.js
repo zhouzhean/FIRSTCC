@@ -33,10 +33,10 @@ module.exports = {
 
   // ---- 买入阈值（百分位制） ----
   BUY_THRESHOLD: {
-    percentileTop: 0.15,       // top 15% = 普通买入（收紧）
-    percentileStrong: 0.05,    // top 5% = 强买入（收紧）
-    minAbsoluteScore: 60,      // 绝对质量底线（从50→60）
-    minStrongScore: 70,        // 强买入最低绝对分（防止top 5%质量不足）
+    percentileTop: 0.15,       // top 15% = 普通买入
+    percentileStrong: 0.05,    // top 5% = 强买入
+    minAbsoluteScore: 50,      // 绝对质量底线（新评分标准下55+已是好分）
+    minStrongScore: 60,        // 强买入最低绝对分（新评分标准下65+罕见）
     northBoundRiskOffset: 5,   // 北向大幅流出时额外提高阈值
   },
 
@@ -50,6 +50,26 @@ module.exports = {
     commissionRate: 0.00025,
     stampTaxRate: 0.001,
     transferFeeRate: 0.00001,
+    // 分层仓位管理（Kelly式，按信号强度缩放）
+    positionSizing: {
+      strongTiers: [               // 强买入：top 5%百分位 + hasStrongSignal
+        { minScore: 85, allocation: 0.25 },  // 85+: 25%现金
+        { minScore: 75, allocation: 0.20 },  // 75+: 20%现金
+        { minScore: 65, allocation: 0.15 },  // 65+: 15%现金
+      ],
+      normalTiers: [               // 普通买入：top 15%百分位
+        { minScore: 65, allocation: 0.12 },  // 65+: 12%现金
+        { minScore: 55, allocation: 0.08 },  // 55+: 8%现金
+      ],
+      signalCountBonus: 0.02,      // 每多1个信号+2% (信号数>2生效)
+      riskRegimeMultipliers: {     // 跨市场风险仓位乘数
+        panic: 0.3,                // 恐慌：3折仓位
+        risk_off: 0.5,             // 避险：5折
+        neutral: 0.8,              // 中性：8折
+        slightly_bullish: 1.0,     // 温和看涨：全仓
+        risk_on: 1.2,              // 风险偏好：1.2倍
+      },
+    },
   },
 
   // ---- 全自动调度器 ----
@@ -127,7 +147,8 @@ module.exports = {
   API: {
     rateLimitMs: 200,
     pageSize: 500,
-    maxDetailFetches: 30,
+    batchConcurrency: 5,       // 并发深析股票数（避免单文件阻塞）
+    maxDetailFetches: 80,      // 从30提升至80，覆盖~20%候选股
   },
 
   // ---- 新闻采集 ----
@@ -174,5 +195,34 @@ module.exports = {
       'BIDU': 'AI/自动驾驶', 'NIO': '新能源车', 'XPEV': '新能源车',
       'LI': '新能源车', 'BILI': '游戏/Z世代', 'TME': '娱乐/内容', 'IQ': '娱乐/内容',
     },
+  },
+
+  // ---- 周末深度分析 ----
+  WEEKEND_ANALYSIS: {
+    analysisInterval: 15 * 60 * 1000,       // 每15分钟重新分析一轮
+    historyPullInterval: 2 * 60 * 60 * 1000, // 每2小时增量拉取历史K线
+    initialHistoryYears: 5,                   // 首次拉取5年历史
+    similarityTopN: 5,                        // 相似度匹配 top 5
+    similarityWindow: 20,                     // 相似度对比窗口（交易日）
+    contextValidDays: 3,                      // 周末上下文有效期3天（覆盖到周一）
+    sinaBatchDelay: 200,                      // API 请求间隔 ms
+    crisisWeights: {                          // 危机预警维度权重
+      liquidity: 0.25,
+      valuation: 0.20,
+      marketBreadth: 0.20,
+      northBound: 0.15,
+      margin: 0.10,
+      volatility: 0.10,
+    },
+  },
+
+  // ---- 周末分析验证 ----
+  WEEKEND_VERIFICATION: {
+    maxArchiveWeeks: 52,                     // 保留最多52周归档
+    similarityHorizons: [5, 10, 20],         // 验证相似度预测的时间窗口
+    crisisCorrelationMinWeeks: 4,            // 危机分排位相关性所需最少周数
+    factorHotThreshold: 0.55,                // 因子热门阈值
+    factorColdThreshold: 0.40,               // 因子冷门阈值
+    verificationSchedule: { hour: 15, minute: 30 }, // 周五收盘后触发验证
   },
 };

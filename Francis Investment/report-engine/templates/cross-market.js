@@ -42,6 +42,16 @@ function renderCrossMarket(data, mode, analysis) {
   html += '</div>';
   html += '<div style="font-size:18px;font-weight:600;color:#1e293b;margin-bottom:4px;">' + escHtml(rs.recommendation.action) + '策略</div>';
   html += '<div style="font-size:12px;color:#64748b;line-height:1.6;">' + escHtml(rs.recommendation.desc) + '</div>';
+
+  // Tiered allocation table
+  html += '<div style="margin-top:10px;padding:8px 10px;background:rgba(184,148,44,0.04);border-radius:6px;">';
+  html += '<div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;">Tiered Allocation 分层仓位</div>';
+  html += '<div style="font-size:10px;color:#64748b;line-height:1.8;">';
+  html += '<div><span style="color:#b8942c;font-weight:600;">强买</span> 85+:25% | 75+:20% | 65+:15%</div>';
+  html += '<div><span style="color:#64748b;font-weight:600;">普通买</span> 65+:12% | 55+:8%</div>';
+  html += '<div style="margin-top:2px;"><span style="color:#94a3b8;">信号加成:</span> 每多1个信号 +2% · <span style="color:#94a3b8;">风险乘数:</span> ' + (rs.positionSize || '--') + '%</div>';
+  html += '</div></div>';
+
   html += '</div>';
 
   // Component breakdown cards

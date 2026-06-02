@@ -136,6 +136,121 @@ function getNextScanTime() {
   return null;
 }
 
+/**
+ * P1-2: Generate today's actionable verdict.
+ * Synthesizes market state + factor health + portfolio P&L + risk regime
+ * into one sentence of guidance the user can actually act on.
+ */
+function generateTodaysVerdict(data) {
+  const parts = [];
+  let action = 'normal';
+  let actionLabel = '正常交易';
+  let actionColor = '#00e676';
+
+  // 1. Market state
+  const state = (data.scheduler && data.scheduler.state) || 'closed';
+  const tradingStates = ['morning_session', 'afternoon_session'];
+  const isTrading = tradingStates.includes(state);
+
+  if (!isTrading) {
+    const stateLabel = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后' }[state] || state;
+    return {
+      summary: '当前' + stateLabel + '，等待开盘',
+      action: 'wait',
+      color: '#4a5568',
+      details: [],
+    };
+  }
+
+  // 2. Factor health: count HOT vs COLD, plus NB performance
+  let hotCount = 0, coldCount = 0;
+  const factorDetails = [];
+  if (data.factorPerformance && data.factorPerformance.factors) {
+    for (const f of data.factorPerformance.factors) {
+      if (f.status === 'hot') hotCount++;
+      else if (f.status === 'cold') coldCount++;
+    }
+  }
+
+  // Include north-bound performance in verdict
+  if (data.factorPerformance && data.factorPerformance.nbPerformance && data.factorPerformance.nbPerformance.available) {
+    const nb = data.factorPerformance.nbPerformance;
+    if (nb.status === 'cold') {
+      parts.push('北向信号偏冷(命中率' + (nb.hitRate * 100).toFixed(0) + '%)');
+      action = action === 'normal' ? 'cautious' : action;
+    }
+  }
+
+  if (coldCount >= 3) {
+    parts.push('因子信号大面积偏冷(' + coldCount + '/9)');
+    action = 'defensive';
+  } else if (hotCount >= 2) {
+    parts.push('因子信号活跃(HOT: ' + hotCount + '/9)');
+  } else {
+    parts.push('因子信号中性');
+  }
+
+  // 3. Portfolio status
+  if (data.positions) {
+    const totalReturn = data.positions.totalReturn || 0;
+    const posCount = (data.positions.positions || []).length;
+    if (posCount === 0) {
+      parts.push('空仓');
+    } else if (totalReturn < -3) {
+      parts.push('持仓浮亏' + totalReturn.toFixed(1) + '%');
+      action = action === 'normal' ? 'cautious' : action;
+    } else if (totalReturn > 2) {
+      parts.push('持仓盈利' + totalReturn.toFixed(1) + '%');
+    } else {
+      parts.push('持仓' + posCount + '只(±' + Math.abs(totalReturn).toFixed(1) + '%)');
+    }
+  }
+
+  // 4. Last scan info
+  if (data.lastResult) {
+    const lr = data.lastResult;
+    if (lr.maxScore != null) {
+      const maxLabel = lr.maxScore >= 70 ? '高' : lr.maxScore >= 55 ? '中' : '低';
+      parts.push('最近扫描最高' + lr.maxScore + '分(' + maxLabel + '质量)');
+    }
+  }
+
+  // 5. Cross-market risk
+  if (data.scheduler && data.scheduler.riskState) {
+    const regime = data.scheduler.riskState;
+    if (regime === 'panic' || regime === 'risk_off') {
+      parts.push('跨市场风险偏高');
+      action = 'defensive';
+    }
+  }
+
+  // Determine final action
+  switch (action) {
+    case 'defensive':
+      actionLabel = '建议减仓观望';
+      actionColor = '#ff3b4a';
+      parts.push('→ 减少新买入，关注止损');
+      break;
+    case 'cautious':
+      actionLabel = '谨慎交易';
+      actionColor = '#ffb800';
+      parts.push('→ 控制仓位，优选质量');
+      break;
+    default:
+      actionLabel = '可正常交易';
+      actionColor = '#00e676';
+      parts.push('→ 按信号执行，注意风控');
+  }
+
+  return {
+    summary: parts.join(' · '),
+    action: action,
+    actionLabel: actionLabel,
+    color: actionColor,
+    details: [],
+  };
+}
+
 setInterval(() => {
   if (sseClients.size === 0) return;
   const now = new Date();
@@ -407,7 +522,7 @@ function printBanner() {
 
 // ---- Main server ----
 
-const server = http.createServer(function(req, res) {
+const server = http.createServer(async function(req, res) {
   const url = new URL(req.url, 'http://localhost:' + PORT);
   const pathname = url.pathname;
   const method = req.method;
@@ -564,10 +679,127 @@ const server = http.createServer(function(req, res) {
       const perf = factorPerf.computeFactorPerformance({
         days: parseInt(url.searchParams.get('days')) || 20,
       });
-      return jsonResponse(res, { ok: true, ...perf });
+      // Include north-bound performance (cached from scheduler pipeline runs)
+      const nbPerf = factorPerf.getNBPerformance();
+      return jsonResponse(res, { ok: true, ...perf, nbPerformance: nbPerf });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
+  }
+
+  // Market Microstructure API — Smart Risk Hub
+  if (pathname === '/api/market/microstructure') {
+    try {
+      const northBound = require('./mosaic/collectors/north_bound');
+      const { fetchSectorFlow } = require('./mosaic/collectors/capital_flow');
+
+      // Fetch north-bound sentiment + sector flow in parallel
+      const [nbFlow, sectorFlows] = await Promise.all([
+        northBound.fetchNorthBoundFlow(20).catch(() => []),
+        fetchSectorFlow().catch(() => []),
+      ]);
+      const nbSentiment = northBound.computeSentiment(nbFlow);
+
+      // Smart money divergence: aggregate super-large vs small across all sectors
+      let totalSuperLarge = 0, totalSmall = 0;
+      for (const s of sectorFlows) {
+        if (s.superLargeNetFlow != null) totalSuperLarge += s.superLargeNetFlow;
+        if (s.smallNetFlow != null) totalSmall += s.smallNetFlow;
+      }
+      const smartMoneyDivergence = totalSuperLarge !== 0 || totalSmall !== 0
+        ? (totalSuperLarge - totalSmall) / 1e8  // 亿
+        : null;
+      const smartMoneySignal = smartMoneyDivergence != null
+        ? (smartMoneyDivergence > 10 ? 'strong_buy' : smartMoneyDivergence > 3 ? 'buy' :
+           smartMoneyDivergence < -10 ? 'strong_sell' : smartMoneyDivergence < -3 ? 'sell' : 'neutral')
+        : 'no_data';
+
+      // Top 3 inflow & outflow sectors
+      const sortedFlows = [...sectorFlows].sort((a, b) => (b.majorNetFlow || 0) - (a.majorNetFlow || 0));
+      const topInflow = sortedFlows.slice(0, 3).map(s => ({ name: s.name, flow: Math.round((s.majorNetFlow || 0) / 1e8 * 100) / 100 }));
+      const topOutflow = sortedFlows.slice(-3).reverse().map(s => ({ name: s.name, flow: Math.round((s.majorNetFlow || 0) / 1e8 * 100) / 100 }));
+
+      // Compute 20-day historical volatility from daily summary index data
+      let volatility = null, volRegime = 'normal';
+      try {
+        const summariesDir = path.join(DATA_DIR, 'summaries');
+        if (fs.existsSync(summariesDir)) {
+          // Get last 30 daily summaries for HV calculation
+          const summaryFiles = fs.readdirSync(summariesDir)
+            .filter(f => f.endsWith('.json'))
+            .sort()
+            .slice(-30);
+
+          const shCloses = [];
+          for (const sf of summaryFiles) {
+            try {
+              const sum = JSON.parse(fs.readFileSync(path.join(summariesDir, sf), 'utf8'));
+              const indices = sum.market && sum.market.indices ? sum.market.indices : [];
+              // Use first index (usually 上证) close price
+              const shIdx = indices.find(function(ix) { return ix.name && ix.name.includes('上证'); }) || indices[0];
+              if (shIdx && shIdx.price != null) {
+                shCloses.push(shIdx.price);
+              }
+            } catch (_) {}
+          }
+
+          if (shCloses.length >= 3) {
+            const returns = [];
+            for (let i = 1; i < shCloses.length; i++) {
+              if (shCloses[i] && shCloses[i - 1] && shCloses[i - 1] > 0) {
+                returns.push(Math.log(shCloses[i] / shCloses[i - 1]));
+              }
+            }
+            if (returns.length >= 2) {
+              const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+              const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+              volatility = Math.sqrt(variance) * Math.sqrt(252) * 100; // Annualized %
+
+              // Regime from recent 5 days vs full period
+              const recentReturns = returns.slice(-5);
+              const rMean = recentReturns.reduce((a, b) => a + b, 0) / recentReturns.length;
+              const rVar = recentReturns.reduce((s, r) => s + (r - rMean) ** 2, 0) / (recentReturns.length - 1);
+              const recentVol = Math.sqrt(rVar) * Math.sqrt(252) * 100;
+
+              volRegime = recentVol > 30 ? 'high' : recentVol > 20 ? 'elevated' : recentVol > 12 ? 'normal' : 'low';
+            }
+          }
+        }
+      } catch (_) { /* volatility is optional */ }
+
+      // Consecutive north-bound directions for sparkline
+      const nbDirections = nbFlow.length >= 5
+        ? nbFlow.slice(-5).map(d => d.totalFlow >= 0 ? 1 : -1)
+        : [];
+
+      jsonResponse(res, {
+        ok: true,
+        time: new Date().toISOString(),
+        northBound: {
+          sentiment: nbSentiment.sentiment,
+          consecutiveInflow: nbSentiment.consecutiveInflow,
+          last5DaysTotal: nbSentiment.last5DaysTotal,
+          lastDayFlow: nbSentiment.lastDayFlow,
+          directions: nbDirections,
+        },
+        capitalFlow: {
+          topInflow,
+          topOutflow,
+          smartMoneyDivergence,
+          smartMoneySignal,
+          sectorCount: sectorFlows.length,
+        },
+        volatility: {
+          value: volatility ? Math.round(volatility * 100) / 100 : null,
+          regime: volRegime,
+          label: volRegime === 'high' ? '高波动' : volRegime === 'elevated' ? '偏高' :
+                 volRegime === 'low' ? '低波动' : '正常',
+        },
+      });
+    } catch (e) {
+      jsonResponse(res, { ok: false, message: e.message });
+    }
+    return;
   }
 
   // Sector Live Data API
@@ -640,6 +872,55 @@ const server = http.createServer(function(req, res) {
       return jsonResponse(res, { ok: true, ...kb.getKnowledgeSummary() });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: '知识库未初始化' });
+    }
+  }
+
+  // Knowledge Base — factor combos pattern extraction
+  if (pathname === '/api/knowledge/factor-combos') {
+    try {
+      const kb = require('./mosaic/analysis/knowledge_base');
+      const combos = kb.extractFactorCombos(10);
+      const sectorPatterns = kb.extractSectorFlowPatterns();
+      return jsonResponse(res, { ok: true, combos, sectorPatterns });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // Public config (for UI Standard modal sync)
+  if (pathname === '/api/config/public') {
+    try {
+      const cfg = require('./mosaic/config');
+      return jsonResponse(res, {
+        ok: true,
+        filters: {
+          maxPrice: cfg.FILTER.maxPrice,
+          minTurnover: cfg.FILTER.minTurnover,
+          maxPE: cfg.FILTER.maxPE,
+          excludeST: cfg.FILTER.excludeST,
+          excludeGEM: cfg.FILTER.exclude300,
+          includeSTAR: cfg.FILTER.exclude688 === false,
+        },
+        weights: cfg.FACTOR_WEIGHTS || {},
+        positionSizing: cfg.positionSizing || {},
+        trading: {
+          initialCapital: cfg.SIMFOLIO.initialCapital,
+          maxPositions: cfg.SIMFOLIO.maxPositions,
+          singleLimit: cfg.SIMFOLIO.maxSinglePositionPct,
+          buyThreshold: { minPercentile: cfg.BUY_THRESHOLD.percentileTop, minScore: cfg.BUY_THRESHOLD.minAbsoluteScore },
+          stopLoss: cfg.SIMFOLIO.stopLossPct,
+          trailingStop: cfg.SIMFOLIO.trailingStop,
+        },
+        scanSchedule: {
+          fullScans: cfg.SCAN_SCHEDULE?.full || ['09:30', '11:00', '13:00'],
+          midScans: cfg.SCAN_SCHEDULE?.mid || ['10:00', '10:30', '11:25', '13:30', '14:00', '14:30', '14:50'],
+        },
+        dataSource: 'Eastmoney (主力) + Tencent (备选) + Sina (三级备选)',
+        maxDetailFetches: cfg.API?.maxDetailFetches || 80,
+        thinDataInfo: '基本面无数据时自适应降权(基本面25%→10%，总分上限65)',
+      });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
     }
   }
 
@@ -747,6 +1028,89 @@ const server = http.createServer(function(req, res) {
     }
   }
 
+  // ===== 两融数据 API =====
+  if (pathname === '/api/margin/status') {
+    try {
+      const marginData = require('./mosaic/collectors/margin_data');
+      const data = await marginData.fetchMarginData(20);
+      const sentiment = marginData.computeMarginSentiment(data);
+      return jsonResponse(res, { ok: true, ...sentiment, raw: data.slice(0, 5) });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // ===== 周末深度分析 API =====
+  if (pathname === '/api/weekend-analysis/status') {
+    try {
+      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
+      return jsonResponse(res, { ok: true, ...weekendAnalyzer.getStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/weekend-analysis/report') {
+    try {
+      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
+      return jsonResponse(res, { ok: true, ...weekendAnalyzer.getReport() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/weekend-analysis/context') {
+    try {
+      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
+      const ctx = weekendAnalyzer.getEnhancedContext();
+      if (ctx) {
+        return jsonResponse(res, { ok: true, ...ctx });
+      }
+      return jsonResponse(res, { ok: false, message: '暂无周末分析上下文' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/weekend-analysis/history') {
+    try {
+      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
+      const report = weekendAnalyzer.getReport();
+      return jsonResponse(res, { ok: true, similarity: report.similarity || [] });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // ===== 周末分析验证 API =====
+  if (pathname === '/api/weekend-analysis/verification') {
+    const weekParam = url.searchParams.get('week');
+    try {
+      const verifier = require('./mosaic/analysis/weekend_verifier');
+      if (weekParam) {
+        const vReport = verifier.getVerificationReport(weekParam);
+        if (vReport) return jsonResponse(res, { ok: true, ...vReport });
+        return jsonResponse(res, { ok: false, message: '该周末的验证报告不存在' }, 404);
+      }
+      // No week specified: return latest
+      const latest = verifier.getLatestVerification();
+      if (latest) return jsonResponse(res, { ok: true, ...latest });
+      return jsonResponse(res, { ok: false, message: '尚无验证报告' }, 404);
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/weekend-analysis/verification-history') {
+    try {
+      const verifier = require('./mosaic/analysis/weekend_verifier');
+      const history = verifier.getVerificationHistory();
+      return jsonResponse(res, { ok: true, history });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
     const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
@@ -803,6 +1167,53 @@ const server = http.createServer(function(req, res) {
     try {
       const factorPerf = require('./mosaic/analysis/factor_performance');
       data.factorPerformance = factorPerf.computeFactorPerformance({ days: 20 });
+    } catch (e) { /* ignore */ }
+
+    // Include margin data for think-tank risk hub
+    try {
+      const marginData = require('./mosaic/collectors/margin_data');
+      const mData = await marginData.fetchMarginData(20);
+      const mSentiment = marginData.computeMarginSentiment(mData);
+      data.margin = { ok: true, ...mSentiment, raw: mData.slice(0, 5) };
+    } catch (e) { /* ignore */ }
+
+    // Include config for Standard modal
+    try {
+      const cfg = require('./mosaic/config');
+      data.appConfig = {
+        filters: {
+          maxPrice: cfg.FILTER.maxPrice,
+          minTurnover: cfg.FILTER.minTurnover,
+          maxPE: cfg.FILTER.maxPE,
+          excludeST: cfg.FILTER.excludeST,
+          excludeGEM: cfg.FILTER.exclude300,
+          includeSTAR: cfg.FILTER.exclude688 === false,
+        },
+        weights: cfg.FACTOR_WEIGHTS || {},
+        positionSizing: cfg.positionSizing || {},
+        trading: {
+          initialCapital: cfg.SIMFOLIO.initialCapital || 100000,
+          maxPositions: cfg.SIMFOLIO.maxPositions || 5,
+          singleLimit: cfg.SIMFOLIO.maxSinglePositionPct || 30,
+          buyThreshold: { minPercentile: (cfg.BUY_THRESHOLD && cfg.BUY_THRESHOLD.percentileTop) || 0.15, minScore: (cfg.BUY_THRESHOLD && cfg.BUY_THRESHOLD.minAbsoluteScore) || 50 },
+          stopLoss: cfg.SIMFOLIO.stopLossPct || -8,
+          trailingStop: cfg.SIMFOLIO.trailingStop,
+        },
+        scanSchedule: {
+          fullScans: (cfg.SCAN_SCHEDULE && cfg.SCAN_SCHEDULE.full) || ['09:30', '11:00', '13:00'],
+          midScans: (cfg.SCAN_SCHEDULE && cfg.SCAN_SCHEDULE.mid) || ['10:00', '10:30', '11:25', '13:30', '14:00', '14:30', '14:50'],
+        },
+        dataSource: 'Eastmoney (主力) + Tencent (备选) + Sina (三级备选)',
+        maxDetailFetches: (cfg.API && cfg.API.maxDetailFetches) || 80,
+        thinDataInfo: '基本面无数据时自适应降权(基本面25%→10%，总分上限65)',
+      };
+    } catch (e) { /* ignore */ }
+
+    // P1-2: Generate today's verdict — synthesized decision guidance
+    try {
+      const shIdx = data.positions ? null : null; // fetched below if needed
+      const verdict = generateTodaysVerdict(data);
+      if (verdict) data.verdict = verdict;
     } catch (e) { /* ignore */ }
 
     return jsonResponse(res, data);
@@ -896,6 +1307,11 @@ server.listen(PORT, '0.0.0.0', function() {
   scheduler = new Scheduler();
   scheduler.start();
 
+  // Inject SSE broadcast into scheduler (used by weekend analyzer too)
+  scheduler.setSSEBroadcast((data) => {
+    if (sseClients.size > 0) broadcastSSE('weekend', data);
+  });
+
   // Wire scheduler events to console AND daily log
   scheduler.on('event', (evt) => {
     // Save all important events to daily log for think-tank timeline
@@ -907,7 +1323,7 @@ server.listen(PORT, '0.0.0.0', function() {
 
   // Wire scheduler think-tank events to SSE broadcast
   const thinkEvents = ['think_progress', 'think_enrichment', 'think_stock', 'think_stats',
-    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket', 'think_factor_perf'];
+    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket', 'think_factor_perf', 'think_weekend'];
   for (const evt of thinkEvents) {
     scheduler.on(evt, (data) => {
       if (sseClients.size > 0) {
@@ -916,6 +1332,25 @@ server.listen(PORT, '0.0.0.0', function() {
         broadcastSSE(sseEvent, data);
       }
     });
+  }
+
+  // Auto-start weekend analysis if it's Saturday or Sunday
+  try {
+    const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
+    // Inject SSE broadcast
+    weekendAnalyzer.setSSEBroadcast((data) => {
+      if (sseClients.size > 0) broadcastSSE('weekend', data);
+    });
+    const now = new Date();
+    if (now.getDay() === 0 || now.getDay() === 6) {
+      // Delay slightly to let server finish booting
+      setTimeout(() => {
+        weekendAnalyzer.startWeekendAnalysis();
+        console.log('  Weekend analysis auto-started (server booted on weekend)');
+      }, 2000);
+    }
+  } catch (e) {
+    // weekend_analyzer module may not exist yet — that's fine
   }
 
   printBanner();

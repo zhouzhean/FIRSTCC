@@ -267,8 +267,10 @@ function computeHiddenSignals(stock, detail, klines, marketDown) {
     maxScore += 3;
   }
 
-  // No signals = neutral 50, not zero. Signals map range to 50-100.
-  const normalizedScore = maxScore > 0 ? Math.round(50 + (rawScore / maxScore) * 50) : 50;
+  // No signals = below-average 35 (not 50). A stock with zero hidden signals
+  // is below par — real opportunities should trigger at least 1-2 signals.
+  // Signals map range to 35-100 (was 50-100, which inflated all scores).
+  const normalizedScore = maxScore > 0 ? Math.round(35 + (rawScore / maxScore) * 65) : 35;
 
   return {
     signals: signals,

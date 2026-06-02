@@ -180,7 +180,9 @@ function scoreDirectionalFlow(stock, sectorFlowMap, stockFlowHistory) {
  * Activity-based scoring (fallback when no directional data).
  */
 function scoreActivity(stock) {
-  let score = 50;
+  // Base score 35 (was 50) — activity alone does not mean capital is bullish.
+  // Without directional flow data, the stock gets a below-average starting point.
+  let score = 35;
   const turnover = stock.turnover || 0;
   const turnoverRate = stock.turnoverRate || 0;
 
@@ -282,7 +284,7 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
 
   // Weighted total (exclude event if no LHB data)
   const eventWeight = ctx.lhbSignal ? weights.event : 0;
-  const total = Math.round(
+  let total = Math.round(
     fundamental * (weights.fundamental + (ctx.lhbSignal ? 0 : weights.event * 0.4)) +
     technical * (weights.technical + (ctx.lhbSignal ? 0 : weights.event * 0.3)) +
     hidden * (weights.hidden + (ctx.lhbSignal ? 0 : weights.event * 0.3)) +
@@ -290,21 +292,76 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
     eventScore * eventWeight
   );
 
+  // Thin data cap: stocks without ROE/debt/revenue data cannot exceed 65.
+  // This prevents "empty" stocks from scoring 76+ purely on cheap PE + activity.
+  if (dataQuality === 'thin' && total > 65) {
+    total = 65;
+  }
+
   // North-bound sentiment adjustment
+  // 根据北向资金历史绩效动态调整权重：
+  //   HOT (命中率≥55%): 全额 (±3/±5)
+  //   STABLE (命中率40-55%或数据不足): 全额（默认）
+  //   COLD (命中率<40%且≥5个信号日): 降至 1/3（±1/±2）
   let adjustedTotal = total;
+  let nbWeightMultiplier = 1.0;
   if (ctx.northBoundSentiment && ctx.northBoundSentiment.available) {
+    try {
+      const factorPerf = require('../analysis/factor_performance');
+      const nbPerf = factorPerf.getNBPerformance();
+      if (nbPerf && nbPerf.available && nbPerf.status === 'cold' && nbPerf.signalDays >= 5) {
+        // NB historically unreliable — reduce weight to 1/3
+        nbWeightMultiplier = 0.33;
+      }
+      // HOT: keep full weight (1.0). STABLE / insufficient data: keep full weight.
+    } catch (_) { /* factor_performance not available, use default weight */ }
+
     const nb = ctx.northBoundSentiment;
-    if (nb.sentiment === 'bullish') adjustedTotal = Math.min(100, total + 3);
-    else if (nb.sentiment === 'bearish') adjustedTotal = Math.max(0, total - 5);
-    else if (nb.sentiment === 'slightly_bullish') adjustedTotal = Math.min(100, total + 1);
+    if (nb.sentiment === 'bullish') {
+      const adj = Math.round(3 * nbWeightMultiplier);
+      adjustedTotal = Math.min(100, total + adj);
+    } else if (nb.sentiment === 'bearish') {
+      const adj = Math.round(5 * nbWeightMultiplier);
+      adjustedTotal = Math.max(0, total - adj);
+    } else if (nb.sentiment === 'slightly_bullish') {
+      const adj = Math.round(1 * nbWeightMultiplier);
+      adjustedTotal = Math.min(100, total + adj);
+    }
+  }
+
+  // === Margin sentiment adjustment (两融杠杆资金情绪) ===
+  if (ctx.marginSentiment && ctx.marginSentiment.available) {
+    const ms = ctx.marginSentiment;
+    if (ms.sentiment === 'bullish') {
+      adjustedTotal = Math.min(100, adjustedTotal + 2);
+    } else if (ms.sentiment === 'bearish') {
+      adjustedTotal = Math.max(0, adjustedTotal - 3);
+    }
+    // neutral: no adjustment
+  }
+
+  // === Enhanced LHB integration: use as confirmation/contradiction signal ===
+  if (ctx.lhbSignal && ctx.lhbSignal.signal === 'strong') {
+    // LHB strong net buy — institutional confirmation, direct bonus
+    if (ctx.lhbSignal.netAmt > 0) {
+      adjustedTotal = Math.min(100, adjustedTotal + 5);
+    }
+    // LHB strong net buy + strong capital flow = amplified conviction
+    if (ctx.lhbSignal.netAmt > 0 && capitalFlow > 60) {
+      adjustedTotal = Math.min(100, adjustedTotal + 3);
+    }
+  }
+  if (ctx.lhbSignal && ctx.lhbSignal.signal === 'strong' && ctx.lhbSignal.netAmt < 0) {
+    // LHB net sell — contradiction to any positive capital flow
+    adjustedTotal = Math.max(0, adjustedTotal - 3);
   }
 
   // Rating (based on adjusted total)
   let rating;
-  if (adjustedTotal >= 85) rating = 'S';
-  else if (adjustedTotal >= 75) rating = 'A';
-  else if (adjustedTotal >= 60) rating = 'B';
-  else if (adjustedTotal >= 45) rating = 'C';
+  if (adjustedTotal >= 80) rating = 'S';
+  else if (adjustedTotal >= 70) rating = 'A';
+  else if (adjustedTotal >= 55) rating = 'B';
+  else if (adjustedTotal >= 40) rating = 'C';
   else rating = 'D';
 
   // 6-dimension display scores (0-5 scale)

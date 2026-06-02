@@ -15,3 +15,22 @@ Desktop.ini
 # IDE
 .vscode/
 .idea/
+
+# Node.js (this is a zero-dependency project)
+node_modules/
+package-lock.json
+package.json
+
+# Runtime data directories
+Francis Investment/report-engine/data/market_history/
+Francis Investment/report-engine/data/simfolio/
+Francis Investment/report-engine/data/us_market/
+
+# Temp / debug files
+*.docx
+*.xml
+*.png
+*_flowchart*
+chi_sim.traineddata
+eng.traineddata
+create_flowchart.js

@@ -61,11 +61,12 @@ function generateMarketNarrative(indices, events, newsItems) {
     const macroNews = newsItems.filter(n => n.category === 'macro').slice(0, 2);
 
     for (const n of policyNews) {
-      keyDrivers.push({ driver: n.title, impact: 'positive', strength: 0.5 });
+      const impact = (n.sentiment && n.sentiment.sentiment) || 'neutral';
+      keyDrivers.push({ driver: n.title, impact, strength: 0.5 });
       narrative.push('政策面：' + n.title);
     }
     for (const n of macroNews) {
-      const impact = n.title.includes('降') || n.title.includes('利好') || n.title.includes('突破') ? 'positive' : 'neutral';
+      const impact = (n.sentiment && n.sentiment.sentiment) || 'neutral';
       keyDrivers.push({ driver: n.title, impact, strength: 0.4 });
     }
 
