@@ -587,6 +587,11 @@ const server = http.createServer(async function(req, res) {
       const dates = fs.readdirSync(summariesDir)
         .filter(f => f.endsWith('.json'))
         .map(f => f.replace('.json', ''))
+        .filter(d => {
+          // Filter out weekends (non-trading days should not show up on calendar)
+          const day = new Date(d + 'T12:00:00+08:00').getDay();
+          return day >= 1 && day <= 5;
+        })
         .sort()
         .reverse();
       return jsonResponse(res, { ok: true, dates });

@@ -140,11 +140,11 @@ class Scheduler extends EventEmitter {
       this._runPostMarketWrapup();
     }
 
-    // 16:00 后：生成每日盘后总结报告
+    // 16:00 后：生成每日盘后总结报告（仅交易日）
     const hourNow = now.getHours();
     const isAfter4pm = hourNow >= 16;
     const summaryKey = 'daily_summary_' + dateStr;
-    if (isAfter4pm && !this._scheduledOps.has(summaryKey)) {
+    if (isAfter4pm && this._isTradingDay(now) && !this._scheduledOps.has(summaryKey)) {
       this._scheduledOps.add(summaryKey);
       this._runDailySummary();
     }
