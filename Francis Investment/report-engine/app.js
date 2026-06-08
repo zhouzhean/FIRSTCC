@@ -97,6 +97,7 @@ var SECTIONS = [
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '', disabled: true, render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
   { id: 'usMarket',        label: '海外市场',         icon: '', render: function(d,m) { renderUSMarketDirect(); return ''; } },
   { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
+  { id: 'historyReview',   label: '历史复盘',         icon: '', render: function(d,m) { return renderHistoryReviewSection(d,m); } },
   { id: 'weekendAnalysis', label: '周末深度分析',     icon: '', render: function(d,m) { renderWeekendAnalysisDirect(); return ''; } },
   { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
@@ -1212,6 +1213,151 @@ function renderKnowledgeBaseFull(kb) {
     html += '<li>当数据积累到 20+ 交易日时，将启用历史模式匹配功能，提供更精准的前瞻预测</li>';
     html += '</ul></div>';
   }
+
+  return html;
+}
+
+// ============ History Review Section (历史复盘) ============
+
+function renderHistoryReviewSection(data, mode) {
+  var html = '<div id="history-review-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
+  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
+  html += '<div style="font-size:32px;margin-bottom:12px;">📋</div>';
+  html += '<div>正在加载历史复盘数据...</div>';
+  html += '</div></div>';
+  setTimeout(function() { loadHistoryReviewSection(); }, 100);
+  return html;
+}
+
+function loadHistoryReviewSection() {
+  var container = document.getElementById('history-review-container');
+  if (!container) return;
+
+  // Load knowledge base + summary dates in parallel
+  Promise.all([
+    fetch('/api/knowledge/summary').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/summary-dates').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/knowledge/factor-combos').then(function(r) { return r.json(); }).catch(function() { return null; }),
+  ]).then(function(results) {
+    var kb = results[0];
+    var summaryDates = results[1];
+    var combos = results[2];
+
+    if (!kb || !kb.ok || !summaryDates || !summaryDates.ok) {
+      container.innerHTML = '<div class="unavailable-placeholder">' +
+        '<div class="lock-icon">📋</div>' +
+        '<div class="lock-title">历史复盘数据暂不可用</div>' +
+        '<div class="lock-desc">需要至少一个交易日的复盘数据。请等待今日盘后总结生成。</div>' +
+        '</div>';
+      return;
+    }
+
+    container.innerHTML = renderHistoryReviewFull(kb, summaryDates.dates || [], combos);
+  });
+}
+
+function renderHistoryReviewFull(kb, dates, combos) {
+  // Sort dates chronologically
+  var sortedDates = dates.slice().sort();
+  var today = new Date().toISOString().slice(0, 10);
+
+  var html = '';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📋 历史复盘</h2>';
+  html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">交易日回顾 · 因子表现追踪 · 历史模式匹配 · 盘后总结归档</p>';
+
+  // Overview
+  html += '<div style="background:linear-gradient(135deg,#1e293b,#334155);border-radius:10px;padding:20px;margin-bottom:16px;color:#fff;">';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:16px;text-align:center;">';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (dates.length || 0) + '</div><div style="font-size:11px;color:#94a3b8;">复盘天数</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker ? kb.factorTracker.factors.length : 0) + '</div><div style="font-size:11px;color:#94a3b8;">追踪因子</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker ? kb.factorTracker.totalTriggers : 0) + '</div><div style="font-size:11px;color:#94a3b8;">累计触发</div></div>';
+  html += '<div><div style="font-size:28px;font-weight:700;">' + new Date(kb.lastUpdated).toLocaleDateString('zh-CN') + '</div><div style="font-size:11px;color:#94a3b8;">最后更新</div></div>';
+  html += '</div></div>';
+
+  // Factor combo patterns
+  if (combos && combos.ok && combos.combos && combos.combos.length > 0) {
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔗 因子组合模式</h3>';
+    html += '<div style="overflow-x:auto;">';
+    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+    html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
+    html += '<th style="padding:8px;color:#64748b;">组合</th><th style="padding:8px;color:#64748b;text-align:right;">命中率</th><th style="padding:8px;color:#64748b;text-align:right;">样本量</th><th style="padding:8px;color:#64748b;text-align:center;">置信度</th><th style="padding:8px;color:#64748b;">最近日期</th></tr></thead>';
+    html += '<tbody>';
+    for (var i = 0; i < combos.combos.length; i++) {
+      var c = combos.combos[i];
+      var confColor = c.confidence === 'high' ? '#16a34a' : c.confidence === 'medium' ? '#b8942c' : '#94a3b8';
+      var confBg = c.confidence === 'high' ? '#f0fdf4' : c.confidence === 'medium' ? '#fef9e7' : '#f8fafc';
+      html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+      html += '<td style="padding:8px;font-weight:600;font-family:monospace;">' + c.combo + '</td>';
+      html += '<td style="padding:8px;text-align:right;font-weight:600;">' + Math.round(c.hitRate * 100) + '%</td>';
+      html += '<td style="padding:8px;text-align:right;">' + c.sampleSize + '</td>';
+      html += '<td style="padding:8px;text-align:center;"><span style="padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;color:' + confColor + ';background:' + confBg + ';">' + (c.confidence === 'high' ? '高' : c.confidence === 'medium' ? '中' : '低') + '</span></td>';
+      html += '<td style="padding:8px;font-size:11px;color:#94a3b8;">' + (c.recentDates || []).join(', ') + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table></div></div>';
+  }
+
+  // Date list — trading day archive
+  if (dates.length > 0) {
+    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📅 交易日复盘归档</h3>';
+    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
+    for (var di = 0; di < sortedDates.length; di++) {
+      var date = sortedDates[di];
+      var isTodayDate = date === today;
+      var dateStyle = isTodayDate
+        ? 'padding:6px 14px;border-radius:16px;font-size:12px;font-weight:600;background:var(--accent);color:#fff;cursor:pointer;'
+        : 'padding:6px 14px;border-radius:16px;font-size:12px;background:#f8fafc;color:#64748b;border:1px solid #e5e7eb;cursor:pointer;transition:all 0.15s;';
+      html += '<span style="' + dateStyle + '" onclick="onDateClick(\'' + date + '\')" onmouseover="if(!this.classList.contains(\'today-chip\')){this.style.borderColor=\'var(--accent)\';this.style.color=\'var(--accent-dark)\';}" onmouseout="if(!this.classList.contains(\'today-chip\')){this.style.borderColor=\'#e5e7eb\';this.style.color=\'#64748b\';}">' + date + (isTodayDate ? ' (今天)' : '') + '</span>';
+    }
+    html += '</div>';
+    html += '<p style="font-size:11px;color:#cbd5e1;margin-top:12px;">点击日期可跳转查看对应交易日的模拟交易与报告数据</p>';
+    html += '</div>';
+  }
+
+  // Factor tracking from knowledge base
+  if (kb.factorTracker && kb.factorTracker.factors) {
+    var factors = kb.factorTracker.factors.slice();
+    factors.sort(function(a, b) { return b.triggerCount - a.triggerCount; });
+    var activeFactors = factors.filter(function(f) { return f.triggerCount > 0; });
+
+    if (activeFactors.length > 0) {
+      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
+      html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔥 因子表现排行</h3>';
+      html += '<div style="overflow-x:auto;">';
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+      html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
+      html += '<th style="padding:8px;color:#64748b;">因子</th><th style="padding:8px;color:#64748b;">名称</th><th style="padding:8px;color:#64748b;text-align:right;">触发次数</th><th style="padding:8px;color:#64748b;text-align:right;">Top日数</th><th style="padding:8px;color:#64748b;text-align:right;">平均贡献</th><th style="padding:8px;color:#64748b;">最近触发</th></tr></thead>';
+      html += '<tbody>';
+      for (var fi = 0; fi < activeFactors.length; fi++) {
+        var f = activeFactors[fi];
+        html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+        html += '<td style="padding:8px;font-weight:600;">' + f.id + '</td>';
+        html += '<td style="padding:8px;">' + f.name + '</td>';
+        html += '<td style="padding:8px;text-align:right;font-weight:600;">' + f.triggerCount + '</td>';
+        html += '<td style="padding:8px;text-align:right;">' + (f.daysTopSignal || 0) + '</td>';
+        html += '<td style="padding:8px;text-align:right;">' + (f.avgContribution > 0 ? f.avgContribution + '%' : '--') + '</td>';
+        html += '<td style="padding:8px;font-size:11px;color:#94a3b8;">' + (f.lastTriggered || '--') + '</td>';
+        html += '</tr>';
+      }
+      html += '</tbody></table></div></div>';
+    }
+  }
+
+  // Learning insights
+  html += '<div style="background:#fef9e7;border-radius:8px;padding:16px;border:1px solid #f59e0b;">';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">💡 复盘洞察</h3>';
+  html += '<ul style="font-size:12px;color:#64748b;line-height:1.9;margin:0;padding-left:18px;">';
+  html += '<li>系统已追踪 <b>' + dates.length + ' 个交易日</b>的复盘数据</li>';
+  if (combos && combos.ok && combos.combos) {
+    var highConfCombos = combos.combos.filter(function(c) { return c.confidence === 'high'; });
+    var medConfCombos = combos.combos.filter(function(c) { return c.confidence === 'medium'; });
+    html += '<li>因子组合模式: <b>' + highConfCombos.length + ' 个高置信度</b>，' + medConfCombos.length + ' 个中置信度</li>';
+  }
+  html += '<li>随着交易日累积，历史模式匹配将逐步提升预测准确率</li>';
+  html += '<li>点击上方日期标签可跳转到对应交易日的完整数据</li>';
+  html += '</ul></div>';
 
   return html;
 }
