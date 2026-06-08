@@ -47,6 +47,22 @@ module.exports = {
     maxSinglePositionPct: 0.30,
     maxSectorExposurePct: 0.40,  // 同一行业总仓位不超过40%
     stopLossPct: -0.08,
+    // Drawdown management — automatic risk reduction
+    maxDrawdownTiers: [
+      { threshold: -5, action: 'warn', message: '回撤超5%：提示风险，建议减仓' },
+      { threshold: -8, action: 'restrict', message: '回撤超8%：限制买入（仅允许卖出+轻仓买入，每日最多1只）' },
+      { threshold: -10, action: 'halt', message: '回撤超10%：暂停所有买入，仅允许止损卖出' },
+    ],
+    // Position pacing — prevent first-day concentration
+    maxBuysPerDay: 2,            // 每日最大建仓数
+    maxBuysPerDayReduced: 1,     // 已持3只+时每日最大建仓数
+    buyCooldownMin: 30,          // 同日内两次买入之间最短间隔（分钟）
+    // Dynamic buy threshold — auto-tighten when market weak
+    dynamicThreshold: {
+      weakTopScore: 65,          // TOP1 < 此分2天以上 → 提高买入门槛
+      raisedMinScore: 60,        // 自动提高后的最低绝对分
+      checkWindow: 2,             // 连续几天低分后触发
+    },
     commissionRate: 0.00025,
     stampTaxRate: 0.001,
     transferFeeRate: 0.00001,
@@ -214,6 +230,13 @@ module.exports = {
       margin: 0.10,
       volatility: 0.10,
     },
+  },
+
+  // ---- 因子信号诊断 ----
+  FACTOR_DIAGNOSTICS: {
+    silentAlarmDays: 3,          // 连续N天某因子触发为0 → 发出诊断告警
+    minExpectedTriggered: 2,     // 期望每天至少N个不同因子有信号
+    targetDailyRatio: 0.15,      // 期望至少15%的候选股触发至少1个信号
   },
 
   // ---- 周末分析验证 ----

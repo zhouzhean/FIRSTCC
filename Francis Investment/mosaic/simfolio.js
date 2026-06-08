@@ -346,7 +346,36 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
-  // ---- Step 3: Market direction gate ----
+  // ---- Step 3: Drawdown gate ----
+  // P0-1: Check portfolio drawdown level. At -10% halt, at -8% restrict, at -5% warn.
+  // This protects against continued bleeding — when the account is down significantly,
+  // stop adding new positions until conditions improve.
+  const ddLevel = (pf._drawdownLevel && pf._drawdownLevel.level) || 'normal';
+  if (ddLevel === 'halt') {
+    const sellDecisions = decisions.filter(d => d.action === 'sell');
+    const executedTrades = [];
+    for (const dec of sellDecisions) {
+      if (dec.action === 'sell') {
+        const trade = executeSell(pf, dec, today);
+        if (trade) executedTrades.push(trade);
+      }
+    }
+    for (const pos of pf.positions) {
+      const stockData = pipelineResults.find(r => r.code === pos.code);
+      if (stockData) pos.currentPrice = stockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+    return {
+      decisions: sellDecisions,
+      executed: executedTrades,
+      snapshot: getSnapshot(pf),
+      drawdownGateActive: true,
+      drawdownGateReason: pf._drawdownLevel.message,
+    };
+  }
+
+  // ---- Step 3a: Market direction gate ----
   // If Shanghai Composite is down more than 0.5%, skip all buy decisions.
   // Sells are still allowed — if we need to cut losses, we do it regardless.
   // This prevents buying into a falling market.
@@ -585,8 +614,49 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   const minAbsolute = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore) || 50;
   const minStrongScore = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minStrongScore) || 70;
 
-  let buyThreshold = minAbsolute;
-  let strongThreshold = Math.max(minStrongScore, minAbsolute + 5);
+  // P1-4: Dynamic buy threshold — auto-tighten when scan quality is persistently low
+  let effectiveMinAbsolute = minAbsolute;
+  let effectiveMinStrong = minStrongScore;
+  const dtConfig = (config.SIMFOLIO && config.SIMFOLIO.dynamicThreshold) || {};
+  const weakTopScore = dtConfig.weakTopScore || 65;
+  const raisedMinScore = dtConfig.raisedMinScore || 60;
+  const checkWindow = dtConfig.checkWindow || 2;
+  // Check if we have recent scan results with low top scores
+  try {
+    const simfolioDir = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
+    const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.json');
+    if (fs.existsSync(lastResultPath)) {
+      const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+      if (lastResult.maxScore != null && lastResult.maxScore < weakTopScore) {
+        effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
+        effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
+      }
+    }
+    // Also check scan_records for persistent low scores
+    const todayDate = new Date().toISOString().slice(0, 10);
+    const scanRecordsPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + todayDate + '.json');
+    let lowScoreDays = (lastResult && lastResult.maxScore != null && lastResult.maxScore < weakTopScore) ? 1 : 0;
+    // Check previous days' scan records
+    for (let d = 1; d <= checkWindow; d++) {
+      const pastDate = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+      const pastPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + pastDate + '.json');
+      if (fs.existsSync(pastPath)) {
+        try {
+          const pastRec = JSON.parse(fs.readFileSync(pastPath, 'utf8'));
+          if (pastRec.maxScore != null && pastRec.maxScore < weakTopScore) {
+            lowScoreDays++;
+          }
+        } catch (_) {}
+      }
+    }
+    if (lowScoreDays >= checkWindow) {
+      effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
+      effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
+    }
+  } catch (_) { /* silent */ }
+
+  let buyThreshold = effectiveMinAbsolute;
+  let strongThreshold = Math.max(effectiveMinStrong, effectiveMinAbsolute + 5);
 
   if (scoredWithScores.length > 0) {
     const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
@@ -621,18 +691,34 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     })
     .sort((a, b) => b.compositeScore - a.compositeScore);
 
+  // P2: Market cycle position limit — adjust max positions based on A-share cycle
+  let maxPositionsByCycle = config.SIMFOLIO.maxPositions;
+  try {
+    const marketCycle = require('./analysis/market_cycle');
+    const cycle = marketCycle.getMarketCycle();
+    if (cycle && cycle.suggestedMaxPositions != null) {
+      maxPositionsByCycle = Math.min(config.SIMFOLIO.maxPositions, cycle.suggestedMaxPositions);
+    }
+  } catch (_) { /* market_cycle not available, use default */ }
+
   // How many slots available?
-  const availableSlots = config.SIMFOLIO.maxPositions - pf.positions.length + decisions.filter(d => d.action === 'sell').length;
+  const availableSlots = maxPositionsByCycle - pf.positions.length + decisions.filter(d => d.action === 'sell').length;
 
   // P0-2: Staggered position building rules
-  // Rule 1: Max 2 new positions per day (no more first-day rampage)
-  const MAX_BUYS_PER_DAY = 2;
+  // Rule 1: Max buys per day from config
+  const MAX_BUYS_PER_DAY = (config.SIMFOLIO && config.SIMFOLIO.maxBuysPerDay) || 2;
+  const MAX_BUYS_REDUCED = (config.SIMFOLIO && config.SIMFOLIO.maxBuysPerDayReduced) || 1;
   // Rule 2: If portfolio has 3+ positions AND total return is negative, don't add more
   const snapshot = getSnapshot(pf);
   const portfolioInLoss = snapshot.totalReturn < 0 && pf.positions.length >= 3;
-  // Rule 3: If already have 3+ positions, max 1 new buy per day
-  const effectiveMaxBuys = pf.positions.length >= 3 ? 1 : MAX_BUYS_PER_DAY;
-  // Rule 4: P0-2 minimum cooldown between buys — 30 min between first and second buy of the day
+  // Rule 3: If already have 3+ positions, max 1 new buy per day (reduced mode)
+  // Rule 4: P0-1 Drawdown restrict — force reduced mode (max 1 buy)
+  let effectiveMaxBuys = pf.positions.length >= 3 ? MAX_BUYS_REDUCED : MAX_BUYS_PER_DAY;
+  if (ddLevel === 'restrict') {
+    effectiveMaxBuys = Math.min(effectiveMaxBuys, MAX_BUYS_REDUCED);
+  }
+  // Rule 5: P0-2 minimum cooldown between buys — from config (default 30 min)
+  const BUY_COOLDOWN_MS = ((config.SIMFOLIO && config.SIMFOLIO.buyCooldownMin) || 30) * 60 * 1000;
   // (enforced by counting buys already executed today from tradeHistory)
 
   if (portfolioInLoss) {
@@ -640,8 +726,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     // Focus on managing existing positions before adding new ones.
     // This is logged in the trade_skip event below.
   } else if (availableSlots > 0 && effectiveMaxBuys > 0) {
-    // P0-2: 30-minute cooldown between buys on the same day
-    const BUY_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    // P0-2: cooldown between buys on the same day
     const todayBuys = pf.tradeHistory.filter(t =>
       t.date === today && t.action === 'buy'
     );
@@ -1004,15 +1089,40 @@ function recordDailyNAV(pf, date) {
     existing.nav = snapshot.totalValue;
     existing.return_ = snapshot.totalReturn;
     existing.benchmarkReturn = Math.round(benchmarkReturn * 100) / 100;
-    return;
+  } else {
+    pf.dailyNav.push({
+      date: date,
+      nav: snapshot.totalValue,
+      return_: snapshot.totalReturn,
+      benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
+    });
   }
 
-  pf.dailyNav.push({
-    date: date,
-    nav: snapshot.totalValue,
-    return_: snapshot.totalReturn,
-    benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
-  });
+  // P0-1: Auto-compute performance stats on each NAV update
+  const stats = computeStats(pf);
+  if (!pf._stats) pf._stats = {};
+  pf._stats.maxDrawdown = stats.maxDrawdown;
+  pf._stats.sharpeRatio = stats.sharpeRatio;
+  pf._stats.winRate = stats.winRate;
+  pf._stats.updatedAt = new Date().toISOString();
+
+  // P0-1: Store drawdown level for trade decision gate
+  pf._drawdownLevel = getDrawdownLevel(stats.maxDrawdown);
+}
+
+// P0-1: Get drawdown severity level from config tiers
+function getDrawdownLevel(maxDrawdown) {
+  const tiers = (config.SIMFOLIO && config.SIMFOLIO.maxDrawdownTiers) || [
+    { threshold: -5, action: 'warn' },
+    { threshold: -8, action: 'restrict' },
+    { threshold: -10, action: 'halt' },
+  ];
+  // Sort tiers by threshold descending (most severe first: -10 -> -8 -> -5)
+  const sorted = [...tiers].sort((a, b) => a.threshold - b.threshold);
+  for (const tier of sorted) {
+    if (maxDrawdown <= tier.threshold) return { level: tier.action, message: tier.message, threshold: tier.threshold };
+  }
+  return { level: 'normal', message: '', threshold: 0 };
 }
 
 // ---- Performance Stats ----
@@ -1029,6 +1139,8 @@ function computeStats(pf) {
       sharpeRatio: null,
       totalTrades: pf.tradeHistory.length,
       avgHoldDays: null,
+      drawdownLevel: 'normal',
+      drawdownMessage: '',
     };
   }
 
@@ -1062,6 +1174,8 @@ function computeStats(pf) {
     sharpeRatio = stdDev > 0 ? Math.round(avgReturn / stdDev * Math.sqrt(252) * 100) / 100 : null; // annualized
   }
 
+  var ddInfo = getDrawdownLevel(Math.round(maxDD * 100) / 100);
+
   return {
     totalReturn: Math.round(totalReturn * 100) / 100,
     benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
@@ -1071,6 +1185,8 @@ function computeStats(pf) {
     sharpeRatio: sharpeRatio,
     totalTrades: pf.tradeHistory.length,
     avgHoldDays: null, // requires position-level tracking
+    drawdownLevel: ddInfo.level,
+    drawdownMessage: ddInfo.message,
   };
 }
 
@@ -1307,12 +1423,68 @@ function executeRiskTrade(pf, alert, priceMap) {
   return trade;
 }
 
+// P1-1: Factor signal diagnostics — detect silent factors that never trigger
+function factorSignalDiagnostics(factorPerformance, knowledgeBase) {
+  const alerts = [];
+  const silentAlarmDays = (config.FACTOR_DIAGNOSTICS && config.FACTOR_DIAGNOSTICS.silentAlarmDays) || 3;
+  const minExpectedTriggered = (config.FACTOR_DIAGNOSTICS && config.FACTOR_DIAGNOSTICS.minExpectedTriggered) || 2;
+
+  // 1. Check for silent factors (0 triggers over multiple days)
+  if (factorPerformance && factorPerformance.factors) {
+    const silent = factorPerformance.factors.filter(f => f.signalCount === 0 && f.totalSignalDays === 0);
+    if (silent.length >= 5) {
+      alerts.push({
+        type: 'silent_factors',
+        severity: 'warning',
+        message: silent.length + '/9个因子从未触发（' +
+          silent.map(f => f.id + ':' + f.name).join('、') +
+          '），建议检查触发阈值是否过严',
+        silentFactorIds: silent.map(f => f.id),
+      });
+    }
+  }
+
+  // 2. Check for low signal diversity (only 1-2 factors trigger all the time)
+  if (factorPerformance && factorPerformance.factors) {
+    const active = factorPerformance.factors.filter(f => f.signalCount > 0);
+    if (active.length < minExpectedTriggered) {
+      alerts.push({
+        type: 'low_diversity',
+        severity: 'info',
+        message: '仅' + active.length + '/9个因子有信号（' +
+          active.map(f => f.id + ':' + f.name).join('、') +
+          '），信号多样性不足，综合评分区分度可能偏低',
+      });
+    }
+  }
+
+  // 3. Check knowledge base factor tracker for persistent zeroes
+  if (knowledgeBase && knowledgeBase.factorTracker) {
+    const ft = knowledgeBase.factorTracker;
+    const factors = ft.factors || {};
+    const zeroFactors = Object.entries(factors).filter(([id, f]) => f.triggerCount === 0);
+    if (zeroFactors.length >= 6 && ft.totalDays >= 5) {
+      alerts.push({
+        type: 'persistent_zeroes',
+        severity: 'warning',
+        message: zeroFactors.length + '/9个因子在' + ft.totalDays + '天复盘期间从未触发（' +
+          zeroFactors.map(([id, f]) => id + ':' + f.name).join('、') +
+          '），需重新校准阈值',
+      });
+    }
+  }
+
+  return alerts;
+}
+
 module.exports = {
   loadPortfolio,
   savePortfolio,
   getSnapshot,
   makeTradingDecisions,
   computeStats,
+  getDrawdownLevel,
+  factorSignalDiagnostics,
   resetPortfolio,
   migratePortfolio,
   updatePositionPrices,

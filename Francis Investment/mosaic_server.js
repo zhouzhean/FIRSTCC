@@ -418,12 +418,100 @@ function handleSimfolioStatus(res) {
   const pf = simfolio.loadPortfolio();
   const snapshot = simfolio.getSnapshot(pf);
   const stats = simfolio.computeStats(pf);
-  return jsonResponse(res, { ok: true, ...snapshot, stats, tradeHistory: pf.tradeHistory.slice(-20) });
+  // P1-5: Include holdings health data
+  const holdingsHealth = computeHoldingsHealth(pf);
+  // P1-1: Factor signal diagnostics
+  let factorDiags = [];
+  try {
+    const factorPerf = require('./mosaic/analysis/factor_performance');
+    const perf = factorPerf.getFactorPerformance();
+    const kb = require('./mosaic/analysis/knowledge_base');
+    const kbSummary = kb.getKnowledgeSummary();
+    factorDiags = simfolio.factorSignalDiagnostics(perf, kbSummary);
+  } catch (_) {}
+  return jsonResponse(res, {
+    ok: true,
+    ...snapshot,
+    stats,
+    tradeHistory: pf.tradeHistory.slice(-20),
+    holdingsHealth,
+    factorDiagnostics: factorDiags,
+  });
+}
+
+// P1-5: Compute per-holding health analysis
+function computeHoldingsHealth(pf) {
+  const cfg = require('./mosaic/config');
+  const healthCards = [];
+  const today = new Date().toISOString().slice(0, 10);
+
+  for (const pos of pf.positions) {
+    const pnlPct = ((pos.currentPrice - pos.avgCost) / pos.avgCost * 100);
+    const stopPrice = pos.avgCost * (1 + ((cfg.SIMFOLIO && cfg.SIMFOLIO.stopLossPct) || -0.08));
+    const distanceToStop = ((pos.currentPrice - stopPrice) / stopPrice * 100);
+    const holdingDays = Math.floor((Date.now() - new Date(pos.entryDate + 'T00:00:00+08:00').getTime()) / 86400000);
+
+    // Signal change assessment
+    let signalStatus = 'unknown';
+    let signalNote = '暂无实时信号数据';
+    if (pos._lastSignalCount != null) {
+      if (pos._lastSignalCount >= 3) { signalStatus = 'strong'; signalNote = '信号充足（' + pos._lastSignalCount + '个触发）'; }
+      else if (pos._lastSignalCount >= 1) { signalStatus = 'moderate'; signalNote = '信号一般（' + pos._lastSignalCount + '个触发）'; }
+      else { signalStatus = 'weak'; signalNote = '信号消失，关注后续变化'; }
+    }
+
+    // Recommendation
+    let recommendation = 'hold';
+    let recLabel = '继续持有';
+    let recColor = '#6366f1';
+    if (pnlPct <= -7) {
+      recommendation = 'prepare_sell';
+      recLabel = '接近止损，准备减仓';
+      recColor = '#ef4444';
+    } else if (pnlPct >= 15) {
+      recommendation = 'consider_profit';
+      recLabel = '盈利可观，可考虑部分止盈';
+      recColor = '#22c55e';
+    } else if (pnlPct >= 3 && signalStatus === 'weak') {
+      recommendation = 'monitor';
+      recLabel = '盈利但信号减弱，注意观察';
+      recColor = '#f59e0b';
+    } else if (pnlPct <= -3 && signalStatus === 'strong') {
+      recommendation = 'hold_confident';
+      recLabel = '浮亏但信号强，可继续持有观察';
+      recColor = '#8b5cf6';
+    }
+
+    healthCards.push({
+      code: pos.code,
+      name: pos.name,
+      holdingDays: holdingDays,
+      avgCost: pos.avgCost,
+      currentPrice: pos.currentPrice,
+      pnlPct: Math.round(pnlPct * 100) / 100,
+      stopPrice: Math.round(stopPrice * 100) / 100,
+      distanceToStopPct: Math.round(distanceToStop * 100) / 100,
+      signalStatus: signalStatus,
+      signalNote: signalNote,
+      recommendation: recommendation,
+      recommendationLabel: recLabel,
+      recommendationColor: recColor,
+    });
+  }
+
+  return healthCards;
 }
 
 function handleSimfolioHistory(res) {
   const pf = simfolio.loadPortfolio();
   return jsonResponse(res, { ok: true, dailyNav: pf.dailyNav });
+}
+
+// P1-5: Dedicated holdings health endpoint
+function handleHoldingsHealth(res) {
+  const pf = simfolio.loadPortfolio();
+  const health = computeHoldingsHealth(pf);
+  return jsonResponse(res, { ok: true, holdings: health });
 }
 
 function handleSimfolioTrade(res) {
@@ -554,6 +642,7 @@ const server = http.createServer(async function(req, res) {
   // Simfolio endpoints
   if (pathname === '/api/simfolio/status') return handleSimfolioStatus(res);
   if (pathname === '/api/simfolio/history') return handleSimfolioHistory(res);
+  if (pathname === '/api/simfolio/holdings-health') return handleHoldingsHealth(res);
   if (pathname === '/api/simfolio/trade' && method === 'POST') return handleSimfolioTrade(res);
   if (pathname === '/api/simfolio/reset' && method === 'POST') return handleSimfolioReset(res);
 
@@ -986,6 +1075,17 @@ const server = http.createServer(async function(req, res) {
       }
     }
     return jsonResponse(res, { ok: false, message: '暂无日内数据', points: [] });
+  }
+
+  // Market cycle endpoint (P2)
+  if (pathname === '/api/market/cycle') {
+    try {
+      const marketCycle = require('./mosaic/analysis/market_cycle');
+      const cycle = marketCycle.getMarketCycle();
+      return jsonResponse(res, { ok: true, ...cycle });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
   }
 
   // Cross-Market Analysis — risk state + correlation matrix

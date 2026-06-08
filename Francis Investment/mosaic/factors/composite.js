@@ -382,6 +382,32 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
     adjustedTotal = Math.max(0, adjustedTotal - 3);
   }
 
+  // === P1-3: Sector strength bonus ===
+  // If we have sector flow data, add a relative strength bonus.
+  // Stocks in strong-flow sectors get a boost; stocks in weak sectors are penalized.
+  // Only applied when sector flow data is available.
+  let sectorBonus = 0;
+  let sectorBonusLabel = '';
+  if (ctx.sectorFlowMap && ctx.sectorFlowMap.size > 0) {
+    const sectorRank = getSectorFlowPercentile(stock, ctx.sectorFlowMap);
+    if (sectorRank != null) {
+      if (sectorRank <= 0.10) {
+        sectorBonus = 5;
+        sectorBonusLabel = '板块资金Top10%(+' + sectorBonus + '分)';
+      } else if (sectorRank <= 0.25) {
+        sectorBonus = 3;
+        sectorBonusLabel = '板块资金Top25%(+' + sectorBonus + '分)';
+      } else if (sectorRank >= 0.85) {
+        sectorBonus = -4;
+        sectorBonusLabel = '板块资金Bottom15%(' + sectorBonus + '分)';
+      } else if (sectorRank >= 0.70) {
+        sectorBonus = -2;
+        sectorBonusLabel = '板块资金偏弱(' + sectorBonus + '分)';
+      }
+    }
+  }
+  adjustedTotal = Math.max(0, Math.min(100, adjustedTotal + sectorBonus));
+
   // Rating (based on adjusted total)
   let rating;
   if (adjustedTotal >= 80) rating = 'S';
@@ -396,6 +422,8 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
     rating: rating,
     dataQuality: dataQuality,
     northBoundAdjustment: adjustedTotal - total,
+    sectorBonus: sectorBonus,
+    sectorBonusLabel: sectorBonusLabel,
     dimensionScores: {
       [dimName('fundamental')]: roundHalf(fundamental / 20),
       [dimName('technical')]: roundHalf(technical / 20),
@@ -424,4 +452,53 @@ function roundHalf(val) {
   return Math.round(val * 2) / 2; // round to nearest 0.5
 }
 
-module.exports = { computeCompositeScore, starsFromScore, scoreFundamental, scoreTechnical, scoreCapitalFlow };
+/**
+ * P1-3: Get a stock's percentile rank in sector flow.
+ * Uses sector keyword matching against the flow map entries.
+ * Returns 0-1 (0 = top sector, 1 = bottom sector), or null if unknown.
+ */
+function getSectorFlowPercentile(stock, sectorFlowMap) {
+  const entries = Array.from(sectorFlowMap.entries()).map(([code, val]) => ({ code, ...val }));
+  if (entries.length === 0) return null;
+
+  // Sort by majorNetFlow descending
+  const sorted = entries.sort((a, b) => (b.majorNetFlow || 0) - (a.majorNetFlow || 0));
+
+  // Find best matching sector for this stock
+  // Use the classifySector-style keyword matching
+  const SECTOR_PATTERNS = [
+    { sector: '半导体/AI算力', keys: ['半导体', '芯片', '电子', '光电', '封测', '晶圆', '硅', '算力', '存储'] },
+    { sector: '机器人/具身智能', keys: ['机器人', '智能', '减速器', '电机', '伺服', '传感', '运动控制', '自动化'] },
+    { sector: '创新药/AI医疗', keys: ['药', '医疗', '医', '生物', '基因', '细胞', '疫苗', '诊断', '试剂'] },
+    { sector: '商业航天', keys: ['航天', '卫星', '航空', '火箭', '军工电子', '雷达', '导航'] },
+    { sector: '固态电池/储能', keys: ['电池', '储能', '锂', '电解', '正极', '负极', '新能源', '光伏', '风电'] },
+    { sector: '新型电力基建', keys: ['电力', '电网', '特高压', '电缆', '电气', '充电桩', '配电'] },
+    { sector: '军工', keys: ['军工', '弹药', '装备', '船舶', '电磁', '武器', '防务'] },
+    { sector: '有色金属/稀土', keys: ['有色', '稀土', '矿', '铝', '铜', '钢', '金属', '材料', '磁'] },
+  ];
+
+  let stockSector = '其他';
+  for (const pat of SECTOR_PATTERNS) {
+    if (pat.keys.some(kw => (stock.name || '').includes(kw))) {
+      stockSector = pat.sector;
+      break;
+    }
+  }
+
+  // Find this sector's rank in the flow map
+  for (let i = 0; i < sorted.length; i++) {
+    const sec = sorted[i];
+    if (!sec.name) continue;
+    // Match by sector name overlap
+    const secNameParts = sec.name.slice(0, 3);
+    for (const pat of SECTOR_PATTERNS) {
+      if (pat.sector === stockSector && pat.keys.some(kw => (sec.name || '').includes(kw))) {
+        return i / sorted.length;
+      }
+    }
+  }
+
+  return null;
+}
+
+module.exports = { computeCompositeScore, starsFromScore, scoreFundamental, scoreTechnical, scoreCapitalFlow, getSectorFlowPercentile };

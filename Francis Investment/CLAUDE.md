@@ -76,10 +76,11 @@ Francis Investment/
 │   │   └── news_collector.js    #   新闻采集（含7级情感词典评分）
 │   ├── factors/                 #   评分引擎
 │   │   ├── hidden_signals.js    #   ★ H1-H9 隐藏因子（9个）→ computeHiddenSignals()
-│   │   └── composite.js         #   ★ 5维综合评分 + 北向绩效动态权重 + 两融情绪调整 + LHB增强
+│   │   └── composite.js         #   ★ 5维综合评分 + 北向绩效动态权重 + 两融情绪调整 + LHB增强 + 板块相对评分
 │   └── analysis/                #   盘后+周末分析
 │       ├── quant_report.js      #   交易归因+新闻预测
 │       ├── knowledge_base.js    #   因子追踪知识库（含因子组合模式提取）
+│       ├── market_cycle.js      #   ★ A股周期识别引擎（MA排列+量能趋势+市场宽度→5档周期+仓位建议）
 │       ├── cross_market.js      #   ★ 跨市场相关性引擎 + 风险状态机（5档）
 │       ├── us_macro.js          #   ★ 美股隔夜总结生成器
 │       ├── factor_performance.js #   ★ 因子绩效追踪引擎（命中率/平均收益/趋势 + 北向绩效追踪）
@@ -204,6 +205,13 @@ Francis Investment/
   - 普通买入（top 15%）：65+→12% / 55+→8%
   - 信号加成：超过2个信号每多1个 +2%
   - 风险乘数：恐慌×0.3 / 避险×0.5 / 中性×0.8 / 温和看涨×1.0 / 风险偏好×1.2
+- **回撤管理（P0-1）**：每次NAV更新自动计算maxDrawdown + 3档回撤门：
+  - warn(-5%): 提示风险，日志告警
+  - restrict(-8%): 限制买入（每日最多1只）
+  - halt(-10%): 暂停所有买入，仅允许止损卖出
+- **建仓节奏管理（P0-2）**：`maxBuysPerDay=2`, `maxBuysPerDayReduced=1`（已持3+只时）, `buyCooldownMin=30`（同日内买入间隔30分钟）
+- **动态买入阈值（P1-4）**：连续2天TOP1评分<65时，自动将最低买入分从50提高到60
+- **市场周期仓位调整（P2）**：`market_cycle.js` 检测A股周期→建议最大持仓数（牛市5→熊市1-2），在`makeTradingDecisions`中自动生效
 - 卖出：硬止损 -8% / 软止损 评分<50 / 移动止盈
 - **T+1 严格限制**：当天买入的股票只有硬止损(-8%)可触发卖出，移动止盈/止盈/预警当天不生效
 - `checkRiskThresholds` 中 `isBoughtToday` 检查 → 跳过非止损警报
@@ -280,6 +288,13 @@ Francis Investment/
 ---
 
 ## 前端架构
+
+### 核心 API 新增（v2.4.0）
+
+| 路由 | 用途 |
+|------|------|
+| `/api/simfolio/holdings-health` | 持仓健康度卡片（每只持仓：距离止损/信号变化/推荐操作） |
+| `/api/market/cycle` | A股市场周期识别（牛市/偏多/震荡/偏空/熊市 + 建议最大持仓数） |
 
 ### Section 导航（index.html / app.js）
 
@@ -376,6 +391,8 @@ AI 思考舱，独立页面。两栏布局：
 | `/api/factors/performance` | ★ 因子绩效追踪数据（含北向绩效） |
 | `/api/market/microstructure` | ★ 智能风险中枢（北向+波动率+Smart Money） |
 | `/api/margin/status` | ★ 两融数据+情绪评分 |
+| `/api/simfolio/holdings-health` | ★ 持仓健康度（距离止损/信号变化/推荐操作） |
+| `/api/market/cycle` | ★ A股市场周期（MA排列+量能+宽度→5档+仓位建议） |
 | `/api/sectors/live` | 板块实时行情（Sina 实时，仅当日） |
 | `/api/weekend-analysis/status` | ★ 周末分析进度/状态 |
 | `/api/weekend-analysis/report` | ★ 周末完整报告（相似度+危机+轮动+因子） |
