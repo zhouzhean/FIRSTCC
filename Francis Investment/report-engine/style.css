@@ -979,6 +979,58 @@ body {
   overflow: hidden;
 }
 
+/* P1-5: Holdings health cards */
+.sf-health-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+  margin: 0 16px 16px;
+}
+.sf-health-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 14px;
+  border: 1px solid #e2e5eb;
+  transition: box-shadow 0.2s;
+}
+.sf-health-card:hover {
+  box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+}
+.sf-health-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.sf-health-stats {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.sf-health-stat {
+  flex: 1;
+}
+.sf-stop-bar {
+  height: 6px;
+  background: #e5e7eb;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 2px;
+}
+.sf-stop-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+/* P0-1: Drawdown level indicator in stats card */
+.sf-dd-tag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
 /* Mobile: US market section */
 @media (max-width: 720px) {
   .us-quote-grid {

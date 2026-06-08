@@ -74,6 +74,11 @@ function renderCrossMarket(data, mode, analysis) {
   html += '</div>'; // cm-reco-column
   html += '</div>'; // cm-risk-section
 
+  // ============ SECTION 1.5: Market Cycle Dashboard (P2) ============
+  if (analysis.marketCycle) {
+    html += renderMarketCycleDashboard(analysis.marketCycle);
+  }
+
   // ============ SECTION 2: Risk Signals ============
   if (rs.signals && rs.signals.length > 0) {
     html += '<div class="cm-signals glass-card" style="padding:14px 18px;margin-bottom:20px;">';
@@ -394,6 +399,110 @@ function renderCrossMarketCSS() {
     '  .cm-components { flex-direction: column !important; }',
     '}',
   ].join('\n');
+}
+
+// ============ MARKET CYCLE DASHBOARD (P2) ============
+
+function renderMarketCycleDashboard(cycle) {
+  if (!cycle) return '';
+
+  var cycleColors = {
+    'bull': { bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.3)', text: '#10b981', dot: '#10b981' },
+    'slightly_bullish': { bg: 'rgba(52,211,153,0.06)', border: 'rgba(52,211,153,0.2)', text: '#34d399', dot: '#34d399' },
+    'sideways': { bg: 'rgba(148,163,184,0.05)', border: 'rgba(148,163,184,0.15)', text: '#64748b', dot: '#94a3b8' },
+    'slightly_bearish': { bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.2)', text: '#f59e0b', dot: '#f59e0b' },
+    'bear': { bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)', text: '#ef4444', dot: '#ef4444' },
+  };
+  var style = cycleColors[cycle.cycle] || cycleColors['sideways'];
+
+  // Confidence bar
+  var confPct = cycle.confidence || 50;
+
+  var html = '<div class="cm-cycle-dashboard glass-card" style="margin-bottom:20px;padding:18px 20px;background:' + style.bg + ';border:1px solid ' + style.border + ';">';
+
+  // Header row
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">';
+  html += '<div style="display:flex;align-items:center;gap:10px;">';
+  html += '<span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:' + style.dot + ';box-shadow:0 0 8px ' + style.dot + '80;"></span>';
+  html += '<span style="font-size:15px;font-weight:700;color:#1e293b;">A股市场周期</span>';
+  html += '<span style="font-size:18px;font-weight:800;color:' + style.text + ';">' + escHtml(cycle.label || '未知') + '</span>';
+  html += '</div>';
+  html += '<div style="text-align:right;">';
+  html += '<div style="font-size:10px;color:#94a3b8;letter-spacing:1px;">建议最多</div>';
+  html += '<div style="font-size:22px;font-weight:800;color:' + style.text + ';">' + (cycle.suggestedMaxPositions || 3) + ' 只</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // Confidence + multiplier row
+  html += '<div style="display:flex;gap:10px;margin-bottom:12px;">';
+  html += '<div style="flex:1;background:rgba(255,255,255,0.6);border-radius:8px;padding:10px 14px;">';
+  html += '<div style="font-size:10px;color:#94a3b8;margin-bottom:3px;">周期置信度</div>';
+  html += '<div style="height:6px;border-radius:3px;background:rgba(0,0,0,0.06);overflow:hidden;margin-bottom:4px;">';
+  html += '<div style="height:100%;width:' + confPct + '%;border-radius:3px;background:' + style.text + ';transition:width 0.6s;"></div>';
+  html += '</div>';
+  html += '<div style="font-size:11px;font-weight:600;color:' + style.text + ';">' + confPct + '/100</div>';
+  html += '</div>';
+  html += '<div style="flex:1;background:rgba(255,255,255,0.6);border-radius:8px;padding:10px 14px;">';
+  html += '<div style="font-size:10px;color:#94a3b8;margin-bottom:3px;">仓位乘数</div>';
+  html += '<div style="font-size:20px;font-weight:800;color:' + style.text + ';">×' + (cycle.suggestedMultiplier || 0.6).toFixed(1) + '</div>';
+  html += '</div>';
+  html += '</div>';
+
+  // 3-dimension breakdown
+  var details = cycle.details || {};
+  html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">';
+
+  // MA Alignment
+  var ma = details.ma || {};
+  var maLabel = ma.alignment === 'bullish' ? '多头排列 ▲' : (ma.alignment === 'bearish' ? '空头排列 ▼' : (ma.alignment === 'slightly_bullish' ? '短期偏多 ↗' : (ma.alignment === 'slightly_bearish' ? '短期偏空 ↘' : '均线纠缠 ─')));
+  var maColor = ma.alignment === 'bullish' ? '#10b981' : (ma.alignment === 'bearish' ? '#ef4444' : (ma.alignment === 'slightly_bullish' ? '#34d399' : (ma.alignment === 'slightly_bearish' ? '#f59e0b' : '#94a3b8')));
+  html += '<div style="background:rgba(255,255,255,0.5);border-radius:6px;padding:10px;text-align:center;">';
+  html += '<div style="font-size:9px;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;">均线排列</div>';
+  html += '<div style="font-size:12px;font-weight:700;color:' + maColor + ';">' + maLabel + '</div>';
+  if (ma.values && ma.values.ma20) {
+    html += '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">MA20 ≈ ' + ma.values.ma20.toFixed(0) + '</div>';
+  }
+  html += '</div>';
+
+  // Volume trend
+  var vol = details.volume || {};
+  var volLabel = vol.trend === 'expanding' ? '放量' : (vol.trend === 'contracting' ? '缩量' : '平稳');
+  var volColor = vol.trend === 'expanding' ? '#8b5cf6' : (vol.trend === 'contracting' ? '#f59e0b' : '#94a3b8');
+  html += '<div style="background:rgba(255,255,255,0.5);border-radius:6px;padding:10px;text-align:center;">';
+  html += '<div style="font-size:9px;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;">成交量</div>';
+  html += '<div style="font-size:12px;font-weight:700;color:' + volColor + ';">' + volLabel + '</div>';
+  html += '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">近5日vs20日均量</div>';
+  html += '</div>';
+
+  // Market breadth
+  var breadth = details.breadth || {};
+  var brLabel = breadth.breadth === 'wide_high' ? '强势 ▲' : (breadth.breadth === 'narrow_low' ? '弱势 ▼' : '中性 ─');
+  var brColor = breadth.breadth === 'wide_high' ? '#10b981' : (breadth.breadth === 'narrow_low' ? '#ef4444' : '#94a3b8');
+  html += '<div style="background:rgba(255,255,255,0.5);border-radius:6px;padding:10px;text-align:center;">';
+  html += '<div style="font-size:9px;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;">市场宽度</div>';
+  html += '<div style="font-size:12px;font-weight:700;color:' + brColor + ';">' + brLabel + '</div>';
+  html += '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">' + (breadth.positionInRange != null ? '位置 ' + (breadth.positionInRange * 100).toFixed(0) + '%' : '--') + '</div>';
+  html += '</div>';
+
+  html += '</div>'; // 3-col grid
+
+  // Factor breakdowns (if available)
+  if (cycle.factors && cycle.factors.length > 0) {
+    html += '<div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:4px;">';
+    for (var f = 0; f < cycle.factors.length; f++) {
+      var factor = cycle.factors[f];
+      var isNeg = factor.indexOf('-') >= 0;
+      html += '<span style="font-size:9px;padding:2px 8px;border-radius:10px;background:' + (isNeg ? '#fef2f2' : '#f0fdf4') + ';color:' + (isNeg ? '#dc2626' : '#16a34a') + ';border:1px solid ' + (isNeg ? '#fecaca' : '#bbf7d0') + ';">' + escHtml(factor) + '</span>';
+    }
+    html += '</div>';
+  }
+
+  if (!cycle.dataAvailable) {
+    html += '<div style="margin-top:8px;font-size:10px;color:#94a3b8;text-align:center;">历史K线数据不足（需20日以上），使用默认震荡判断</div>';
+  }
+
+  html += '</div>';
+  return html;
 }
 
 // ============ UTILS ============

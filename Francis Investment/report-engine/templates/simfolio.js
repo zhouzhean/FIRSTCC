@@ -211,6 +211,71 @@ function renderNavChart(dailyNav, isPDF) {
   return html;
 }
 
+// P1-5: Holdings health mini-cards — per-holding quality analysis
+function renderHoldingsHealthCards(healthCards, isPDF) {
+  if (!healthCards || healthCards.length === 0) return '';
+  var cardBg = isPDF ? '#0f1f3a' : '#ffffff';
+  var text = isPDF ? '#c9d1d9' : '#1e293b';
+  var muted = isPDF ? '#8b949e' : '#64748b';
+  var accent = isPDF ? '#c9a84c' : '#b8942c';
+
+  var html = '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;">💊 持仓健康度</h3>';
+  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:16px;">';
+
+  for (var i = 0; i < healthCards.length; i++) {
+    var h = healthCards[i];
+    // Distance to stop color
+    var stopColor = h.distanceToStopPct > 10 ? '#22c55e' : (h.distanceToStopPct > 4 ? '#f59e0b' : '#ef4444');
+    var stopBg = h.distanceToStopPct > 10 ? '#f0fdf4' : (h.distanceToStopPct > 4 ? '#fffbeb' : '#fef2f2');
+    // P&L color
+    var pnlColor = h.pnlPct >= 0 ? '#dc2626' : '#16a34a';
+
+    html += '<div style="background:' + cardBg + ';border-radius:8px;padding:14px;border:1px solid ' + (isPDF ? '#1e3050' : '#e2e5eb') + ';">';
+
+    // Header row: stock name + recommendation tag
+    html += '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">';
+    html += '<div>';
+    html += '<span style="font-size:13px;font-weight:700;color:' + text + ';">' + escHtml(h.name) + '</span>';
+    html += '<span style="font-size:10px;color:' + muted + ';margin-left:6px;">' + h.code + '</span>';
+    html += '</div>';
+    html += '<span style="font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;background:' + h.recommendationColor + '15;color:' + h.recommendationColor + ';border:1px solid ' + h.recommendationColor + '40;">' + h.recommendationLabel + '</span>';
+    html += '</div>';
+
+    // P&L + holding days
+    html += '<div style="display:flex;gap:12px;margin-bottom:8px;">';
+    html += '<div style="flex:1;">';
+    html += '<div style="font-size:10px;color:' + muted + ';">盈亏</div>';
+    html += '<div style="font-size:16px;font-weight:700;color:' + pnlColor + ';">' + (h.pnlPct >= 0 ? '+' : '') + h.pnlPct.toFixed(2) + '%</div>';
+    html += '</div>';
+    html += '<div style="flex:1;">';
+    html += '<div style="font-size:10px;color:' + muted + ';">持仓天数</div>';
+    html += '<div style="font-size:14px;font-weight:600;color:' + text + ';">' + h.holdingDays + ' 天</div>';
+    html += '</div>';
+    html += '<div style="flex:1;">';
+    html += '<div style="font-size:10px;color:' + muted + ';">成本→现价</div>';
+    html += '<div style="font-size:12px;font-weight:600;color:' + text + ';">¥' + h.avgCost.toFixed(2) + ' → ¥' + h.currentPrice.toFixed(2) + '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    // Stop-loss progress bar
+    html += '<div style="margin-bottom:6px;">';
+    html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:' + muted + ';margin-bottom:2px;">';
+    html += '<span>距止损线</span><span style="font-weight:600;color:' + stopColor + ';">' + h.distanceToStopPct.toFixed(1) + '%</span>';
+    html += '</div>';
+    html += '<div style="height:6px;background:#e5e7eb;border-radius:3px;overflow:hidden;">';
+    var barPct = Math.min(100, Math.max(0, (h.distanceToStopPct + 8) / 20 * 100)); // map -8% to 0, 12% to 100
+    html += '<div style="height:100%;width:' + barPct.toFixed(0) + '%;background:' + stopColor + ';border-radius:3px;transition:width 0.5s;"></div>';
+    html += '</div>';
+    html += '<div style="text-align:right;font-size:9px;color:' + muted + ';margin-top:2px;">止损价 ¥' + h.stopPrice.toFixed(2) + '</div>';
+    html += '</div>';
+
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
 function escHtml(str) {
   if (!str) return '';
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

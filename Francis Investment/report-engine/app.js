@@ -291,12 +291,35 @@ function renderSimfolioLivePanel(sfData) {
   var stats = sfData.stats || {};
   var trades = sfData.tradeHistory || [];
   var sched = state.schedulerStatus || {};
+  var holdingsHealth = sfData.holdingsHealth || [];
+  var factorDiagnostics = sfData.factorDiagnostics || [];
 
   // Build countdown bar
   var countdownHTML = renderCountdownBar(sched);
 
-  // Build asset cards
+  // Build asset cards (with drawdown level integrated)
   var cardsHTML = renderSimfolioCards(snap, stats);
+
+  // P1-5: Holdings health cards
+  var healthHTML = '';
+  if (holdingsHealth.length > 0) {
+    healthHTML = renderHoldingsHealthCards(holdingsHealth, false);
+  }
+
+  // P1-1: Factor diagnostic alerts
+  var diagHTML = '';
+  if (factorDiagnostics.length > 0) {
+    diagHTML = '<div style="margin:0 16px 8px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">';
+    diagHTML += '<div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px;">⚠️ 因子诊断</div>';
+    for (var d = 0; d < factorDiagnostics.length; d++) {
+      var diag = factorDiagnostics[d];
+      var sevColor = diag.severity === 'warning' ? '#dc2626' : '#f59e0b';
+      diagHTML += '<div style="font-size:11px;color:#78350f;margin-bottom:3px;">';
+      diagHTML += '<span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + sevColor + ';margin-right:6px;vertical-align:middle;"></span>';
+      diagHTML += escHtml(diag.message) + '</div>';
+    }
+    diagHTML += '</div>';
+  }
 
   // Build trade activity feed
   var feedHTML = renderTradeActivityFeed(trades);
@@ -326,7 +349,7 @@ function renderSimfolioLivePanel(sfData) {
     '<div style="font-size:16px;font-weight:700;color:#64748b;" id="sent-sm">--</div></div>' +
     '</div></div>';
 
-  var html = countdownHTML + cardsHTML + feedHTML + posHTML + sectorHTML + sentimentHTML;
+  var html = countdownHTML + cardsHTML + diagHTML + healthHTML + feedHTML + posHTML + sectorHTML + sentimentHTML;
 
   // Async load sentiment data
   setTimeout(function() { loadMarketSentimentIndicators(); }, 500);
@@ -422,12 +445,19 @@ function renderSimfolioCards(snap, stats) {
   }
   html += '</div>';
 
+  // P0-1: Drawdown level colors
+  var ddLevel = stats.drawdownLevel || 'normal';
+  var ddColor = ddLevel === 'halt' ? '#dc2626' : (ddLevel === 'restrict' ? '#f59e0b' : (ddLevel === 'warn' ? '#eab308' : '#64748b'));
+  var ddBg = ddLevel === 'halt' ? '#fef2f2' : (ddLevel === 'restrict' ? '#fffbeb' : (ddLevel === 'warn' ? '#fefce8' : '#fff'));
+  var ddLabel = ddLevel === 'halt' ? '🔴 熔断' : (ddLevel === 'restrict' ? '🟡 限仓' : (ddLevel === 'warn' ? '⚪ 提醒' : '🟢 正常'));
+
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">持仓 / 统计</div>';
   html += '<div style="font-size:13px;color:' + TEXT_COLOR + ';line-height:1.7;">';
   html += '<b>' + (snap.positions ? snap.positions.length : 0) + '</b> 只股票';
   if (stats.winRate != null) html += ' · 胜率 <b style="color:' + (stats.winRate >= 50 ? UP_COLOR : DOWN_COLOR) + ';">' + stats.winRate + '%</b>';
   if (stats.maxDrawdown != null) html += '<br>最大回撤 <b style="color:#dc2626;">' + stats.maxDrawdown.toFixed(2) + '%</b>';
+  html += ' <span style="font-size:10px;padding:1px 6px;border-radius:8px;background:' + ddBg + ';color:' + ddColor + ';">' + ddLabel + '</span>';
   if (stats.totalTrades) html += ' · ' + stats.totalTrades + '笔交易';
   html += '</div>';
   html += '</div>';
@@ -1475,19 +1505,31 @@ function loadCrossMarketIntoDOM() {
   var container = document.getElementById('cross-market-content');
   if (!container) return;
 
-  fetch('/api/cross-market/analysis')
-    .then(function(r) { return r.json(); })
-    .then(function(analysis) {
-      if (analysis.ok) {
-        var html = renderCrossMarket(null, 'app', analysis);
-        container.innerHTML = html;
-      } else {
-        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-          '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
-          '<div style="font-size:15px;">' + escHtml(analysis.message || '分析数据暂不可用') + '</div>' +
-          '</div>';
+  // Fetch cross-market analysis and market cycle in parallel (P2)
+  Promise.all([
+    fetch('/api/cross-market/analysis').then(function(r) { return r.json(); }),
+    fetch('/api/market/cycle').then(function(r) { return r.json(); }).catch(function() { return null; })
+  ]).then(function(results) {
+    var analysis = results[0];
+    var cycleData = results[1];
+    if (analysis.ok) {
+      // Inject market cycle data into analysis object for template
+      if (cycleData && cycleData.ok) {
+        analysis.marketCycle = cycleData;
       }
-    }).catch(function() {
+      var html = renderCrossMarket(null, 'app', analysis);
+      container.innerHTML = html;
+    } else {
+      var cycleHTML = '';
+      if (cycleData && cycleData.ok) {
+        cycleHTML = renderMarketCycleDashboard(cycleData);
+      }
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+        '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
+        '<div style="font-size:15px;">' + escHtml(analysis.message || '分析数据暂不可用') + '</div>' +
+        '</div>' + cycleHTML;
+    }
+  }).catch(function() {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
         '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
         '<div style="font-size:15px;">无法连接服务器</div>' +
