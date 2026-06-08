@@ -381,7 +381,40 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     };
   }
 
-  // ---- Step 3.5: Think-Tank defensive gate ----
+  // ---- Step 3.5a: Cross-market risk CIRCUIT BREAKER ----
+  // Panic or risk_off regime = HARD BLOCK on all buys. Sells only.
+  // This is NOT a scoring penalty — it's a complete buy prohibition.
+  // When macro risk is "panic" or "risk_off", no individual stock score
+  // can justify buying. We simply stop buying until conditions improve.
+  if (macroContext && macroContext.riskState) {
+    const regime = macroContext.riskState.regime;
+    if (regime === 'panic' || regime === 'risk_off') {
+      const sellDecisions = decisions.filter(d => d.action === 'sell');
+      const executedTrades = [];
+      for (const dec of sellDecisions) {
+        if (dec.action === 'sell') {
+          const trade = executeSell(pf, dec, today);
+          if (trade) executedTrades.push(trade);
+        }
+      }
+      for (const pos of pf.positions) {
+        const stockData = pipelineResults.find(r => r.code === pos.code);
+        if (stockData) pos.currentPrice = stockData.price;
+      }
+      recordDailyNAV(pf, today);
+      savePortfolio(pf);
+      return {
+        decisions: sellDecisions,
+        executed: executedTrades,
+        snapshot: getSnapshot(pf),
+        circuitBreakerActive: true,
+        circuitBreakerReason: '跨市场风险熔断：' +
+          (regime === 'panic' ? '恐慌状态，禁止所有买入（仅允许卖出）' : '避险状态，禁止所有买入（仅允许卖出）'),
+      };
+    }
+  }
+
+  // ---- Step 3.5b: Think-Tank defensive gate ----
   // Synthesizes factor health, portfolio status, and cross-market risk
   // into a single defensive-or-not decision. When defensive, skip all buys
   // regardless of market direction — the system's own "brain" says don't trade.
@@ -564,16 +597,25 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
   // Sort candidates by composite score (percentile-ranked, with absolute floor)
   const maxSectorExposure = (config.SIMFOLIO && config.SIMFOLIO.maxSectorExposurePct) || 0.40;
+  const MAX_SAME_SECTOR_POSITIONS = 2; // P0-3: max 2 positions in same sector
   const buyCandidates = pipelineResults
     .filter(r => {
       // Don't buy what we already hold
       if (pf.positions.some(p => p.code === r.code)) return false;
       // Must meet percentile threshold (with absolute floor)
       if (r.compositeScore < buyThreshold) return false;
-      // Sector concentration check: skip if same sector already >= 40%
+      // Sector concentration check
       const candidateSector = classifySector(r.name);
-      if (candidateSector !== '其他' && getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) {
-        return false;
+      if (candidateSector !== '其他') {
+        // P0-3: Hard cap — at most 2 positions in the same sector
+        const sameSectorCount = pf.positions.filter(p => classifySector(p.name) === candidateSector).length;
+        if (sameSectorCount >= MAX_SAME_SECTOR_POSITIONS) {
+          return false;
+        }
+        // Existing 40% exposure cap
+        if (getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) {
+          return false;
+        }
       }
       return true;
     })
@@ -582,7 +624,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // How many slots available?
   const availableSlots = config.SIMFOLIO.maxPositions - pf.positions.length + decisions.filter(d => d.action === 'sell').length;
 
-  // P1-3: Staggered position building rules
+  // P0-2: Staggered position building rules
   // Rule 1: Max 2 new positions per day (no more first-day rampage)
   const MAX_BUYS_PER_DAY = 2;
   // Rule 2: If portfolio has 3+ positions AND total return is negative, don't add more
@@ -590,16 +632,36 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   const portfolioInLoss = snapshot.totalReturn < 0 && pf.positions.length >= 3;
   // Rule 3: If already have 3+ positions, max 1 new buy per day
   const effectiveMaxBuys = pf.positions.length >= 3 ? 1 : MAX_BUYS_PER_DAY;
+  // Rule 4: P0-2 minimum cooldown between buys — 30 min between first and second buy of the day
+  // (enforced by counting buys already executed today from tradeHistory)
 
   if (portfolioInLoss) {
     // Skip all buys — portfolio is losing money with 3+ positions.
     // Focus on managing existing positions before adding new ones.
     // This is logged in the trade_skip event below.
   } else if (availableSlots > 0 && effectiveMaxBuys > 0) {
+    // P0-2: 30-minute cooldown between buys on the same day
+    const BUY_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+    const todayBuys = pf.tradeHistory.filter(t =>
+      t.date === today && t.action === 'buy'
+    );
+    const lastBuyTime = todayBuys.length > 0
+      ? new Date(today + 'T' + (todayBuys[todayBuys.length - 1].time || '00:00:00') + '+08:00').getTime()
+      : 0;
+
     for (const candidate of buyCandidates) {
       const buyDecisionsSoFar = decisions.filter(d => d.action === 'buy').length;
       if (buyDecisionsSoFar >= effectiveMaxBuys) break;
       if (buyDecisionsSoFar >= availableSlots) break;
+
+      // P0-2: 30-min cooldown — if we already executed a buy today and
+      // < 30 min have passed, skip any further buys this scan cycle.
+      // The cooldown is checked on each pipeline run, so after 30 min the
+      // next scan cycle will pick up the next candidate naturally.
+      if (buyDecisionsSoFar >= 1 && lastBuyTime > 0 &&
+          (Date.now() - lastBuyTime) < BUY_COOLDOWN_MS) {
+        break;
+      }
 
       // Strong buy: top percentile AND hasStrongSignal AND meets minStrongScore
       const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
@@ -648,10 +710,20 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
 function checkSellSignal(position, stockData, isBoughtToday, isFullScan) {
   const pnlPct = (stockData.price - position.avgCost) / position.avgCost * 100;
+  const stopLossPct = config.SIMFOLIO.stopLossPct * 100; // e.g. -8
 
-  // Hard stop loss: -8% (always active, even T+1 same-day)
-  if (pnlPct <= config.SIMFOLIO.stopLossPct * 100) {
-    return '硬止损：亏损' + pnlPct.toFixed(1) + '%触发-' + Math.abs(config.SIMFOLIO.stopLossPct * 100) + '%止损线';
+  // P1-6: Hard stop loss — trigger at -8% or worse (always active, even T+1).
+  // Uses <= to catch gap-downs where price is already below the stop line
+  // (e.g. overnight gap to -10% should still trigger immediately).
+  if (pnlPct <= stopLossPct) {
+    const stopPrice = position.avgCost * (1 + config.SIMFOLIO.stopLossPct);
+    const gapBelowStop = currentPrice <= stopPrice
+      ? (currentPrice - stopPrice) / stopPrice * 100
+      : 0;
+    const gapNote = gapBelowStop < -0.5
+      ? '（跳空低开缺口' + Math.abs(gapBelowStop).toFixed(1) + '%，已穿透止损线）'
+      : '';
+    return '硬止损：亏损' + pnlPct.toFixed(1) + '%触发' + Math.abs(stopLossPct) + '%止损线' + gapNote;
   }
 
   // T+1: stocks bought today cannot be sold (except hard stop above)
@@ -1101,8 +1173,13 @@ function checkRiskThresholds(pf, priceMap) {
     const pnlPct = (currentPrice - pos.avgCost) / pos.avgCost * 100;
     const isBoughtToday = pos.entryDate === todayStr;
 
-    // 1. 硬止损：-8%（T+1当天唯一可触发的卖出）
-    if (pnlPct <= -8) {
+    // P1-6: Gap-down stop-loss protection.
+    // If the stock opened BELOW the -8% stop line (e.g. overnight gap down
+    // of -10%), the price already blew past our stop. We must sell immediately
+    // at the opening price — waiting only makes it worse.
+    const stopPrice = pos.avgCost * (1 + config.SIMFOLIO.stopLossPct); // 0.92 * avgCost
+    if (currentPrice <= stopPrice) {
+      const gapPct = ((currentPrice - stopPrice) / stopPrice * 100);
       alerts.push({
         code: pos.code,
         name: pos.name,
@@ -1110,7 +1187,8 @@ function checkRiskThresholds(pf, priceMap) {
         priority: 'critical',
         currentPrice,
         pnlPct: Math.round(pnlPct * 100) / 100,
-        reason: '硬止损：亏损' + pnlPct.toFixed(1) + '%触发-8%止损线',
+        reason: '硬止损：亏损' + pnlPct.toFixed(1) + '%触发-8%止损线' +
+          (gapPct < -0.5 ? '（跳空低开缺口' + Math.abs(gapPct).toFixed(1) + '%）' : ''),
       });
       continue;
     }

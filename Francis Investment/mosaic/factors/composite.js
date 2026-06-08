@@ -267,6 +267,27 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
   const hasDetail = detail && (detail.roe != null || detail.debtRatio != null || detail.revenueGrowth != null);
   const dataQuality = hasDetail ? 'full' : 'thin';
 
+  // === P1-4: Real-time factor performance penalty ===
+  // If a hidden factor signal was triggered but that factor has historically
+  // low hit rate (< 30%), downgrade the signal level or discard it entirely.
+  // This prevents 0% hit-rate factors like H3 from inflating scores.
+  let coldFactorPenalty = 0;
+  let coldFactorsSet = null;
+  try {
+    const factorPerf = require('../analysis/factor_performance');
+    coldFactorsSet = factorPerf.getColdFactors();
+    if (coldFactorsSet.size > 0 && hiddenResult && hiddenResult.signals) {
+      for (const sig of hiddenResult.signals) {
+        if (coldFactorsSet.has(sig.id)) {
+          // Each COLD factor that triggered = hidden score penalty
+          // strong: -8, medium: -5, weak: -3 (approx -10% per signal)
+          const penalty = sig.level === 'strong' ? 8 : sig.level === 'medium' ? 5 : 3;
+          coldFactorPenalty += penalty;
+        }
+      }
+    }
+  } catch (_) { /* factor_performance not available */ }
+
   // Adaptive weights
   let weights;
   if (!hasDetail) {
@@ -291,6 +312,11 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
     capitalFlow * weights.capital_flow +
     eventScore * eventWeight
   );
+
+  // P1-4: Apply cold factor penalty to final score
+  if (coldFactorPenalty > 0) {
+    total = Math.max(0, total - coldFactorPenalty);
+  }
 
   // Thin data cap: stocks without ROE/debt/revenue data cannot exceed 65.
   // This prevents "empty" stocks from scoring 76+ purely on cheap PE + activity.

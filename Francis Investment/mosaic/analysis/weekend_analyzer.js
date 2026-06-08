@@ -1204,7 +1204,13 @@ function _generateInsights(lastVerification) {
           ? '中等'
           : '较低';
 
-    const rawWeight = top.similarity > 80 ? 2 : 1;
+    // P1-5: When macro risk is defensive (panic/risk_off), historical
+    // similarity takes a back seat — weight capped at 1 regardless of
+    // how high the similarity score is. Risk warnings always dominate.
+    const isDefensiveRegime = _state.marketProfile &&
+      (_state.marketProfile.riskRegime === 'panic' || _state.marketProfile.riskRegime === 'risk_off');
+    const rawWeight = isDefensiveRegime ? 0
+      : (top.similarity > 80 ? 2 : 1);
     // 如果上周相似度方向错误，weight 降为 0（纯信息展示，不影响交易）
     const weight = simWeightSuppressed ? 0 : rawWeight;
 
@@ -1328,15 +1334,21 @@ function _generateInsights(lastVerification) {
   }
 
   // ===== 6. 跨市场上下文 =====
+  // P1-5: cross_market risk warnings get TOP priority.
+  // panic/risk_off → weight 5 (dominates all other insights)
+  // neutral → weight 2, slightly_bullish/risk_on → weight 1
+  // When macro is defensive, NO historical_parallel or sector_preference
+  // should override it — the circuit breaker in simfolio.js also enforces this.
   if (_state.marketProfile && _state.marketProfile.riskRegime) {
     const regime = _state.marketProfile.riskRegime;
     const regimeCN = regime === 'panic' ? '恐慌' : regime === 'risk_off' ? '避险' : regime === 'risk_on' ? '风险偏好' : regime === 'slightly_bullish' ? '温和看涨' : '中性';
+    const isDefensive = (regime === 'panic' || regime === 'risk_off');
     insights.push({
       type: 'cross_market',
       title: `跨市场风险: ${regimeCN}`,
       detail: `当前风险状态为 ${regimeCN}，建议仓位 ${_state.marketProfile.suggestedPosition}`,
-      weight: 1,
-      suggestedAction: (regime === 'panic' || regime === 'risk_off')
+      weight: isDefensive ? 5 : (regime === 'neutral' ? 2 : 1),
+      suggestedAction: isDefensive
         ? '防御模式：严格控制仓位'
         : '正常交易',
       timestamp: new Date().toISOString(),

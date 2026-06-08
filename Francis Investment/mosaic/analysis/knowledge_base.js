@@ -341,16 +341,36 @@ function extractFactorCombos(topN) {
     }
   }
 
-  // Rank by confidence × sample size
+  // P2-8: Confidence based on actual hit rate AND sample size.
+  // Old logic: sampleSize >= 5 → "high" regardless of hit rate.
+  // This incorrectly labeled a 25% hit-rate combo (H4,H6,H7) as "high confidence."
+  //
+  // New logic:
+  //   Confidence = hit rate quality × sample adequacy
+  //   high:   hitRate >= 0.55 AND sampleSize >= 4  (convincing)
+  //   medium: hitRate >= 0.45 AND sampleSize >= 3  (suggestive)
+  //   low:    everything else (insufficient evidence or poor performance)
+  //   A combo with hitRate < 0.40 is NEVER "high" or "medium" regardless of N.
   const ranked = Object.entries(combos)
     .filter(([, v]) => v.total >= 2)
-    .map(([key, v]) => ({
-      combo: key,
-      hitRate: +(v.hits / v.total).toFixed(2),
-      sampleSize: v.total,
-      recentDates: v.dates.slice(-3),
-      confidence: v.total >= 5 ? 'high' : v.total >= 3 ? 'medium' : 'low',
-    }))
+    .map(([key, v]) => {
+      const hitRate = +(v.hits / v.total).toFixed(2);
+      let confidence;
+      if (hitRate >= 0.55 && v.total >= 4) {
+        confidence = 'high';
+      } else if (hitRate >= 0.45 && v.total >= 3) {
+        confidence = 'medium';
+      } else {
+        confidence = 'low';
+      }
+      return {
+        combo: key,
+        hitRate: hitRate,
+        sampleSize: v.total,
+        recentDates: v.dates.slice(-3),
+        confidence: confidence,
+      };
+    })
     .sort((a, b) => (b.hitRate * b.sampleSize) - (a.hitRate * a.sampleSize))
     .slice(0, topN);
 

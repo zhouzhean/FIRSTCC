@@ -12,26 +12,40 @@ const config = require('../config');
  * 含义：空方力量耗尽，可能反转
  */
 function signalVolumeDryUp(stock, klines) {
+  const todayChg = stock.changePercent || 0;
+  const volRatio = stock.volumeRatio || 1;
+
+  // P2-7: Relaxed thresholds — original required a rare combo of
+  // 5d drop > 3% AND vol < 50% of average. The new thresholds also
+  // trigger on moderate pullbacks with volume contraction.
+  // Fallback path (no klines): use stock.volumeRatio
   if (!klines || klines.length < 5) {
-    // Fallback: use volume ratio as proxy
-    if (stock.volumeRatio != null && stock.volumeRatio < 0.4 && stock.changePercent > -2 && stock.changePercent < 1) {
-      return { triggered: true, signal: 'medium', detail: '量比' + stock.volumeRatio.toFixed(2) + '极度萎缩，跌幅收窄至' + stock.changePercent.toFixed(1) + '%，卖盘枯竭' };
+    if (volRatio < 0.55 && todayChg > -3 && todayChg < 1) {
+      return { triggered: true, signal: 'medium', detail: '量比' + volRatio.toFixed(2) + '萎缩，跌幅收窄至' + todayChg.toFixed(1) + '%，卖盘枯竭' };
+    }
+    if (volRatio < 0.7 && todayChg > -2 && todayChg < 1.5) {
+      return { triggered: true, signal: 'weak', detail: '量比' + volRatio.toFixed(2) + '偏低，关注止跌' };
     }
     return { triggered: false, signal: null, detail: '' };
   }
 
   const recent = klines.slice(-5);
-  const todayChg = stock.changePercent || 0;
   const prev5Chg = (recent[recent.length - 1].close - recent[0].close) / recent[0].close * 100;
   const avgVol = recent.slice(0, -1).reduce((s, k) => s + k.volume, 0) / (recent.length - 1);
   const todayVol = recent[recent.length - 1].volume;
-  const volRatio = avgVol > 0 ? todayVol / avgVol : 1;
+  const kVolRatio = avgVol > 0 ? todayVol / avgVol : 1;
 
-  if (todayChg > -2 && todayChg < 1 && volRatio < 0.5 && prev5Chg < -3) {
-    return { triggered: true, signal: 'strong', detail: '5日跌' + prev5Chg.toFixed(1) + '%，今日量缩至均量' + (volRatio * 100).toFixed(0) + '%，卖盘枯竭' };
+  // Strong: clear volume dry-up after a meaningful drop (was: prev5Chg<-3 & volRatio<0.5)
+  if (todayChg > -3 && todayChg < 1.5 && kVolRatio < 0.55 && prev5Chg < -2) {
+    return { triggered: true, signal: 'strong', detail: '5日跌' + Math.abs(prev5Chg).toFixed(1) + '%，今日量缩至均量' + (kVolRatio * 100).toFixed(0) + '%，卖盘枯竭' };
   }
-  if (volRatio < 0.6 && prev5Chg < -2) {
-    return { triggered: true, signal: 'medium', detail: '量缩' + (volRatio * 100).toFixed(0) + '%，跌幅收窄，关注反转' };
+  // Medium: volume contraction + mild pullback (was: volRatio<0.6 & prev5Chg<-2)
+  if (kVolRatio < 0.65 && prev5Chg < -1) {
+    return { triggered: true, signal: 'medium', detail: '量缩' + (kVolRatio * 100).toFixed(0) + '%，跌幅收窄，关注反转' };
+  }
+  // Weak: volume contraction any time
+  if (volRatio < 0.6 && todayChg <= 2) {
+    return { triggered: true, signal: 'weak', detail: '量比' + volRatio.toFixed(2) + '偏低，关注量能变化' };
   }
   return { triggered: false, signal: null, detail: '' };
 }
@@ -46,11 +60,17 @@ function signalPanicVolume(stock, klines) {
   const volRatio = stock.volumeRatio || 1;
   const turnoverRate = stock.turnoverRate || 0;
 
-  if (chg < -3 && volRatio > 2 && turnoverRate > 3) {
+  // P2-7: Relaxed from chg<-3 & volRatio>2 & turnoverRate>3 (too rare)
+  // Now triggers on significant drops with elevated volume — any sign of
+  // capitulation selling, which is often the final flush before a reversal.
+  if (chg < -3 && volRatio > 1.5 && turnoverRate > 2) {
     return { triggered: true, signal: 'strong', detail: '跌' + Math.abs(chg).toFixed(1) + '% + 量比' + volRatio.toFixed(1) + ' + 换手' + turnoverRate.toFixed(1) + '%，恐慌抛售，底部放量' };
   }
-  if (chg < -2 && volRatio > 1.8) {
+  if (chg < -2 && volRatio > 1.3) {
     return { triggered: true, signal: 'medium', detail: '放量下跌，关注恐慌出清后的反弹' };
+  }
+  if (chg < -1.5 && volRatio > 1.0) {
+    return { triggered: true, signal: 'weak', detail: '放量回调' + Math.abs(chg).toFixed(1) + '%，量比' + volRatio.toFixed(1) + '，关注企稳' };
   }
   return { triggered: false, signal: null, detail: '' };
 }
@@ -103,11 +123,17 @@ function signalROEPB(stock, detail) {
   const roe = (detail && detail.roe) ? detail.roe : null;
   const pb = stock.pb;
 
-  if (roe != null && roe > 15 && pb != null && pb < 1.5) {
+  // P2-7: Relaxed — original ROE>15 + PB<1.5 was impossibly strict
+  // for A-shares under ¥20. New thresholds calibrated for Chinese market:
+  // ROE>10% is solid, ROE>6% is acceptable. PB<1.5 is deep value, PB<2 is value.
+  if (roe != null && roe > 12 && pb != null && pb < 2.0) {
     return { triggered: true, signal: 'strong', detail: 'ROE' + roe.toFixed(1) + '% + PB' + pb.toFixed(2) + '，高ROE低估值' };
   }
-  if (roe != null && roe > 10 && pb != null && pb < 2) {
+  if (roe != null && roe > 8 && pb != null && pb < 2.5) {
     return { triggered: true, signal: 'medium', detail: 'ROE' + roe.toFixed(1) + '% + PB' + pb.toFixed(2) + '，性价比尚可' };
+  }
+  if (roe != null && roe > 5 && pb != null && pb < 3.0) {
+    return { triggered: true, signal: 'weak', detail: 'ROE' + roe.toFixed(1) + '% + PB' + pb.toFixed(2) + '，估值合理' };
   }
   return { triggered: false, signal: null, detail: '' };
 }
@@ -157,19 +183,32 @@ function signalLowChurnAccumulation(stock) {
  * 条件：5日累计跌幅>5% + 今日止跌(涨跌幅>-1%)
  */
 function signalReversal(stock, klines) {
-  if (!klines || klines.length < 5) return { triggered: false, signal: null, detail: '' };
+  const todayChg = stock.changePercent || 0;
+
+  // P2-7: Relaxed — added fallback for when klines not available.
+  // Original required 5d drop of -8% (strong) / -5% (medium), which almost
+  // never fires in a sideways/up-trending market.
+  if (!klines || klines.length < 5) {
+    // Fallback: use stock's own changePercent pattern
+    if (todayChg > 0 && todayChg < 3) {
+      return { triggered: true, signal: 'weak', detail: '今日翻红+' + todayChg.toFixed(1) + '%，关注反弹持续性' };
+    }
+    return { triggered: false, signal: null, detail: '' };
+  }
 
   const closes = klines.map(k => k.close);
   const chg5d = (closes[closes.length - 1] - closes[closes.length - 5]) / closes[closes.length - 5] * 100;
-  const todayChg = stock.changePercent || 0;
 
-  if (chg5d < -8 && todayChg > -0.5) {
+  // Strong: deep drop + clear stabilization (was: -8% drop)
+  if (chg5d < -6 && todayChg > -0.5) {
     return { triggered: true, signal: 'strong', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%后止跌，强势反转信号' };
   }
-  if (chg5d < -5 && todayChg > -1) {
+  // Medium: moderate drop + stabilization (was: -5% drop)
+  if (chg5d < -4 && todayChg > -1) {
     return { triggered: true, signal: 'medium', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%，关注超跌反弹' };
   }
-  if (chg5d < -3 && todayChg > 0) {
+  // Weak: any pullback + today is green (was: -3% drop)
+  if (chg5d < -2 && todayChg > 0) {
     return { triggered: true, signal: 'weak', detail: '5日跌' + Math.abs(chg5d).toFixed(1) + '%后翻红，短线止跌' };
   }
   return { triggered: false, signal: null, detail: '' };
@@ -180,7 +219,23 @@ function signalReversal(stock, klines) {
  * 近5日量价相关系数为负（量缩价稳或量增价不跌），说明有资金在暗中吸筹。
  */
 function signalVolumePriceDivergence(stock, klines) {
-  if (!klines || klines.length < 5) return { triggered: false, signal: null, detail: '' };
+  const todayChg = stock.changePercent || 0;
+  const volRatio = stock.volumeRatio || 1;
+
+  // P2-7: Relaxed — original required klines for Pearson correlation,
+  // with threshold <-0.5 (almost never triggers). Added fallback path
+  // for when klines unavailable, and lowered correlation threshold.
+  if (!klines || klines.length < 5) {
+    // Fallback: volume ratio + price change as proxy for divergence
+    // Low volume + flat/slightly positive price = potential accumulation
+    if (volRatio < 0.6 && todayChg > -0.5 && todayChg < 2 && stock.price < 20) {
+      return { triggered: true, signal: 'medium', detail: '量比' + volRatio.toFixed(2) + '萎缩，价格企稳于' + (stock.price || 0).toFixed(2) + '，疑似吸筹' };
+    }
+    if (volRatio < 0.75 && todayChg > -1 && todayChg < 2.5 && stock.price < 30) {
+      return { triggered: true, signal: 'weak', detail: '量价弱背离，关注量价关系' };
+    }
+    return { triggered: false, signal: null, detail: '' };
+  }
 
   const recent = klines.slice(-5);
   const priceChanges = [];
@@ -206,14 +261,18 @@ function signalVolumePriceDivergence(stock, klines) {
   }
 
   const correlation = varP > 0 && varV > 0 ? cov / Math.sqrt(varP * varV) : 0;
-  const todayChg = stock.changePercent || 0;
 
   // Negative correlation + price stabilizing = accumulation
-  if (correlation < -0.5 && todayChg > -0.5 && todayChg < 2) {
+  // P2-7: Lowered from -0.5 to -0.35 (strong), -0.3 to -0.15 (medium)
+  if (correlation < -0.35 && todayChg > -0.5 && todayChg < 2) {
     return { triggered: true, signal: 'strong', detail: '量价背离度' + correlation.toFixed(2) + '，缩量企稳，疑似吸筹' };
   }
-  if (correlation < -0.3 && todayChg > -1) {
+  if (correlation < -0.15 && todayChg > -1) {
     return { triggered: true, signal: 'medium', detail: '量价弱背离' + correlation.toFixed(2) + '，关注量价关系' };
+  }
+  // Also catch volRatio-based divergence when correlation is marginal
+  if (correlation < 0 && volRatio < 0.65 && todayChg > -1.5) {
+    return { triggered: true, signal: 'weak', detail: '量价微背离' + correlation.toFixed(2) + '，量比偏低' };
   }
   return { triggered: false, signal: null, detail: '' };
 }
