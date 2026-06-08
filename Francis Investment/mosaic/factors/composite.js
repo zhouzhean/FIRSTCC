@@ -300,7 +300,13 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
       event: 0.18,
     };
   } else {
-    weights = config.FACTOR_WEIGHTS;
+    // P2-4: Use dynamic weights if available, fall back to config defaults
+    try {
+      const dynamicWeights = require('../predict/dynamic_weights');
+      weights = dynamicWeights.getEffectiveWeights();
+    } catch (_) {
+      weights = config.FACTOR_WEIGHTS;
+    }
   }
 
   // Weighted total (exclude event if no LHB data)

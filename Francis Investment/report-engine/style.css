@@ -1062,3 +1062,330 @@ body {
     gap: 5px !important;
   }
 }
+
+/* ===== 预测引擎仪表板 ===== */
+
+.predict-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 16px;
+}
+
+.predict-card {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  overflow: hidden;
+}
+
+.predict-card-header {
+  padding: 14px 18px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1e293b;
+  border-bottom: 1px solid #f1f5f9;
+  background: #fafbfc;
+}
+
+.predict-card-body {
+  padding: 16px 18px;
+  overflow-x: auto;
+}
+
+.predict-empty {
+  text-align: center;
+  padding: 32px 16px;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+/* ---- Expected Return Ranking ---- */
+.predict-rank-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.predict-rank-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid #f1f5f9;
+  font-size: 13px;
+}
+
+.predict-rank-num {
+  font-weight: 800;
+  font-size: 15px;
+  color: #6366f1;
+  min-width: 28px;
+}
+
+.predict-rank-name {
+  font-weight: 600;
+  color: #1e293b;
+  min-width: 100px;
+}
+
+.predict-rank-er {
+  font-weight: 700;
+  font-size: 14px;
+  min-width: 120px;
+}
+
+.predict-rank-er.er-strong {
+  color: #16a34a;
+}
+
+.predict-rank-er.er-positive {
+  color: #65a30d;
+}
+
+.predict-rank-er.er-negative {
+  color: #ef4444;
+}
+
+.predict-rank-breakdown {
+  color: #64748b;
+  font-size: 11px;
+  flex: 1;
+}
+
+.predict-rank-confidence {
+  color: #94a3b8;
+  font-size: 11px;
+  min-width: 70px;
+  text-align: right;
+}
+
+/* ---- Factor Prediction Matrix ---- */
+.predict-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.predict-table th,
+.predict-table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.predict-table th {
+  font-weight: 700;
+  color: #64748b;
+  font-size: 11px;
+  text-transform: uppercase;
+  background: #f8fafc;
+}
+
+.predict-table .factor-id {
+  font-weight: 700;
+  color: #6366f1;
+}
+
+.predict-status {
+  padding: 2px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.predict-status.status-hot {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.predict-status.status-cold {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+.predict-status.status-stable {
+  background: #f1f5f9;
+  color: #64748b;
+}
+
+.positive { color: #16a34a; font-weight: 600; }
+.negative { color: #ef4444; font-weight: 600; }
+
+/* ---- Dynamic Weights ---- */
+.weights-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.weight-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.weight-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+  min-width: 80px;
+}
+
+.weight-bar-bg {
+  flex: 1;
+  height: 18px;
+  background: #f1f5f9;
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.weight-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+  border-radius: 9px;
+  transition: width .3s;
+}
+
+.weight-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: #6366f1;
+  min-width: 40px;
+  text-align: right;
+}
+
+.weights-footer {
+  margin-top: 12px;
+  font-size: 11px;
+  color: #94a3b8;
+  text-align: center;
+}
+
+/* ---- Sector Lead/Lag ---- */
+.leadlag-section {
+  margin-bottom: 14px;
+}
+
+.leadlag-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #475569;
+  margin-bottom: 8px;
+}
+
+.leadlag-item {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.leadlag-item.conf-high {
+  background: #dcfce7;
+  color: #166534;
+  border-left: 3px solid #22c55e;
+}
+
+.leadlag-item.conf-medium {
+  background: #fefce8;
+  color: #854d0e;
+  border-left: 3px solid #eab308;
+}
+
+.leadlag-item.conf-low {
+  background: #f1f5f9;
+  color: #64748b;
+  border-left: 3px solid #94a3b8;
+}
+
+/* ---- Cycle × Factor Heatmap ---- */
+.heatmap-container {
+  overflow-x: auto;
+  margin-bottom: 12px;
+}
+
+.heatmap-table th,
+.heatmap-table td {
+  text-align: center;
+  font-size: 12px;
+  padding: 6px 8px;
+  min-width: 44px;
+}
+
+.cycle-label {
+  font-weight: 700;
+  color: #475569;
+  text-align: left;
+  min-width: 80px;
+}
+
+.cycle-label.current-cycle {
+  color: #6366f1;
+  background: #eef2ff;
+  border-radius: 4px;
+}
+
+.cycle-prefs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px 14px;
+  background: #f8fafc;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.pref-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.pref-tag {
+  padding: 3px 10px;
+  border-radius: 10px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.pref-tag.pref-recommend {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.pref-tag.pref-avoid {
+  background: #fef2f2;
+  color: #ef4444;
+}
+
+/* ---- Mobile ---- */
+@media (max-width: 720px) {
+  .predict-dashboard {
+    padding: 10px;
+    gap: 10px;
+  }
+  .predict-card-header {
+    padding: 10px 14px;
+    font-size: 14px;
+  }
+  .predict-card-body {
+    padding: 12px 14px;
+  }
+  .predict-rank-item {
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+  .predict-table {
+    font-size: 11px;
+  }
+  .predict-table th,
+  .predict-table td {
+    padding: 5px 6px;
+  }
+}

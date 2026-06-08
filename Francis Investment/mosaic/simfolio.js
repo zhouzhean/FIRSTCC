@@ -602,104 +602,148 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   }
 
   // ---- Step 5: Look for buy candidates ----
-  // Score all pipeline results, compute percentile thresholds
-  const scoredWithScores = pipelineResults
-    .filter(r => r.compositeScore != null)
-    .map(r => r.compositeScore)
-    .sort((a, b) => b - a);
-
-  // Percentile-based thresholds
-  const pctBuy = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20;
-  const pctStrong = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10;
-  const minAbsolute = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore) || 50;
-  const minStrongScore = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minStrongScore) || 70;
-
-  // P1-4: Dynamic buy threshold — auto-tighten when scan quality is persistently low
-  let effectiveMinAbsolute = minAbsolute;
-  let effectiveMinStrong = minStrongScore;
-  const dtConfig = (config.SIMFOLIO && config.SIMFOLIO.dynamicThreshold) || {};
-  const weakTopScore = dtConfig.weakTopScore || 65;
-  const raisedMinScore = dtConfig.raisedMinScore || 60;
-  const checkWindow = dtConfig.checkWindow || 2;
-  // Check if we have recent scan results with low top scores
-  try {
-    const simfolioDir = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
-    const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.json');
-    if (fs.existsSync(lastResultPath)) {
-      const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
-      if (lastResult.maxScore != null && lastResult.maxScore < weakTopScore) {
-        effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
-        effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
-      }
-    }
-    // Also check scan_records for persistent low scores
-    const todayDate = new Date().toISOString().slice(0, 10);
-    const scanRecordsPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + todayDate + '.json');
-    let lowScoreDays = (lastResult && lastResult.maxScore != null && lastResult.maxScore < weakTopScore) ? 1 : 0;
-    // Check previous days' scan records
-    for (let d = 1; d <= checkWindow; d++) {
-      const pastDate = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
-      const pastPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + pastDate + '.json');
-      if (fs.existsSync(pastPath)) {
-        try {
-          const pastRec = JSON.parse(fs.readFileSync(pastPath, 'utf8'));
-          if (pastRec.maxScore != null && pastRec.maxScore < weakTopScore) {
-            lowScoreDays++;
-          }
-        } catch (_) {}
-      }
-    }
-    if (lowScoreDays >= checkWindow) {
-      effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
-      effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
-    }
-  } catch (_) { /* silent */ }
-
-  let buyThreshold = effectiveMinAbsolute;
-  let strongThreshold = Math.max(effectiveMinStrong, effectiveMinAbsolute + 5);
-
-  if (scoredWithScores.length > 0) {
-    const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
-    const strongIdx = Math.max(0, Math.floor(scoredWithScores.length * pctStrong) - 1);
-    buyThreshold = Math.max(minAbsolute, scoredWithScores[buyIdx] || 0);
-    strongThreshold = Math.max(strongThreshold, scoredWithScores[strongIdx] || 0);
-  }
-
-  // Sort candidates by composite score (percentile-ranked, with absolute floor)
   const maxSectorExposure = (config.SIMFOLIO && config.SIMFOLIO.maxSectorExposurePct) || 0.40;
-  const MAX_SAME_SECTOR_POSITIONS = 2; // P0-3: max 2 positions in same sector
-  const buyCandidates = pipelineResults
-    .filter(r => {
-      // Don't buy what we already hold
-      if (pf.positions.some(p => p.code === r.code)) return false;
-      // Must meet percentile threshold (with absolute floor)
-      if (r.compositeScore < buyThreshold) return false;
-      // Sector concentration check
-      const candidateSector = classifySector(r.name);
-      if (candidateSector !== '其他') {
-        // P0-3: Hard cap — at most 2 positions in the same sector
-        const sameSectorCount = pf.positions.filter(p => classifySector(p.name) === candidateSector).length;
-        if (sameSectorCount >= MAX_SAME_SECTOR_POSITIONS) {
-          return false;
-        }
-        // Existing 40% exposure cap
-        if (getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) {
-          return false;
-        }
-      }
-      return true;
-    })
-    .sort((a, b) => b.compositeScore - a.compositeScore);
+  const MAX_SAME_SECTOR_POSITIONS = 2;
 
   // P2: Market cycle position limit — adjust max positions based on A-share cycle
   let maxPositionsByCycle = config.SIMFOLIO.maxPositions;
+  let marketCycleForPredict = null;
   try {
     const marketCycle = require('./analysis/market_cycle');
     const cycle = marketCycle.getMarketCycle();
     if (cycle && cycle.suggestedMaxPositions != null) {
       maxPositionsByCycle = Math.min(config.SIMFOLIO.maxPositions, cycle.suggestedMaxPositions);
     }
+    marketCycleForPredict = cycle;
   } catch (_) { /* market_cycle not available, use default */ }
+
+  // P3: === Prediction-based buy candidate selection ===
+  // When useExpectedReturnRanking is enabled, rank stocks by expected 5-day return
+  // instead of hard score thresholds. Falls back to legacy percentile logic otherwise.
+  const useExpectedReturn = (config.PREDICTION && config.PREDICTION.useExpectedReturnRanking);
+  let buyCandidates = [];
+  let predictionContext = null;
+
+  if (useExpectedReturn) {
+    // Build prediction context
+    try {
+      const stockPredictor = require('./predict/stock_predictor');
+      const expectedReturn = require('./predict/expected_return');
+      const factorPerfMod = require('./analysis/factor_performance');
+
+      const stockFactorPerf = stockPredictor.computeStockFactorPerformance(3);
+      const nbPerf = factorPerfMod.getNBPerformance();
+
+      // Compute sector flow rank for each stock
+      const sectorFlowMap = new Map();
+      // (sectorFlowMap is built from enrichment data in pipeline — use what we have)
+
+      predictionContext = {
+        stockFactorPerf: stockFactorPerf,
+        marketCycle: marketCycleForPredict,
+        nbPerf: nbPerf,
+        weekendContext: weekendContext,
+      };
+
+      // Rank by expected return
+      const ranked = expectedReturn.rankByExpectedReturn(pipelineResults, predictionContext);
+
+      // Filter and extract
+      const minExpectedReturn = (config.PREDICTION && config.PREDICTION.minExpectedReturn) || 0;
+      buyCandidates = ranked
+        .filter(r => {
+          if (pf.positions.some(p => p.code === r.code)) return false;
+          if (!r.prediction || r.prediction.expectedReturn < minExpectedReturn) return false;
+          const candidateSector = classifySector(r.name);
+          if (candidateSector !== '其他') {
+            const sameSectorCount = pf.positions.filter(p => classifySector(p.name) === candidateSector).length;
+            if (sameSectorCount >= MAX_SAME_SECTOR_POSITIONS) return false;
+            if (getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) return false;
+          }
+          return true;
+        });
+      // Already sorted by expectedReturn descending from rankByExpectedReturn
+    } catch (_) {
+      // Fall through to legacy logic
+      useExpectedReturn === false; // (actually disable for this run)
+    }
+  }
+
+  // Fallback: legacy percentile-based threshold logic
+  if (!useExpectedReturn || buyCandidates.length === 0) {
+    if (buyCandidates.length === 0 && useExpectedReturn) {
+      // Prediction mode ran but produced no candidates — don't revert to legacy
+      // (it's intentional: no stocks meet the expected return threshold)
+    } else if (!useExpectedReturn) {
+      // Legacy path
+      const scoredWithScores = pipelineResults
+        .filter(r => r.compositeScore != null)
+        .map(r => r.compositeScore)
+        .sort((a, b) => b - a);
+
+      const pctBuy = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileTop) || 0.20;
+      const pctStrong = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.percentileStrong) || 0.10;
+      const minAbsolute = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore) || 50;
+      const minStrongScore = (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minStrongScore) || 70;
+
+      let effectiveMinAbsolute = minAbsolute;
+      let effectiveMinStrong = minStrongScore;
+      const dtConfig = (config.SIMFOLIO && config.SIMFOLIO.dynamicThreshold) || {};
+      const weakTopScore = dtConfig.weakTopScore || 65;
+      const raisedMinScore = dtConfig.raisedMinScore || 60;
+      const checkWindow = dtConfig.checkWindow || 2;
+      try {
+        const simfolioDir = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
+        const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.json');
+        if (fs.existsSync(lastResultPath)) {
+          const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+          if (lastResult.maxScore != null && lastResult.maxScore < weakTopScore) {
+            effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
+            effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
+          }
+        }
+        const todayDate = new Date().toISOString().slice(0, 10);
+        let lowScoreDays = (lastResult && lastResult.maxScore != null && lastResult.maxScore < weakTopScore) ? 1 : 0;
+        for (let d = 1; d <= checkWindow; d++) {
+          const pastDate = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+          const pastPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + pastDate + '.json');
+          if (fs.existsSync(pastPath)) {
+            try {
+              const pastRec = JSON.parse(fs.readFileSync(pastPath, 'utf8'));
+              if (pastRec.maxScore != null && pastRec.maxScore < weakTopScore) lowScoreDays++;
+            } catch (_) {}
+          }
+        }
+        if (lowScoreDays >= checkWindow) {
+          effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
+          effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
+        }
+      } catch (_) {}
+
+      let buyThreshold = effectiveMinAbsolute;
+      let strongThreshold = Math.max(effectiveMinStrong, effectiveMinAbsolute + 5);
+      if (scoredWithScores.length > 0) {
+        const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
+        const strongIdx = Math.max(0, Math.floor(scoredWithScores.length * pctStrong) - 1);
+        buyThreshold = Math.max(minAbsolute, scoredWithScores[buyIdx] || 0);
+        strongThreshold = Math.max(strongThreshold, scoredWithScores[strongIdx] || 0);
+      }
+
+      buyCandidates = pipelineResults
+        .filter(r => {
+          if (pf.positions.some(p => p.code === r.code)) return false;
+          if (r.compositeScore < buyThreshold) return false;
+          const candidateSector = classifySector(r.name);
+          if (candidateSector !== '其他') {
+            const sameSectorCount = pf.positions.filter(p => classifySector(p.name) === candidateSector).length;
+            if (sameSectorCount >= MAX_SAME_SECTOR_POSITIONS) return false;
+            if (getSectorExposure(pf, candidateSector, null) >= maxSectorExposure) return false;
+          }
+          return true;
+        })
+        .sort((a, b) => b.compositeScore - a.compositeScore);
+    }
+  }
 
   // How many slots available?
   const availableSlots = maxPositionsByCycle - pf.positions.length + decisions.filter(d => d.action === 'sell').length;
@@ -748,12 +792,22 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         break;
       }
 
-      // Strong buy: top percentile AND hasStrongSignal AND meets minStrongScore
-      const isStrong = candidate.compositeScore >= strongThreshold && candidate.hasStrongSignal;
+      // Strong buy: top percentile AND hasStrongSignal (legacy)
+      // OR prediction-based: expected return > 2% AND confidence >= 0.5
+      let isStrong = candidate.hasStrongSignal || false;
+      if (useExpectedReturn && candidate.prediction) {
+        isStrong = candidate.prediction.expectedReturn > 2 && candidate.prediction.confidence >= 0.5;
+      }
       // Combine weekend multiplier and risk regime multiplier
       const combinedMultiplier = weekendPositionMultiplier * riskSizingMultiplier;
       const buyDecision = checkBuySignal(candidate, pf, isStrong, combinedMultiplier);
       if (buyDecision) {
+        // Attach prediction data to the decision for traceability
+        if (candidate.prediction) {
+          buyDecision.analysisContext.expectedReturn = candidate.prediction.expectedReturn;
+          buyDecision.analysisContext.predictionBreakdown = candidate.prediction.breakdown;
+          buyDecision.analysisContext.predictionConfidence = candidate.prediction.confidence;
+        }
         decisions.push(buyDecision);
       }
     }

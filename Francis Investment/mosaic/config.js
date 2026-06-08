@@ -248,4 +248,27 @@ module.exports = {
     factorColdThreshold: 0.40,               // 因子冷门阈值
     verificationSchedule: { hour: 15, minute: 30 }, // 周五收盘后触发验证
   },
+
+  // ---- 预测引擎 ----
+  PREDICTION: {
+    useExpectedReturnRanking: true,          // true=期望收益排名, false=硬阈值（旧逻辑）
+    minExpectedReturn: 0,                    // 最低期望 5 日收益（%），低于此值不买入
+    expectedReturnWeights: {                 // 期望收益 6 维权重
+      factorCombo: 0.30,                     //   因子组合历史期望收益
+      sectorFlow: 0.20,                      //   板块资金流动量
+      marketCycle: 0.15,                     //   市场周期偏差
+      nbSentiment: 0.15,                     //   北向情绪偏差
+      stockSimilarity: 0.10,                 //   个股历史相似度投影
+      scorePercentile: 0.10,                 //   综合评分百分位
+    },
+    dynamicWeights: {                        // 动态权重学习
+      enabled: true,                         //   是否启用自动权重学习
+      lookbackDays: 20,                      //   训练窗口（交易日）
+      minSamples: 30,                        //   最少样本数才更新
+      minR2: 0.05,                           //   最低 R² 才采纳
+      emaAlpha: 0.3,                         //   EMA 平滑系数
+      minWeight: 0.05,                       //   单维度最低权重
+      maxWeight: 0.50,                       //   单维度最高权重
+    },
+  },
 };

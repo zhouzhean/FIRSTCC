@@ -80,6 +80,12 @@ function saveLastPipelineResult(result, type) {
       maxScore: allResults.length > 0 ? Math.max(...allResults.map(r => r.compositeScore || 0)) : 0,
     };
     fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
+
+    // P3: Record stock-level signals for prediction engine
+    try {
+      const stockPredictor = require('./mosaic/predict/stock_predictor');
+      stockPredictor.recordDailyStockSignals(summary.date, allResults);
+    } catch (_) {}
   } catch (e) { /* silent */ }
 }
 
@@ -1083,6 +1089,75 @@ const server = http.createServer(async function(req, res) {
       const marketCycle = require('./mosaic/analysis/market_cycle');
       const cycle = marketCycle.getMarketCycle();
       return jsonResponse(res, { ok: true, ...cycle });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // ===== 预测引擎 API =====
+
+  // 个股级别因子绩效
+  if (pathname === '/api/predict/factor-performance') {
+    try {
+      const stockPredictor = require('./mosaic/predict/stock_predictor');
+      const perf = stockPredictor.computeStockFactorPerformance(3);
+      return jsonResponse(res, { ok: true, ...perf });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 动态权重
+  if (pathname === '/api/predict/dynamic-weights') {
+    try {
+      const dynamicWeights = require('./mosaic/predict/dynamic_weights');
+      const weights = dynamicWeights.getEffectiveWeights();
+      const cached = dynamicWeights.loadDynamicWeights();
+      return jsonResponse(res, {
+        ok: true,
+        weights: weights,
+        r2: cached ? cached.r2 : null,
+        sampleCount: cached ? cached.sampleCount : null,
+        updatedAt: cached ? cached.updatedAt : null,
+        message: cached ? cached.message : '使用config默认权重',
+      });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 板块轮动领先/滞后矩阵
+  if (pathname === '/api/predict/sector-leadlag') {
+    try {
+      const sectorLeadLag = require('./mosaic/predict/sector_leadlag');
+      let data = sectorLeadLag.loadCachedLeadLag();
+      if (!data || !data.available) {
+        data = sectorLeadLag.computeSectorLeadLagMatrix();
+      }
+      return jsonResponse(res, { ok: true, ...(data || { available: false }) });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 周期×因子有效性矩阵
+  if (pathname === '/api/predict/cycle-factor-matrix') {
+    try {
+      const cycleFactorMatrix = require('./mosaic/predict/cycle_factor_matrix');
+      const heatmap = cycleFactorMatrix.getHeatmapData();
+      const prefs = cycleFactorMatrix.getCycleFactorPreferences('sideways'); // default
+      return jsonResponse(res, { ok: true, heatmap: heatmap, preferences: prefs });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 交易归因历史
+  if (pathname === '/api/predict/trade-attribution') {
+    try {
+      const tradeAttr = require('./mosaic/predict/trade_attribution');
+      const adjustments = tradeAttr.getActiveAdjustments();
+      return jsonResponse(res, { ok: true, adjustments: adjustments });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }

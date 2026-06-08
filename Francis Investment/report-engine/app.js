@@ -96,6 +96,7 @@ var SECTIONS = [
   { id: 'tradingReport',   label: '交易分析与报告',   icon: '', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '', disabled: true, render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
   { id: 'usMarket',        label: '海外市场',         icon: '', render: function(d,m) { renderUSMarketDirect(); return ''; } },
+  { id: 'predict',        label: '预测引擎',         icon: '', render: function(d,m) { renderPredictDashboard(); return ''; } },
   { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
   { id: 'historyReview',   label: '历史复盘',         icon: '', render: function(d,m) { return renderHistoryReviewSection(d,m); } },
   { id: 'weekendAnalysis', label: '周末深度分析',     icon: '', render: function(d,m) { renderWeekendAnalysisDirect(); return ''; } },
@@ -1479,6 +1480,67 @@ function loadUSMarketIntoDOM() {
 }
 
 // ============ Cross-Market Analysis Section (v2.8 — correlation engine + risk state machine) ============
+function renderPredictDashboard() {
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;';
+
+  var contentDiv = document.createElement('div');
+  contentDiv.className = 'predict-dashboard-container';
+  contentDiv.id = 'predict-content';
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">&#x1F9E0;</div>' +
+    '<div style="font-size:16px;font-weight:600;">正在加载预测引擎数据...</div>' +
+    '</div>';
+  container.appendChild(contentDiv);
+  $contentArea.appendChild(container);
+
+  setTimeout(function() { loadPredictIntoDOM(); }, 100);
+}
+
+function loadPredictIntoDOM() {
+  var container = document.getElementById('predict-content');
+  if (!container) return;
+
+  Promise.all([
+    fetch('/api/predict/factor-performance').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/predict/dynamic-weights').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/predict/sector-leadlag').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/predict/cycle-factor-matrix').then(function(r) { return r.json(); }).catch(function() { return null; }),
+  ]).then(function(results) {
+    var factorPerf = results[0];
+    var dynamicWeights = results[1];
+    var sectorLeadLag = results[2];
+    var cycleFactorMatrix = results[3];
+
+    // Mark current cycle in heatmap
+    if (cycleFactorMatrix && cycleFactorMatrix.heatmap && cycleFactorMatrix.heatmap.cycles) {
+      var currentCycle = (cycleFactorMatrix.preferences && cycleFactorMatrix.preferences.cycle) || 'sideways';
+      cycleFactorMatrix.heatmap.cycles.forEach(function(c) {
+        if (c.id === currentCycle) c.isCurrent = true;
+      });
+    }
+
+    // Build ranking data from factorPerf context
+    var ranking = null;
+    if (factorPerf && factorPerf.ok) {
+      ranking = { items: factorPerf.factors, minExpectedReturn: 0 };
+    }
+
+    var data = {
+      ranking: ranking,
+      factorPerf: factorPerf && factorPerf.ok ? factorPerf : null,
+      dynamicWeights: dynamicWeights && dynamicWeights.ok ? dynamicWeights : null,
+      sectorLeadLag: sectorLeadLag && sectorLeadLag.ok ? sectorLeadLag : null,
+      cycleFactorMatrix: cycleFactorMatrix && cycleFactorMatrix.ok ? cycleFactorMatrix : null,
+    };
+
+    container.innerHTML = renderPredictionDashboard.render(data);
+  }).catch(function(err) {
+    container.innerHTML = '<div style="text-align:center;padding:60px;color:#ef4444;">加载失败: ' + err.message + '</div>';
+  });
+}
+
 function renderCrossMarketDirect() {
   $contentArea.innerHTML = '';
   var container = document.createElement('div');
