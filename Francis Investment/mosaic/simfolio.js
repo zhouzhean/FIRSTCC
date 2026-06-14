@@ -14,10 +14,19 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 
+// ---- Utility ----
+
+function safeFixed(value, decimals, fallback) {
+  if (fallback === undefined) fallback = '?';
+  if (value == null || typeof value !== 'number' || isNaN(value)) return fallback;
+  return value.toFixed(decimals);
+}
+
 const SIMFOLIO_DIR = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
 const PORTFOLIO_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json');
 const PORTFOLIO_BAK_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json.bak');
 const WEEKEND_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'weekend_context.json');
+const HISTORY_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'history_context.json'); // v2.9: unified history context
 
 // ---- Portfolio Management ----
 
@@ -181,6 +190,19 @@ function getSectorExposure(pf, targetSector, excludeStockCode) {
  * Returns null if file not found, expired, or invalid.
  */
 function loadWeekendContext() {
+  // v2.9: Try unified history_context first, fall back to old weekend_context
+  if (fs.existsSync(HISTORY_CONTEXT_FILE)) {
+    try {
+      const ctx = JSON.parse(fs.readFileSync(HISTORY_CONTEXT_FILE, 'utf8'));
+      const now = new Date().toISOString().slice(0, 10);
+      if (ctx.validUntil >= now) {
+        // Use deepAnalysis.insights if available, fall back to dailyInsights
+        var insights = (ctx.deepAnalysis && ctx.deepAnalysis.insights) || ctx.insights || [];
+        if (insights.length > 0) return { ...ctx, insights: insights };
+      }
+    } catch (_) {}
+  }
+  // Fallback to old weekend_context
   if (!fs.existsSync(WEEKEND_CONTEXT_FILE)) return null;
   try {
     const ctx = JSON.parse(fs.readFileSync(WEEKEND_CONTEXT_FILE, 'utf8'));
@@ -229,7 +251,7 @@ function checkThinkTankGate(pf, pipelineResults) {
   const totalReturn = snapshot.totalReturn;
   if (posCount >= 3 && totalReturn < -3) {
     score += 3;
-    reasons.push('持仓' + posCount + '只浮亏' + totalReturn.toFixed(1) + '%');
+    reasons.push('持仓' + posCount + '只浮亏' + safeFixed(totalReturn, 1) + '%');
   } else if (totalReturn < -5) {
     score += 2;
     reasons.push('总收益低于-5%');
@@ -304,15 +326,164 @@ function checkThinkTankGate(pf, pipelineResults) {
     }
   } catch (_) { /* knowledge_base not available */ }
 
-  // Decision: score >= 2 → defensive (was >= 3, lowered for earlier protection)
-  const defensive = score >= 2;
+  // Decision: score >= 3 → defensive.
+  // Threshold 3 means: minor flags alone (1 cold factor, 1 weekend concern) won't block.
+  // Requires a meaningful combination e.g., 2+ cold factors (3pts) OR portfolio stress
+  // with 3+ positions < -3% (3pts) OR 3+ consecutive loss days + another flag.
+  const defensive = score >= 3;
+
+  // Build detailed breakdown for think-tank decision audit
+  const breakdown = {
+    factorHealth: { score: 0, detail: '因子信号正常', coldCount: 0 },
+    portfolioStress: { score: 0, detail: '持仓状态正常' },
+    consecutiveLoss: { score: 0, detail: '净值未连续回撤' },
+    crossMarketRisk: { score: 0, detail: '无周末防御信号' },
+    signalDivergence: { score: 0, detail: '评分-信号匹配正常' },
+    knowledgeBase: { score: 0, detail: '历史高效因子正常' },
+  };
+  // Re-compute breakdown from reasons for front-end display
+  try {
+    const factorPerf = require('./analysis/factor_performance');
+    const coldFactors = factorPerf.getColdFactors();
+    if (coldFactors.size >= 2) {
+      breakdown.factorHealth = { score: 3, detail: coldFactors.size + '个冷因子', coldCount: coldFactors.size };
+    } else if (coldFactors.size >= 1) {
+      breakdown.factorHealth = { score: 1, detail: coldFactors.size + '个冷因子', coldCount: coldFactors.size };
+    }
+  } catch (_) {}
+  if (posCount >= 3 && totalReturn < -3) {
+    breakdown.portfolioStress = { score: 3, detail: '持仓' + posCount + '只，浮亏' + safeFixed(totalReturn, 1) + '%' };
+  } else if (totalReturn < -5) {
+    breakdown.portfolioStress = { score: 2, detail: '总收益低于-5%(' + safeFixed(totalReturn, 1) + '%)' };
+  }
+  if (consecutiveLossDays >= 3) {
+    breakdown.consecutiveLoss = { score: 2, detail: '连续' + consecutiveLossDays + '日净值回撤' };
+  }
+  try {
+    const weekendCtx = loadWeekendContext();
+    if (weekendCtx) {
+      for (const insight of (weekendCtx.insights || [])) {
+        if (insight.type === 'cross_market') {
+          const txt = (insight.suggestedAction || '') + (insight.detail || '');
+          if (txt.includes('防御模式') || txt.includes('恐慌') || txt.includes('避险')) {
+            breakdown.crossMarketRisk = { score: 2, detail: '跨市场防御模式' };
+            break;
+          }
+        }
+        if (insight.type === 'regime_alert' && insight.weight >= 3) {
+          breakdown.crossMarketRisk = { score: 1, detail: '周末危机预警活跃' };
+        }
+      }
+    }
+  } catch (_) {}
+  if (pipelineResults && pipelineResults.length > 0) {
+    const analyzed = pipelineResults.length;
+    const highSignalCount = pipelineResults.filter(r => r.hiddenSignals && r.hiddenSignals.length >= 2).length;
+    const buyEligible = pipelineResults.filter(r => r.compositeScore >= 55).length;
+    if (analyzed >= 20 && buyEligible === 0 && highSignalCount >= 5) {
+      breakdown.signalDivergence = { score: 2, detail: highSignalCount + '只触发信号但0只达买入标准' };
+    }
+  }
+  try {
+    const knowledgeBase = require('./analysis/knowledge_base');
+    const summary = knowledgeBase.getKnowledgeSummary();
+    if (summary && summary.totalDays >= 2 && summary.factorTracker) {
+      const ranked = (summary.factorTracker.factors || []).slice(0, 3).map(f => f.id);
+      const coldNow = [];
+      try { const fp = require('./analysis/factor_performance'); const cold = fp.getColdFactors(); for (const fid of ranked) { if (cold.has(fid)) coldNow.push(fid); } } catch (_) {}
+      if (coldNow.length >= 2) {
+        breakdown.knowledgeBase = { score: 1, detail: '历史高效因子' + coldNow.join('/') + '当前偏冷' };
+      }
+    }
+  } catch (_) {}
 
   return {
     defensive,
     score,
+    breakdown,
     reason: defensive
       ? '思维舱综合评分' + score + '分：' + reasons.join('；') + ' — 跳过所有买入'
       : (reasons.length > 0 ? '思维舱关注：' + reasons.join('；') : '思维舱评估：信号正常'),
+  };
+}
+
+// ==================== 交易风控门统一构建 ====================
+// 所有门状态一次性计算，供 Think-Tank 前端决策审计面板使用
+
+function buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors) {
+  const ddLevel = (pf._drawdownLevel && pf._drawdownLevel.level) || 'normal';
+  // FIX v2.8.1: _drawdownLevel has { level, message, threshold } — no currentDrawdown field.
+  // Actual drawdown is stored in pf._stats.maxDrawdown (set by recordDailyNAV/computeStats).
+  const ddCurrent = (pf._stats && pf._stats.maxDrawdown != null) ? pf._stats.maxDrawdown : 0;
+  const ddMax = ddCurrent;
+
+  const shIdx = indices && indices.find(i => i.code === '000001' || i.code === 'sh000001');
+  const marketBlocked = shIdx && shIdx.changePercent != null && shIdx.changePercent < -0.5;
+
+  const regime = (macroContext && macroContext.riskState) ? macroContext.riskState.regime : null;
+  const circuitBlocked = regime === 'panic' || regime === 'risk_off';
+  const regimeLabel = regime === 'panic' ? '恐慌' : (regime === 'risk_off' ? '避险' : (regime === 'neutral' ? '中性' : (regime === 'slightly_bullish' ? '温和看涨' : (regime || '未知'))));
+
+  // Portfolio-in-loss gate: blocks buys when total return < -5% with 3+ positions
+  var pfSnap = getSnapshot(pf);
+  var lossBlocked = pfSnap.totalReturn < -5 && pf.positions.length >= 3;
+
+  return {
+    drawdown: {
+      status: ddLevel === 'halt' ? 'block' : (ddLevel === 'restrict' ? 'restrict' : (ddLevel === 'warn' ? 'warn' : 'pass')),
+      level: ddLevel,
+      currentDrawdown: Math.round(ddCurrent * 100) / 100,
+      maxDrawdown: Math.round(ddMax * 100) / 100,
+      description: ddLevel === 'halt'
+        ? '回撤熔断(' + safeFixed(ddCurrent, 1) + '%)，禁止所有买入'
+        : (ddLevel === 'restrict'
+          ? '回撤限仓(' + safeFixed(ddCurrent, 1) + '%)，每日最多1只买入'
+          : (ddLevel === 'warn'
+            ? '回撤警告(' + safeFixed(ddCurrent, 1) + '%)，距限仓线还有' + safeFixed(Math.abs(-8 - ddCurrent), 1) + '%'
+            : '回撤正常(' + safeFixed(ddCurrent, 1) + '%)，距警告线(-5%)还有' + safeFixed(Math.abs(-5 - ddCurrent), 1) + '%空间')),
+    },
+    marketDirection: {
+      status: marketBlocked ? 'block' : 'pass',
+      shIndex: shIdx ? shIdx.price : null,
+      changePercent: (shIdx && shIdx.changePercent != null) ? Math.round(shIdx.changePercent * 100) / 100 : null,
+      description: marketBlocked
+        ? '上证跌幅' + (shIdx && shIdx.changePercent != null ? shIdx.changePercent.toFixed(2) : '?') + '%超过-0.5%阈值，禁止买入'
+        : (shIdx && shIdx.changePercent != null ? '上证' + (shIdx.changePercent >= 0 ? '涨' : '跌') + Math.abs(shIdx.changePercent).toFixed(2) + '%，方向正常' : '无上证指数数据'),
+    },
+    circuitBreaker: {
+      status: circuitBlocked ? 'block' : 'pass',
+      riskRegime: regime || 'unknown',
+      riskLabel: regimeLabel,
+      description: circuitBlocked
+        ? '跨市场' + (regime === 'panic' ? '恐慌' : '避险') + '熔断，禁止所有买入'
+        : (regime ? '跨市场风险' + regimeLabel + '，未触发熔断' : '无跨市场数据'),
+    },
+    portfolioInLoss: {
+      status: lossBlocked ? 'block' : 'pass',
+      totalReturn: pfSnap.totalReturn,
+      positionCount: pf.positions.length,
+      threshold: -5,
+      description: lossBlocked
+        ? '组合浮亏' + safeFixed(pfSnap.totalReturn, 1) + '%（持有' + pf.positions.length + '只），暂停新买入。等待持仓恢复或止损出场后自动解除'
+        : '组合浮亏' + safeFixed(pfSnap.totalReturn, 1) + '%（持有' + pf.positions.length + '只），未触发保护（需<-5%且≥3只）',
+    },
+    thinkTankDefense: {
+      status: (thinkTankGate && thinkTankGate.defensive) ? 'block' : 'pass',
+      score: thinkTankGate ? thinkTankGate.score : 0,
+      threshold: 3,
+      breakdown: thinkTankGate ? (thinkTankGate.breakdown || {}) : {},
+      timestamp: new Date().toISOString(),
+      description: (thinkTankGate && thinkTankGate.defensive)
+        ? '思维舱防御得分' + thinkTankGate.score + '/6≥阈值3，跳过买入 — ' + (thinkTankGate.reason || '')
+        : (thinkTankGate ? '防御得分' + thinkTankGate.score + '/6，低于阈值3，通过' : '未执行思维舱检测'),
+    },
+    attributionAvoid: {
+      status: (avoidSectors && avoidSectors.length > 0) ? 'active' : 'inactive',
+      avoidSectors: avoidSectors || [],
+      description: (avoidSectors && avoidSectors.length > 0)
+        ? '归因避让板块：' + avoidSectors.join('、') + '（触发硬止损后避让）'
+        : '无归因避让板块',
+    },
   };
 }
 
@@ -320,6 +491,20 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
   const isFullScan = scanType === 'full';
+
+  // Guard: if no index data available, skip trade decisions entirely
+  // This happens during non-trading hours, weekends, holidays, or when the
+  // index API returns empty data. Without market context, decisions are unsafe.
+  if (!indices || !Array.isArray(indices) || indices.length === 0) {
+    return {
+      decisions: [],
+      executed: [],
+      snapshot: getSnapshot(pf),
+      noMarketData: true,
+      reason: '无指数行情数据，跳过交易决策（非交易时段或API不可达）',
+      gateResults: buildGateResults(pf, indices, macroContext, null, []),
+    };
+  }
 
   // ---- Step 1: Update benchmark ----
   updateBenchmark(pf, indices, today);
@@ -372,6 +557,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       drawdownGateActive: true,
       drawdownGateReason: pf._drawdownLevel.message,
+      gateResults: buildGateResults(pf, indices, macroContext, null, []),
     };
   }
 
@@ -407,6 +593,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       marketGateActive: true,
       marketGateReason: '上证跌幅' + shIdx.changePercent.toFixed(2) + '%超过-0.5%阈值，跳过所有买入',
+      gateResults: buildGateResults(pf, indices, macroContext, null, []),
     };
   }
 
@@ -439,6 +626,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         circuitBreakerActive: true,
         circuitBreakerReason: '跨市场风险熔断：' +
           (regime === 'panic' ? '恐慌状态，禁止所有买入（仅允许卖出）' : '避险状态，禁止所有买入（仅允许卖出）'),
+        gateResults: buildGateResults(pf, indices, macroContext, null, []),
       };
     }
   }
@@ -471,6 +659,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       thinkTankDefensive: true,
       thinkTankReason: thinkTankGate.reason,
+      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
 
@@ -752,9 +941,13 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // Rule 1: Max buys per day from config
   const MAX_BUYS_PER_DAY = (config.SIMFOLIO && config.SIMFOLIO.maxBuysPerDay) || 2;
   const MAX_BUYS_REDUCED = (config.SIMFOLIO && config.SIMFOLIO.maxBuysPerDayReduced) || 1;
-  // Rule 2: If portfolio has 3+ positions AND total return is negative, don't add more
+  // Rule 2: If portfolio has 3+ positions (post-sell) AND total return < -5%, don't add more.
+  // Post-sell count: pending sells reduce the effective position count,
+  // so a portfolio with 3 positions and 2 pending sells is treated as 1 position.
   const snapshot = getSnapshot(pf);
-  const portfolioInLoss = snapshot.totalReturn < 0 && pf.positions.length >= 3;
+  const pendingSells = decisions.filter(function(d) { return d.action === 'sell'; }).length;
+  const postSellPositionCount = pf.positions.length - pendingSells;
+  const portfolioInLoss = snapshot.totalReturn < -5 && postSellPositionCount >= 3;
   // Rule 3: If already have 3+ positions, max 1 new buy per day (reduced mode)
   // Rule 4: P0-1 Drawdown restrict — force reduced mode (max 1 buy)
   let effectiveMaxBuys = pf.positions.length >= 3 ? MAX_BUYS_REDUCED : MAX_BUYS_PER_DAY;
@@ -778,10 +971,23 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       ? new Date(today + 'T' + (todayBuys[todayBuys.length - 1].time || '00:00:00') + '+08:00').getTime()
       : 0;
 
+    // P3 Loop 5: Check sector avoid list from trade attribution
+    let avoidSectors = [];
+    try {
+      const tradeAttr = require('./predict/trade_attribution');
+      avoidSectors = tradeAttr.getAvoidSectors();
+    } catch (_) {}
+
     for (const candidate of buyCandidates) {
       const buyDecisionsSoFar = decisions.filter(d => d.action === 'buy').length;
       if (buyDecisionsSoFar >= effectiveMaxBuys) break;
       if (buyDecisionsSoFar >= availableSlots) break;
+
+      // P3 Loop 5: Skip candidates in avoid-sectors (triggered by recent stop-loss attribution)
+      if (avoidSectors.length > 0) {
+        const candidateSector = classifySector(candidate.name);
+        if (avoidSectors.includes(candidateSector)) continue;
+      }
 
       // P0-2: 30-min cooldown — if we already executed a buy today and
       // < 30 min have passed, skip any further buys this scan cycle.
@@ -838,10 +1044,37 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
   savePortfolio(pf);
 
+  // Collect near-misses: stocks that were analyzed but not bought, with reason
+  const nearMisses = [];
+  for (const candidate of buyCandidates) {
+    const wasBought = decisions.some(d => d.action === 'buy' && d.code === candidate.code);
+    if (wasBought) continue;
+    let reason = '';
+    if (avoidSectors.length > 0 && avoidSectors.includes(classifySector(candidate.name))) {
+      reason = '归因避让板块:' + classifySector(candidate.name);
+    } else if (candidate.compositeScore < (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore || 50)) {
+      reason = '低于买入阈值(' + (config.BUY_THRESHOLD && config.BUY_THRESHOLD.minAbsoluteScore || 50) + '分)';
+    } else if (portfolioInLoss) {
+      reason = '组合浮亏中，暂停新买入';
+    } else {
+      reason = '未达买入条件(仓位/间隔限制)';
+    }
+    nearMisses.push({
+      code: candidate.code,
+      name: candidate.name,
+      score: candidate.compositeScore || 0,
+      rating: candidate.rating || '--',
+      reason: reason,
+      signals: (candidate.hiddenSignals || []).map(s => s.id),
+    });
+  }
+
   return {
     decisions: decisions,
     executed: executedTrades,
     snapshot: getSnapshot(pf),
+    nearMisses: nearMisses.slice(0, 10),
+    gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors),
   };
 }
 
@@ -856,8 +1089,8 @@ function checkSellSignal(position, stockData, isBoughtToday, isFullScan) {
   // (e.g. overnight gap to -10% should still trigger immediately).
   if (pnlPct <= stopLossPct) {
     const stopPrice = position.avgCost * (1 + config.SIMFOLIO.stopLossPct);
-    const gapBelowStop = currentPrice <= stopPrice
-      ? (currentPrice - stopPrice) / stopPrice * 100
+    const gapBelowStop = stockData.price <= stopPrice
+      ? (stockData.price - stopPrice) / stopPrice * 100
       : 0;
     const gapNote = gapBelowStop < -0.5
       ? '（跳空低开缺口' + Math.abs(gapBelowStop).toFixed(1) + '%，已穿透止损线）'
@@ -1107,6 +1340,19 @@ function executeSell(pf, decision, date) {
     analysisContext: decision.analysisContext || null,
   };
   pf.tradeHistory.push(trade);
+
+  // P3 Loop 5: Attribution analysis after each sell (parameter feedback loop)
+  try {
+    const tradeAttr = require('./predict/trade_attribution');
+    const buyTrade = pf.tradeHistory.filter(t => t.code === decision.code && t.action === 'buy').slice(-1)[0];
+    const ctx = { stockFactorPerf: null };
+    try {
+      const stockPredictor = require('./predict/stock_predictor');
+      ctx.stockFactorPerf = stockPredictor.computeStockFactorPerformance(3);
+    } catch (_) {}
+    tradeAttr.analyzeAttribution(trade, buyTrade, pf, ctx);
+  } catch (_) { /* attribution is advisory, never block on it */ }
+
   return trade;
 }
 
@@ -1456,6 +1702,18 @@ function executeRiskTrade(pf, alert, priceMap) {
     triggeredBy: alert.action,
   };
   pf.tradeHistory.push(trade);
+
+  // P3 Loop 5: Attribution analysis after risk-triggered sell
+  try {
+    const tradeAttr = require('./predict/trade_attribution');
+    const buyTrade = pf.tradeHistory.filter(t => t.code === alert.code && t.action === 'buy').slice(-1)[0];
+    const ctx = { stockFactorPerf: null };
+    try {
+      const stockPredictor = require('./predict/stock_predictor');
+      ctx.stockFactorPerf = stockPredictor.computeStockFactorPerformance(3);
+    } catch (_) {}
+    tradeAttr.analyzeAttribution(trade, buyTrade, pf, ctx);
+  } catch (_) { /* advisory only */ }
 
   // 记录每日净值
   const today = todayStr;

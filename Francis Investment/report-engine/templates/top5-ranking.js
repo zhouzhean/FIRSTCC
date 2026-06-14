@@ -14,7 +14,7 @@ function renderTop5Ranking(data, mode) {
   let html = '';
 
   const sectionTitle = mode === 'app'
-    ? '<div class="section-header" style="display:flex;justify-content:space-between;align-items:center;"><div style="display:flex;align-items:center;gap:10px;"><span class="icon">🏆</span><h2>新股推荐排行榜 TOP 5</h2></div><button onclick="parent.showRecommendationHistory()" style="padding:5px 14px;border:1px solid var(--accent);border-radius:16px;background:var(--accent-light);color:var(--accent-dark);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.background=\'var(--accent)\';this.style.color=\'#fff\';" onmouseout="this.style.background=\'var(--accent-light)\';this.style.color=\'var(--accent-dark)\';">📊 推荐历史记录</button></div>'
+    ? '<div class="section-header" style="display:flex;justify-content:space-between;align-items:center;"><div style="display:flex;align-items:center;gap:10px;"><span class="icon"></span><h2>新股推荐排行榜 TOP 5</h2></div><button onclick="parent.showRecommendationHistory()" style="padding:5px 14px;border:1px solid var(--accent);border-radius:16px;background:var(--accent-light);color:var(--accent-dark);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;" onmouseover="this.style.background=\'var(--accent)\';this.style.color=\'#fff\';" onmouseout="this.style.background=\'var(--accent-light)\';this.style.color=\'var(--accent-dark)\';"> 推荐历史记录</button></div>'
     : '<h2>六、新股推荐排行榜（TOP 5）</h2>';
 
   html += sectionTitle + '\n';

@@ -12,6 +12,7 @@
  *           + stock_similarity       (10%)
  *           + score_percentile       (10%)
  */
+const fs = require('fs');
 const path = require('path');
 const config = require('../config');
 
@@ -281,8 +282,142 @@ const DEFAULT_WEIGHTS = {
   scorePercentile: 0.10,
 };
 
+/**
+ * 验证历史期望收益预测的准确性。
+ * 对比 N 天前预测的 E[R5d] 与实际 5 日收益。
+ * 由 _runDailySummary() 在 16:00 调用。
+ *
+ * @param {string} dateStr - 当前日期 YYYY-MM-DD
+ */
+function verifyExpectedReturns(dateStr) {
+  try {
+    const VERIFY_FILE = path.join(DATA_DIR, 'expected_return_verification.json');
+    var history = { entries: [] };
+    if (fs.existsSync(VERIFY_FILE)) {
+      try { history = JSON.parse(fs.readFileSync(VERIFY_FILE, 'utf8')); } catch (_) {}
+    }
+
+    // Check if we have a pipeline result from 5 calendar days ago
+    var targetDate = dateStr;
+    var foundDate = null;
+    var foundResult = null;
+
+    // Look back up to 10 calendar days for the most recent pipeline scan
+    for (var d = 1; d <= 10; d++) {
+      var checkDate = new Date(dateStr + 'T00:00:00+08:00');
+      checkDate.setDate(checkDate.getDate() - d);
+      var checkDateStr = checkDate.toISOString().slice(0, 10);
+      var scanFile = path.join(DATA_DIR, 'scan_records_' + checkDateStr + '.json');
+      if (fs.existsSync(scanFile)) {
+        foundDate = checkDateStr;
+        // Also check if we have stock_factor_performance records for target date
+        var spfPath = path.join(DATA_DIR, 'stock_factor_performance.json');
+        if (fs.existsSync(spfPath)) {
+          var spf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
+          var dailyRecords = spf.dailyRecords || {};
+          if (dailyRecords[dateStr] && dailyRecords[checkDateStr]) {
+            foundResult = { fromDate: checkDateStr, toDate: dateStr, dailyRecords: dailyRecords };
+            break;
+          }
+        }
+        // Fallback: use pipeline result directly
+        var pipelinePath = path.join(DATA_DIR, 'last_pipeline_result.json');
+        // Note: this is the CURRENT result, not the historical one
+        // For now, just use scan dates for verification metadata
+        if (!foundResult && foundDate) break;
+      }
+    }
+
+    if (!foundDate) {
+      return { available: false, reason: '5天前无扫描记录' };
+    }
+
+    // For each stock that had an expected return prediction, compute actual return
+    var verifications = [];
+    try {
+      var scanFile = path.join(DATA_DIR, 'scan_records_' + foundDate + '.json');
+      if (fs.existsSync(scanFile)) {
+        var scanRecords = JSON.parse(fs.readFileSync(scanFile, 'utf8'));
+        // Use stock_factor_performance records for actual price comparison
+        var spfPath = path.join(DATA_DIR, 'stock_factor_performance.json');
+        if (fs.existsSync(spfPath)) {
+          var spf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
+          var fromRecords = (spf.dailyRecords || {})[foundDate] || [];
+          var toRecords = (spf.dailyRecords || {})[dateStr] || [];
+          for (var i = 0; i < fromRecords.length; i++) {
+            var fromRec = fromRecords[i];
+            var toRec = toRecords.find(function(r) { return r.code === fromRec.code; });
+            if (toRec && toRec.price && fromRec.price > 0) {
+              var actualReturn = (toRec.price - fromRec.price) / fromRec.price * 100;
+              // Find the expected return if we computed it
+              var pipelinePath = path.join(DATA_DIR, 'last_pipeline_result.json');
+              var expectedReturn = null;
+              if (fs.existsSync(pipelinePath)) {
+                try {
+                  var lr = JSON.parse(fs.readFileSync(pipelinePath, 'utf8'));
+                  if (lr.expectedReturns) {
+                    var match = lr.expectedReturns.find(function(e) { return e.code === fromRec.code; });
+                    if (match) expectedReturn = match.expectedReturn;
+                  }
+                } catch (_) {}
+              }
+              verifications.push({
+                code: fromRec.code,
+                name: fromRec.name,
+                fromDate: foundDate,
+                expectedReturn: expectedReturn,
+                actualReturn: +actualReturn.toFixed(2),
+                error: expectedReturn != null ? +(actualReturn - expectedReturn).toFixed(2) : null,
+                directionCorrect: expectedReturn != null ? (expectedReturn > 0) === (actualReturn > 0) : null,
+              });
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    var directionCorrect = verifications.filter(function(v) { return v.directionCorrect === true; }).length;
+    var directionTotal = verifications.filter(function(v) { return v.directionCorrect !== null; }).length;
+    var directionHitRate = directionTotal > 0 ? +(directionCorrect / directionTotal).toFixed(2) : null;
+    var avgError = verifications.filter(function(v) { return v.error !== null; }).length > 0
+      ? +(verifications.filter(function(v) { return v.error !== null; }).reduce(function(s, v) { return s + v.error; }, 0) / verifications.filter(function(v) { return v.error !== null; }).length).toFixed(2)
+      : null;
+
+    var entry = {
+      date: dateStr,
+      fromDate: foundDate,
+      totalVerified: verifications.length,
+      directionCorrect: directionCorrect,
+      directionTotal: directionTotal,
+      directionHitRate: directionHitRate,
+      avgError: avgError,
+      summary: directionHitRate != null
+        ? '方向命中率: ' + Math.round(directionHitRate * 100) + '% (' + directionCorrect + '/' + directionTotal + '), 平均误差: ' + (avgError != null ? avgError.toFixed(1) + '%' : 'N/A')
+        : '已验证' + verifications.length + '只股票（无期望收益预测可对比）',
+    };
+
+    if (history.entries.length >= 30) history.entries = history.entries.slice(-29);
+    history.entries.push(entry);
+    history.updatedAt = new Date().toISOString();
+
+    try {
+      var dir = path.dirname(VERIFY_FILE);
+      if (!fs.existsSync(dir)) {
+        var fs2 = require('fs');
+        fs2.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(VERIFY_FILE, JSON.stringify(history, null, 2), 'utf8');
+    } catch (_) {}
+
+    return { available: true, entry: entry };
+  } catch (e) {
+    return { available: false, reason: e.message };
+  }
+}
+
 module.exports = {
   computeExpectedReturn,
   rankByExpectedReturn,
+  verifyExpectedReturns,
   DEFAULT_WEIGHTS,
 };

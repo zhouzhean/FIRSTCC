@@ -24,7 +24,7 @@ function renderRiskMatrix(data, mode) {
   var html = "";
 
   const sectionTitle = mode === 'app'
-    ? '<div class="section-header"><span class="icon">⚠️</span><h2>核心风险矩阵</h2></div>'
+    ? '<div class="section-header"><span class="icon">[!]️</span><h2>核心风险矩阵</h2></div>'
     : '<h2>七、核心风险矩阵</h2>';
 
   html += sectionTitle + '\n\n';

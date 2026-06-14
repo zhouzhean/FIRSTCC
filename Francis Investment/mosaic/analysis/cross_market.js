@@ -541,6 +541,41 @@ function getCachedRiskState() {
   }
 }
 
+/**
+ * Read US→A prediction accuracy and return a cross-market weight multiplier.
+ * Called by the pipeline to dynamically adjust cross-market signal influence.
+ *
+ * Returns a multiplier in [0, 1]:
+ *   - hitRate >= 0.65 → 1.0 (full weight — signal is reliable)
+ *   - hitRate >= 0.55 → 0.8 (slightly reduce)
+ *   - hitRate >= 0.50 → 0.6 (materially reduce)
+ *   - hitRate < 0.50  → 0.3 (heavily reduce — signal is noisy)
+ *   - no data        → 0.8 (default cautious)
+ */
+function getCrossMarketWeightMultiplier() {
+  try {
+    const verifyPath = path.join(DATA_DIR, 'simfolio', 'us_as_verification_history.json');
+    if (!fs.existsSync(verifyPath)) return 0.8;
+    const history = JSON.parse(fs.readFileSync(verifyPath, 'utf8'));
+    if (!history.entries || history.entries.length < 5) return 0.8;
+    const recent = history.entries.slice(-20);
+    var totalDecisive = 0, totalCorrect = 0;
+    for (var i = 0; i < recent.length; i++) {
+      var e = recent[i];
+      if (e.decisivePredictions > 0) {
+        totalDecisive += e.decisivePredictions;
+        totalCorrect += e.correctCount;
+      }
+    }
+    if (totalDecisive < 10) return 0.8;
+    var hitRate = totalCorrect / totalDecisive;
+    if (hitRate >= 0.65) return 1.0;
+    if (hitRate >= 0.55) return 0.8;
+    if (hitRate >= 0.50) return 0.6;
+    return 0.3;
+  } catch (_) { return 0.8; }
+}
+
 module.exports = {
   computeRiskState,
   computeCorrelationMatrix,
@@ -553,4 +588,5 @@ module.exports = {
   formatThinkTankSummary,
   pearsonR,
   getCachedRiskState,
+  getCrossMarketWeightMultiplier,
 };

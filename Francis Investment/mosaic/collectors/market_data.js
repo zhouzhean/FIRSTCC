@@ -12,10 +12,10 @@ const https = require('https');
 
 // ---- Helpers ----
 
-function fetchJSON(url) {
+function fetchJSON(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
-    lib.get(url, { headers: { 'User-Agent': 'Mosaic/2.0' } }, (res) => {
+    const req = lib.get(url, { headers: { 'User-Agent': 'Mosaic/2.0' } }, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
@@ -26,14 +26,18 @@ function fetchJSON(url) {
           reject(new Error('Parse error: ' + e.message + ' — ' + data.slice(0, 200)));
         }
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    if (timeoutMs) {
+      req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Timeout')); });
+    }
   });
 }
 
 function fetchRaw(url, referer) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
-    lib.get(url, {
+    const req = lib.get(url, {
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         'Referer': referer || 'https://finance.sina.com.cn',
@@ -46,7 +50,9 @@ function fetchRaw(url, referer) {
         const decoder = new TextDecoder('gbk');
         resolve(decoder.decode(buf));
       });
-    }).on('error', reject);
+    });
+    req.on('error', reject);
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('Timeout')); });
   });
 }
 
@@ -501,36 +507,83 @@ async function fetchIndicesSina() {
 
 /**
  * Fetch K-line data for a single stock.
+ * Uses Tencent API (primary) with 5-min disk cache to avoid repeated HTTP calls.
+ * Falls back to Eastmoney if Tencent returns no data.
  */
 async function fetchKline(code, days = 30) {
-  const market = code.startsWith('6') ? '1' : '0';
-  const secid = market + '.' + code;
-
-  const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
-    '?secid=' + secid +
-    '&klt=101&fqt=1&end=20500101&lmt=' + days +
-    '&ut=bd1d9ddb04089700cf9c27f6f7426281' +
-    '&fields=f2,f3,f4,f5,f6,f15,f16,f17,f18';
-
+  // Check disk cache first
+  const __fs = require('fs'), __path = require('path');
+  const __cacheDir = __path.join(__dirname, '..', '..', 'report-engine', 'data', 'klines');
   try {
-    const res = await fetchJSON(url);
-    if (!res || !res.data || !res.data.klines) return [];
+    const cacheFile = __path.join(__cacheDir, code + '.json');
+    if (__fs.existsSync(cacheFile)) {
+      const cached = JSON.parse(__fs.readFileSync(cacheFile, 'utf8'));
+      const age = Date.now() - cached.ts;
+      if (age < 5 * 60 * 1000 && cached.klines && cached.klines.length >= days) {
+        return cached.klines;
+      }
+    }
+    if (!__fs.existsSync(__cacheDir)) __fs.mkdirSync(__cacheDir, { recursive: true });
+  } catch (_) {}
 
-    return res.data.klines.map(line => {
-      const parts = line.split(',');
-      return {
-        date: parts[0],
-        open: parseFloat(parts[1]),
-        close: parseFloat(parts[2]),
-        high: parseFloat(parts[3]),
-        low: parseFloat(parts[4]),
-        volume: parseFloat(parts[5]),
-        turnover: parseFloat(parts[6]),
-      };
-    });
-  } catch (e) {
-    return [];
+  let klines = null;
+
+  // Try Tencent API first (fast, stable, returns daily bars)
+  try {
+    const prefix = code.startsWith('6') ? 'sh' : 'sz';
+    const url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=' + prefix + code + ',day,,,' + (days + 1) + ',qfq';
+    const raw = await fetchRaw(url);
+    const json = JSON.parse(raw);
+    const bars = json && json.data && json.data[prefix + code] && json.data[prefix + code].qfqday;
+    if (bars && bars.length >= 3) {
+      klines = bars.map(b => ({
+        date: b[0],
+        open: parseFloat(b[1]),
+        close: parseFloat(b[2]),
+        high: parseFloat(b[3]),
+        low: parseFloat(b[4]),
+        volume: parseFloat(b[5]),
+        turnover: 0, // Tencent doesn't give turnover in qfqday
+      }));
+    }
+  } catch (_) {}
+
+  // Fallback: Eastmoney API
+  if (!klines) {
+    const market = code.startsWith('6') ? '1' : '0';
+    const secid = market + '.' + code;
+    const url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
+      '?secid=' + secid +
+      '&klt=101&fqt=1&end=20500101&lmt=' + days +
+      '&ut=bd1d9ddb04089700cf9c27f6f7426281' +
+      '&fields=f2,f3,f4,f5,f6,f15,f16,f17,f18';
+    try {
+      const res = await fetchJSON(url, 5000);
+      if (res && res.data && res.data.klines) {
+        klines = res.data.klines.map(line => {
+          const parts = line.split(',');
+          return {
+            date: parts[0],
+            open: parseFloat(parts[1]),
+            close: parseFloat(parts[2]),
+            high: parseFloat(parts[3]),
+            low: parseFloat(parts[4]),
+            volume: parseFloat(parts[5]),
+            turnover: parseFloat(parts[6]),
+          };
+        });
+      }
+    } catch (_) {}
   }
+
+  // Write cache and return
+  if (klines && klines.length >= 3) {
+    try {
+      __fs.writeFileSync(__path.join(__cacheDir, code + '.json'), JSON.stringify({ ts: Date.now(), klines }));
+    } catch (_) {}
+    return klines;
+  }
+  return [];
 }
 
 /**

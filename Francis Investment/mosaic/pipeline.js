@@ -21,6 +21,77 @@ const hiddenSignals = require('./factors/hidden_signals');
 const composite = require('./factors/composite');
 const config = require('./config');
 
+/**
+ * 8-dimension pre-scoring for candidate stocks.
+ * Shared between Full Pipeline and Mid-Day Scan (v2.8 deduplication).
+ * Returns an array of stocks with `preScore` added but NOT sorted.
+ *
+ * Dimensions: PE(0-25), PB(0-10), momentum(-5..+12), liquidity(0-20),
+ *             turnover rate(0-8), amplitude(0-5), capital flow(+/-10), circ cap(0-5)
+ * Maximum score: ~85
+ */
+function preScoreStocks(stocks) {
+  return stocks.map(function(s) {
+    var score = 0;
+
+    // 1. Valuation: PE-based (0-25)
+    var pe = s.peTTM || s.pe;
+    if (pe && pe > 0 && pe < 12) score += 25;
+    else if (pe && pe > 0 && pe < 18) score += 18;
+    else if (pe && pe > 0 && pe < 25) score += 10;
+    else if (pe && pe > 0 && pe < 40) score += 3;
+    else if (!pe) score += 8;   // loss-making — neutral (keep in pipeline)
+    else score -= 3;            // negative PE
+
+    // 2. PB value check (0-10)
+    if (s.pb && s.pb > 0 && s.pb < 1.0) score += 10;
+    else if (s.pb && s.pb > 0 && s.pb < 2.0) score += 5;
+
+    // 3. Price momentum — moderate up is ideal (-5 to +12)
+    var chg = s.changePercent || 0;
+    if (chg > 1 && chg < 5) score += 12;
+    else if (chg > 0 && chg <= 1) score += 6;
+    else if (chg > -1 && chg <= 0) score += 2;   // flat
+    else if (chg > -3) score -= 2;
+    else score -= 5;                              // big drop
+
+    // 4. Liquidity: turnover-based (0-20)
+    var to = s.turnover || 0;
+    if (to > 5e8) score += 20;       // >5亿
+    else if (to > 2e8) score += 14;
+    else if (to > 1e8) score += 8;
+    else if (to > 5e7) score += 2;
+
+    // 5. Turnover rate — moderate is ideal (0-8)
+    var tr = s.turnoverRate || 0;
+    if (tr >= 1 && tr <= 5) score += 8;
+    else if (tr > 0.5 && tr < 1) score += 4;
+    else if (tr > 5 && tr < 10) score += 2;
+
+    // 6. Amplitude — some range signals activity (0-5)
+    var ampl = s.amplitude || 0;
+    if (ampl > 2 && ampl < 6) score += 5;
+    else if (ampl >= 1 && ampl <= 2) score += 2;
+
+    // 7. Capital flow bonus — if Eastmoney flow data is present (+/-10)
+    if (s.majorNetFlow != null && to > 0) {
+      var flowRatio = s.majorNetFlow / to;
+      if (flowRatio > 0.05) score += 10;
+      else if (flowRatio > 0.02) score += 6;
+      else if (flowRatio > 0) score += 3;
+      else if (flowRatio < -0.05) score -= 8;
+      else if (flowRatio < -0.02) score -= 4;
+    }
+
+    // 8. Circ market cap — mid/small-cap bias for A-share alpha (0-5)
+    var cmv = s.circCap || 0;
+    if (cmv > 2e9 && cmv < 5e10) score += 5;      // 20亿-500亿: small-mid sweet spot
+    else if (cmv >= 5e10 && cmv < 1e11) score += 2; // 500亿-1000亿: decent
+
+    return Object.assign({}, s, { preScore: score });
+  });
+}
+
 class Pipeline extends EventEmitter {
   constructor() {
     super();
@@ -126,67 +197,7 @@ class Pipeline extends EventEmitter {
       });
 
       // === Step 4: Sort by preliminary score and take top N for detail ===
-      // Enhanced pre-score: 8-dimension approximation using bulk data already fetched.
-      // This determines which stocks get deep analysis — better pre-score = better selection.
-      const preScored = candidates.map(s => {
-        let score = 0;
-
-        // 1. Valuation: PE-based (0-25)
-        const pe = s.peTTM || s.pe;
-        if (pe && pe > 0 && pe < 12) score += 25;
-        else if (pe && pe > 0 && pe < 18) score += 18;
-        else if (pe && pe > 0 && pe < 25) score += 10;
-        else if (pe && pe > 0 && pe < 40) score += 3;
-        else if (!pe) score += 8;   // loss-making — neutral (keep in pipeline)
-        else score -= 3;            // negative PE
-
-        // 2. PB value check (0-10)
-        if (s.pb && s.pb > 0 && s.pb < 1.0) score += 10;
-        else if (s.pb && s.pb > 0 && s.pb < 2.0) score += 5;
-
-        // 3. Price momentum — moderate up is ideal (-5 to +12)
-        const chg = s.changePercent || 0;
-        if (chg > 1 && chg < 5) score += 12;
-        else if (chg > 0 && chg <= 1) score += 6;
-        else if (chg > -1 && chg <= 0) score += 2;   // flat
-        else if (chg > -3) score -= 2;
-        else score -= 5;                              // big drop
-
-        // 4. Liquidity: turnover-based (0-20)
-        const to = s.turnover || 0;
-        if (to > 5e8) score += 20;       // >5亿
-        else if (to > 2e8) score += 14;
-        else if (to > 1e8) score += 8;
-        else if (to > 5e7) score += 2;
-
-        // 5. Turnover rate — moderate is ideal (0-8)
-        const tr = s.turnoverRate || 0;
-        if (tr >= 1 && tr <= 5) score += 8;
-        else if (tr > 0.5 && tr < 1) score += 4;
-        else if (tr > 5 && tr < 10) score += 2;
-
-        // 6. Amplitude — some range signals activity (0-5)
-        const ampl = s.amplitude || 0;
-        if (ampl > 2 && ampl < 6) score += 5;
-        else if (ampl >= 1 && ampl <= 2) score += 2;
-
-        // 7. Capital flow bonus — if Eastmoney flow data is present (+/-10)
-        if (s.majorNetFlow != null && to > 0) {
-          const flowRatio = s.majorNetFlow / to;
-          if (flowRatio > 0.05) score += 10;
-          else if (flowRatio > 0.02) score += 6;
-          else if (flowRatio > 0) score += 3;
-          else if (flowRatio < -0.05) score -= 8;
-          else if (flowRatio < -0.02) score -= 4;
-        }
-
-        // 8. Circ market cap — mid/small-cap bias for A-share alpha (0-5)
-        const cmv = s.circCap || 0;
-        if (cmv > 2e9 && cmv < 5e10) score += 5;      // 20亿-500亿: small-mid sweet spot
-        else if (cmv >= 5e10 && cmv < 1e11) score += 2; // 500亿-1000亿: decent
-
-        return { ...s, preScore: score };
-      }).sort((a, b) => b.preScore - a.preScore);
+      const preScored = preScoreStocks(candidates).sort((a, b) => b.preScore - a.preScore);
 
       const topCount = Math.min(config.API.maxDetailFetches, preScored.length);
       const finalists = preScored.slice(0, topCount);
@@ -350,11 +361,12 @@ class Pipeline extends EventEmitter {
         risk: r.compositeScore >= 75 ? '低' : r.compositeScore >= 60 ? '中' : '高',
         riskClass: r.compositeScore >= 75 ? 'up' : r.compositeScore >= 60 ? 'flat' : 'down',
         suggestedPosition: r.compositeScore >= 80 ? '10-15%' : r.compositeScore >= 65 ? '5-10%' : '<5%',
-        oneLiner: r.hiddenSignals.map(s => s.name).join('+') || r.rating + '级量化评分',
+        oneLiner: (r.hiddenSignals || []).map(s => s.name).join('+') || r.rating + '级量化评分',
         fullLogic: buildStockLogic(r),
         borderColor: ['#FFD700', '#C0C0C0', '#CD7F32', '#8B7355', '#5a6a80'][i],
         compositeScore: r.compositeScore,
         rating: r.rating,
+        signals: (r.hiddenSignals || []).map(s => ({ id: s.id, name: s.name, level: s.level })),
       }));
 
       // === Step 9: Build output ===
@@ -471,4 +483,4 @@ function buildStockLogic(r) {
   return parts.join(' | ');
 }
 
-module.exports = { Pipeline };
+module.exports = { Pipeline, preScoreStocks };

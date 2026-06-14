@@ -23,7 +23,7 @@ function renderHoldingsAnalysis(data, mode) {
   }
 
   var sectionTitle = mode === 'app'
-    ? '<div class="section-header"><span class="icon">💼</span><h2>当前持仓深度分析</h2><span class="badge-count">' + stocks.length + ' 只持仓</span></div>'
+    ? '<div class="section-header"><span class="icon"></span><h2>当前持仓深度分析</h2><span class="badge-count">' + stocks.length + ' 只持仓</span></div>'
     : '<h2>三、当前持仓深度分析</h2>';
 
   var html = sectionTitle + '\n';
@@ -159,11 +159,11 @@ function renderHoldingsAnalysis(data, mode) {
     html += '  <h3 style="font-size:14px;color:var(--accent);margin:16px 0 8px;">技术面综合评估</h3>\n';
     html += '  <div class="tech-grid">\n';
     html += '    <div class="tech-card">\n';
-    html += '      <h4 style="color:var(--accent);margin-bottom:8px;">📈 K线与均线系统</h4>\n';
+    html += '      <h4 style="color:var(--accent);margin-bottom:8px;"> K线与均线系统</h4>\n';
     html += '      <p style="font-size:0.9em;">' + (tech.maSystem || "") + '</p>\n';
     html += '    </div>\n';
     html += '    <div class="tech-card">\n';
-    html += '      <h4 style="color:var(--accent);margin-bottom:8px;">📊 技术指标</h4>\n';
+    html += '      <h4 style="color:var(--accent);margin-bottom:8px;"> 技术指标</h4>\n';
     html += '      <p style="font-size:0.9em;">' + (tech.indicators || "") + '</p>\n';
     html += '    </div>\n';
     html += '  </div>\n';

@@ -43,7 +43,7 @@ function renderLowPricePicks(data, mode) {
   let html = '';
 
   const sectionTitle = mode === 'app'
-    ? '<div class="section-header"><span class="icon">💎</span><h2>潜力股推荐</h2><span class="badge-count">' + allStocks.length + ' 只精选</span></div>'
+    ? '<div class="section-header"><span class="icon">*</span><h2>潜力股推荐</h2><span class="badge-count">' + allStocks.length + ' 只精选</span></div>'
     : '<h2>五、潜力股推荐（热门板块深度分析）</h2>';
 
   html += sectionTitle + '\n';

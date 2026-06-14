@@ -88,6 +88,15 @@ module.exports = {
     },
   },
 
+  // ---- A股休市日（2026年） ----
+  // 仅包含法定节假日，周六日自动排除。如需补充临时休市日可直接追加。
+  HOLIDAYS_2026: [
+    '2026-01-01',                                              // 元旦
+    '2026-05-01', '2026-05-04', '2026-05-05',                  // 劳动节 (5.1-5.5, 含调休)
+    '2026-06-19',                                              // 端午节
+    '2026-10-01', '2026-10-02', '2026-10-05', '2026-10-06', '2026-10-07', // 国庆+中秋 (10.1-10.8)
+  ],
+
   // ---- 全自动调度器 ----
   SCHEDULER: {
     // 市场时段（北京时间 24h）
@@ -213,7 +222,7 @@ module.exports = {
     },
   },
 
-  // ---- 周末深度分析 ----
+  // ---- 周末深度分析 (DEPRECATED in v2.9, use HISTORY_REVIEW instead) ----
   WEEKEND_ANALYSIS: {
     analysisInterval: 15 * 60 * 1000,       // 每15分钟重新分析一轮
     historyPullInterval: 2 * 60 * 60 * 1000, // 每2小时增量拉取历史K线
@@ -239,7 +248,7 @@ module.exports = {
     targetDailyRatio: 0.15,      // 期望至少15%的候选股触发至少1个信号
   },
 
-  // ---- 周末分析验证 ----
+  // ---- 周末分析验证 (DEPRECATED in v2.9, use HISTORY_REVIEW.deep.verification instead) ----
   WEEKEND_VERIFICATION: {
     maxArchiveWeeks: 52,                     // 保留最多52周归档
     similarityHorizons: [5, 10, 20],         // 验证相似度预测的时间窗口
@@ -247,6 +256,75 @@ module.exports = {
     factorHotThreshold: 0.55,                // 因子热门阈值
     factorColdThreshold: 0.40,               // 因子冷门阈值
     verificationSchedule: { hour: 15, minute: 30 }, // 周五收盘后触发验证
+  },
+
+  // ---- 统一历史复盘引擎 (v2.9) ----
+  HISTORY_REVIEW: {
+    daily: {
+      enabled: true,
+      time: { hour: 16, minute: 30 },         // 每日盘后，等 daily summary + correlation snapshot 生成后
+      similarity: {
+        lookbackYears: 1,                      // Light: 1 year
+        stride: 10,                            // Light: every 10th window
+        topN: 3,                               // Light: top 3
+        window: 20,
+      },
+      factorVerification: {
+        horizons: [1, 3, 5],                  // T+1, T+3, T+5
+        minSamples: 3,
+      },
+    },
+    deep: {
+      enabled: true,
+      time: { hour: 10, minute: 30 },         // Saturday, 30 min after factor mining
+      dayOfWeek: 6,                            // Saturday
+      similarity: {
+        lookbackYears: 5,                      // Deep: 5 years
+        stride: 5,                             // Deep: every 5th window
+        topN: 10,                              // Deep: top 10
+        window: 20,
+      },
+      crisisWeights: {
+        liquidity: 0.25,
+        valuation: 0.20,
+        marketBreadth: 0.20,
+        northBound: 0.15,
+        margin: 0.10,
+        volatility: 0.10,
+      },
+      verification: {
+        maxArchiveWeeks: 52,
+        similarityHorizons: [5, 10, 20],
+        crisisCorrelationMinWeeks: 4,
+        factorHotThreshold: 0.55,
+        factorColdThreshold: 0.40,
+      },
+    },
+    contextValidDays: 3,
+    weekendTicks: {
+      enabled: true,                           // 周六下午+周日持续规律发现
+      intervalMinutes: 120,                    // 每2小时一个 tick
+      angles: [
+        'multi_window_similarity',
+        'sector_similarity',
+        'volume_patterns',
+        'extreme_market_scenarios',
+        'cross_market_linkage',
+        'policy_cycle_match',
+        'factor_decay_curves',
+        'covariance_structure',
+      ],
+    },
+    sundayDiscovery: {
+      enabled: true,
+      time: { hour: 9, minute: 0 },           // Sunday 09:00
+      similarityWindow: 30,                    // Larger window for discovery
+      similarityTopN: 8,
+      similarityStride: 3,
+    },
+    dataDir: 'report-engine/data/simfolio',
+    archiveDir: 'report-engine/data/weekend_archive',
+    contextFile: 'history_context.json',
   },
 
   // ---- 预测引擎 ----
@@ -270,5 +348,36 @@ module.exports = {
       minWeight: 0.05,                       //   单维度最低权重
       maxWeight: 0.50,                       //   单维度最高权重
     },
+  },
+
+  // ---- 24/7 自主学习进化引擎 ----
+  EVOLUTION: {
+    enabled: true,                                   // 总开关
+    nightBacktest: {                                 // 夜间历史回测
+      enabled: true,
+      time: { hour: 2, minute: 0 },                 // 凌晨 2:00
+      maxStocks: 200,                                // 单次最多回测股票数
+      lookbackDays: 60,                              // 回测窗口（天）
+      horizons: [1, 3, 5],                           // 验证周期（T+1/T+3/T+5）
+    },
+    weightGridSearch: {                              // 权重网格搜索
+      enabled: true,
+      time: { hour: 3, minute: 0 },                 // 凌晨 3:00
+    },
+    usAsPredict: {                                   // 美股→A股预测
+      enabled: true,
+      predictTime: { hour: 5, minute: 30 },          // 凌晨 5:30 生成预测
+      verifyTime: { hour: 16, minute: 10 },          // 下午 16:10 验证（16:00 correlation snapshot 写入后）
+    },
+    selfReflection: {                                // 自我质疑循环
+      enabled: true,
+      time: { hour: 20, minute: 0 },                // 晚上 20:00
+    },
+    weekendFactorMining: {                           // 周末因子组合挖掘
+      enabled: true,
+      dayOfWeek: 6,                                  // 周六
+      time: { hour: 10, minute: 0 },
+    },
+    taskTimeoutMinutes: 30,                          // 单任务超时（分钟）
   },
 };

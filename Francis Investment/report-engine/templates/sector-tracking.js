@@ -18,7 +18,7 @@ function renderSectorTracking(data, mode) {
   }
 
   const sectionTitle = mode === 'app'
-    ? '<div class="section-header"><span class="icon">🔥</span><h2>热门跟踪板块最新动态</h2><span class="badge-count">' + sectors.length + ' 个板块</span></div>'
+    ? '<div class="section-header"><span class="icon">HOT</span><h2>热门跟踪板块最新动态</h2><span class="badge-count">' + sectors.length + ' 个板块</span></div>'
     : '<h2>四、热门跟踪板块最新动态</h2>';
 
   return `

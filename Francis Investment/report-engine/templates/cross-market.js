@@ -12,7 +12,7 @@ function renderCrossMarket(data, mode, analysis) {
   var isPDF = mode === 'pdf';
   if (!analysis || !analysis.riskState) {
     return '<div style="text-align:center;padding:60px 20px;color:#94a3b8;">' +
-      '<div style="font-size:48px;margin-bottom:16px;">&#x1F52C;</div>' +
+      '<div style="font-size:48px;margin-bottom:16px;">[MACRO]</div>' +
       '<div style="font-size:15px;font-weight:500;">跨市场分析数据加载中...</div>' +
       '<div style="font-size:12px;margin-top:8px;">需要美股宏观数据 (VXX/UUP/TLT)</div>' +
       '</div>';
@@ -79,9 +79,22 @@ function renderCrossMarket(data, mode, analysis) {
     html += renderMarketCycleDashboard(analysis.marketCycle);
   }
 
-  // ============ SECTION 2: Risk Signals ============
+  // ============ SECTION 2: Risk Timeline + Signals ============
+  html += '<div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;">';
+
+  // Risk Timeline (5-day trend)
+  html += '<div class="glass-card" style="flex:1.2;min-width:260px;padding:14px 18px;">';
+  html += '<div style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#94a3b8;margin-bottom:10px;">Risk Trend (5-Day)</div>';
+  if (analysis.riskTrend && analysis.riskTrend.length > 0) {
+    html += renderRiskTimeline(analysis.riskTrend, rs.totalScore);
+  } else {
+    html += '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;">数据积累中 — 需多个交易日</div>';
+  }
+  html += '</div>';
+
+  // Macro Signals
   if (rs.signals && rs.signals.length > 0) {
-    html += '<div class="cm-signals glass-card" style="padding:14px 18px;margin-bottom:20px;">';
+    html += '<div class="cm-signals glass-card" style="flex:0.8;min-width:240px;padding:14px 18px;">';
     html += '<div style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#94a3b8;margin-bottom:10px;">Macro Signals</div>';
     for (var s = 0; s < rs.signals.length; s++) {
       var sig = rs.signals[s];
@@ -94,6 +107,8 @@ function renderCrossMarket(data, mode, analysis) {
     }
     html += '</div>';
   }
+
+  html += '</div>'; // end flex row
 
   // ============ SECTION 3: Correlation Matrix ============
   html += '<div class="cm-correlation-section" style="margin-bottom:20px;">';
@@ -115,21 +130,29 @@ function renderCrossMarket(data, mode, analysis) {
     html += '</div>';
   } else {
     html += '<div class="glass-card" style="padding:40px;text-align:center;color:#94a3b8;">';
-    html += '<div style="font-size:32px;margin-bottom:12px;">&#x1F4CA;</div>';
+    html += '<div style="font-size:32px;margin-bottom:12px;">[DATA]</div>';
     html += '<div style="font-size:13px;">相关性数据积累中 — 系统每日16:00自动记录美股→A股板块映射数据</div>';
     html += '<div style="font-size:11px;margin-top:6px;">需要至少5个交易日的数据才能计算Pearson相关系数</div>';
     html += '</div>';
   }
   html += '</div>'; // cm-correlation-section
 
-  // ============ SECTION 4: Sector Outlook ============
+  // ============ SECTION 4: Sector Outlook (sorted by impact strength) ============
   if (corr && corr.ready && corr.outlook && corr.outlook.length > 0) {
+    // Sort outlook by impact: strong first, then by correlation strength
+    var impactRank = { 'strong_positive': 5, 'positive': 4, 'neutral': 3, 'negative': 2, 'strong_negative': 1 };
+    var sortedOutlook = corr.outlook.slice().sort(function(a, b) {
+      var ia = impactRank[a.impact] || 3;
+      var ib = impactRank[b.impact] || 3;
+      if (ia !== ib) return ib - ia; // higher impact first
+      return Math.abs(b.correlation || 0) - Math.abs(a.correlation || 0); // then by |R|
+    });
+
     html += '<div class="cm-outlook-section">';
     html += '<div style="font-size:14px;font-weight:600;color:#1e293b;margin-bottom:12px;">A-Stock Sector Outlook (Next Day)</div>';
     html += '<div class="cm-outlook-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">';
-    for (var o = 0; o < corr.outlook.length; o++) {
-      var outlook = corr.outlook[o];
-      html += renderOutlookCard(outlook);
+    for (var o = 0; o < sortedOutlook.length; o++) {
+      html += renderOutlookCard(sortedOutlook[o]);
     }
     html += '</div></div>';
   }
@@ -159,15 +182,18 @@ function renderRiskGauge(rs) {
   html += '<div style="font-size:13px;color:' + rs.riskColor + ';font-weight:600;">Score: ' + (score >= 0 ? '+' : '') + score + '</div>';
   html += '</div>';
 
-  // Canvas gauge
-  html += '<canvas id="' + id + '" width="320" height="170" style="width:100%;max-width:320px;display:block;margin:0 auto;"></canvas>';
+  // Canvas gauge (responsive DPI)
+  html += '<canvas id="' + id + '" width="640" height="340" style="width:100%;max-width:320px;display:block;margin:0 auto;"></canvas>';
 
   // Inject canvas drawing script
   html += '<script>(function(){';
   html += 'var c=document.getElementById("' + id + '");';
   html += 'if(!c)return;';
-  html += 'var ctx=c.getContext("2d");';
-  html += 'var w=c.width,h=c.height;';
+  html += 'var dpr=window.devicePixelRatio||1;';
+  html += 'var displayW=320,displayH=170;';
+  html += 'c.width=displayW*dpr;c.height=displayH*dpr;c.style.width=displayW+"px";c.style.height=displayH+"px";';
+  html += 'var ctx=c.getContext("2d");ctx.scale(dpr,dpr);';
+  html += 'var w=displayW,h=displayH;';
   html += 'var cx=w/2,cy=h-10,r=130;';
   html += 'var startAngle=Math.PI,endAngle=0;';
 
@@ -235,6 +261,95 @@ function renderRiskGauge(rs) {
   return html;
 }
 
+// ============ RISK TIMELINE (5-day sparkline) ============
+
+function renderRiskTimeline(riskTrend, currentScore) {
+  if (!riskTrend || riskTrend.length === 0) return '';
+
+  var html = '';
+  var canvasId = 'risk-timeline-' + Date.now() + '-' + Math.floor(Math.random() * 10000);
+
+  // Build the scores array (chronological) + append current score
+  var scores = [];
+  var dates = [];
+  for (var i = 0; i < riskTrend.length; i++) {
+    var pt = riskTrend[i];
+    scores.push(pt.score != null ? pt.score : 0);
+    dates.push(pt.date ? pt.date.slice(5) : '--');
+  }
+  // Always append current as last point
+  scores.push(currentScore);
+  dates.push('now');
+
+  html += '<canvas id="' + canvasId + '" width="520" height="80" style="width:100%;height:80px;display:block;"></canvas>';
+  html += '<script>(function(){';
+  html += 'var c=document.getElementById("' + canvasId + '");';
+  html += 'if(!c)return;';
+  html += 'var dpr=window.devicePixelRatio||1;';
+  html += 'var W=520,H=80;c.width=W*dpr;c.height=H*dpr;c.style.width=W+"px";c.style.height=H+"px";';
+  html += 'var ctx=c.getContext("2d");ctx.scale(dpr,dpr);';
+  html += 'var scores=' + JSON.stringify(scores) + ';';
+  html += 'var dates=' + JSON.stringify(dates) + ';';
+  html += 'var pad=30,topPad=12,botPad=20;';
+  html += 'var plotW=W-2*pad,plotH=H-topPad-botPad;';
+
+  // Find min/max
+  html += 'var min=Math.min.apply(null,scores),max=Math.max.apply(null,scores);';
+  html += 'var range=max-min||10;min-=range*0.2;max+=range*0.2;range=max-min;';
+
+  // Draw grid lines
+  html += 'ctx.strokeStyle="rgba(0,0,0,0.06)";ctx.lineWidth=1;';
+  html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
+  html += 'ctx.beginPath();ctx.moveTo(pad,gy);ctx.lineTo(W-pad,gy);ctx.stroke();}';
+
+  // Draw line
+  html += 'ctx.beginPath();ctx.strokeStyle="#b8942c";ctx.lineWidth=2.5;ctx.lineJoin="round";';
+  html += 'for(var i=0;i<scores.length;i++){';
+  html += 'var sx=pad+(i/(scores.length-1))*plotW;';
+  html += 'var sy=topPad+plotH-(scores[i]-min)/range*plotH;';
+  html += 'if(i===0)ctx.moveTo(sx,sy);else ctx.lineTo(sx,sy);';
+  html += '}';
+  html += 'ctx.stroke();';
+
+  // Fill area under line
+  html += 'ctx.lineTo(W-pad,topPad+plotH);ctx.lineTo(pad,topPad+plotH);ctx.closePath();';
+  html += 'var grad=ctx.createLinearGradient(0,topPad,0,topPad+plotH);';
+  html += 'grad.addColorStop(0,"rgba(184,148,44,0.2)");grad.addColorStop(1,"rgba(184,148,44,0.02)");';
+  html += 'ctx.fillStyle=grad;ctx.fill();';
+
+  // Draw dots for each point
+  html += 'for(var i=0;i<scores.length;i++){';
+  html += 'var sx=pad+(i/(scores.length-1))*plotW;';
+  html += 'var sy=topPad+plotH-(scores[i]-min)/range*plotH;';
+  html += 'var isCurrent=i===scores.length-1;';
+  html += 'ctx.beginPath();ctx.arc(sx,sy,isCurrent?4:2.5,0,Math.PI*2);';
+  html += 'ctx.fillStyle=isCurrent?"#b8942c":(scores[i]>=0?"#34d399":"#f87171");';
+  html += 'ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();';
+
+  // Date labels
+  html += 'ctx.fillStyle="#94a3b8";ctx.font="8px system-ui";ctx.textAlign="center";';
+  html += 'ctx.fillText(dates[i],sx,topPad+plotH+13);';
+  html += '}';
+
+  // Score labels on y-axis
+  html += 'ctx.textAlign="right";ctx.font="8px system-ui";';
+  html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
+  html += 'var val=max-(max-min)*g/2;';
+  html += 'ctx.fillStyle=val>=0?"#34d399":"#f87171";';
+  html += 'ctx.fillText((val>=0?"+":"")+val.toFixed(0),pad-4,gy+3);}';
+
+  html += '})();</script>';
+
+  // Date labels below canvas
+  html += '<div style="display:flex;justify-content:space-between;padding:0 30px;font-size:8px;color:#94a3b8;">';
+  for (var d = 0; d < dates.length; d++) {
+    html += '<span' + (d === dates.length - 1 ? ' style="color:#b8942c;font-weight:700;"' : '') + '>' + dates[d] + '</span>';
+  }
+  html += '</div>';
+
+  return html;
+}
+
 // ============ CORRELATION ROW ============
 
 function renderCorrelationRow(row) {
@@ -254,7 +369,7 @@ function renderCorrelationRow(row) {
   else if (row.strength === 'moderate') strengthBadge = '<span style="font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(245,158,11,0.15);color:#f59e0b;">MODERATE</span>';
   else strengthBadge = '<span style="font-size:9px;padding:2px 8px;border-radius:10px;background:rgba(107,114,128,0.15);color:#94a3b8;">WEAK</span>';
 
-  var signalEmoji = row.signal === 'bullish' ? '&#x1F7E2;' : (row.signal === 'bearish' ? '&#x1F534;' : '&#x26AA;');
+  var signalLabel = row.signal === 'bullish' ? '[UP]' : (row.signal === 'bearish' ? '[DN]' : '--');
 
   // Correlation bar width
   var barWidth = Math.min(100, Math.round(rAbs * 100));
@@ -271,29 +386,39 @@ function renderCorrelationRow(row) {
   html += '<span style="font-size:13px;font-weight:600;color:#334155;">' + escHtml(row.aSector) + '</span>';
   html += '</div>';
   html += '<div style="display:flex;align-items:center;gap:6px;">';
-  html += signalEmoji;
+  html += signalLabel;
   html += strengthBadge;
   html += '</div>';
   html += '</div>';
 
   // Stats row
-  html += '<div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">';
+  html += '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">';
 
   // R value
   html += '<div style="display:flex;align-items:baseline;gap:4px;">';
-  html += '<span style="font-size:24px;font-weight:800;color:' + heatColor + ';">' + rSign + rVal.toFixed(2) + '</span>';
+  html += '<span style="font-size:22px;font-weight:800;color:' + heatColor + ';">' + rSign + rVal.toFixed(2) + '</span>';
   html += '<span style="font-size:10px;color:#94a3b8;">R</span>';
   html += '</div>';
 
   // Bar
-  html += '<div style="flex:1;min-width:60px;height:6px;border-radius:3px;background:rgba(0,0,0,0.05);overflow:hidden;">';
+  html += '<div style="flex:1;min-width:50px;height:6px;border-radius:3px;background:rgba(0,0,0,0.05);overflow:hidden;">';
   html += '<div style="height:100%;width:' + barWidth + '%;border-radius:3px;background:' + (rVal > 0 ? '#10b981' : '#ef4444') + ';transition:width 0.6s ease;"></div>';
   html += '</div>';
+
+  // Latest US change (most actionable info)
+  if (row.latestUSChange != null) {
+    var usChgSign = row.latestUSChange >= 0 ? '+' : '';
+    var usChgColor = row.latestUSChange >= 0 ? '#dc2626' : '#16a34a';
+    html += '<div style="text-align:center;min-width:50px;">';
+    html += '<div style="font-size:15px;font-weight:700;color:' + usChgColor + ';">' + usChgSign + row.latestUSChange.toFixed(1) + '%</div>';
+    html += '<div style="font-size:8px;color:#94a3b8;">' + escHtml(row.etf) + '</div>';
+    html += '</div>';
+  }
 
   // Hit rate
   if (row.hitRate != null) {
     html += '<div style="text-align:right;">';
-    html += '<div style="font-size:17px;font-weight:700;color:#334155;">' + row.hitRate + '%</div>';
+    html += '<div style="font-size:16px;font-weight:700;color:#334155;">' + row.hitRate + '%</div>';
     html += '<div style="font-size:9px;color:#94a3b8;">HIT RATE</div>';
     html += '</div>';
   }
@@ -309,11 +434,11 @@ function renderCorrelationRow(row) {
   // Recent trend
   if (row.recentCorrelation != null) {
     var recentR = row.recentCorrelation;
-    var trendIcon = recentR > (rVal || 0) ? '&#x2197;' : '&#x2198;';
+    var trendLabel = recentR > (rVal || 0) ? 'up' : 'down';
     var trendColor = recentR > (rVal || 0) ? '#34d399' : '#f87171';
     html += '<div style="margin-top:8px;font-size:10px;color:#94a3b8;">';
     html += '5-day R: <span style="color:' + trendColor + ';font-weight:600;">' + (recentR >= 0 ? '+' : '') + recentR.toFixed(2) + '</span> ';
-    html += '<span style="color:' + trendColor + ';">' + trendIcon + '</span> trending ' + (recentR > (rVal || 0) ? 'stronger' : 'weaker');
+    html += '<span style="color:' + trendColor + ';">[' + trendLabel + ']</span> trending ' + (recentR > (rVal || 0) ? 'stronger' : 'weaker');
     html += '</div>';
   }
 
@@ -325,11 +450,11 @@ function renderCorrelationRow(row) {
 
 function renderOutlookCard(outlook) {
   var impactColors = {
-    'strong_positive': { bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', text: '#10b981', label: 'Strong Bullish', icon: '&#x1F7E2;' },
-    'positive': { bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.2)', text: '#34d399', label: 'Bullish', icon: '&#x1F7E1;' },
-    'neutral': { bg: 'rgba(148,163,184,0.05)', border: 'rgba(148,163,184,0.15)', text: '#94a3b8', label: 'Neutral', icon: '&#x26AA;' },
-    'negative': { bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.2)', text: '#f87171', label: 'Bearish', icon: '&#x1F7E0;' },
-    'strong_negative': { bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', text: '#ef4444', label: 'Strong Bearish', icon: '&#x1F534;' },
+    'strong_positive': { bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', text: '#10b981', label: 'Strong Bullish', tag: '[++]' },
+    'positive': { bg: 'rgba(52,211,153,0.08)', border: 'rgba(52,211,153,0.2)', text: '#34d399', label: 'Bullish', tag: '[+]' },
+    'neutral': { bg: 'rgba(148,163,184,0.05)', border: 'rgba(148,163,184,0.15)', text: '#94a3b8', label: 'Neutral', tag: '[--]' },
+    'negative': { bg: 'rgba(248,113,113,0.08)', border: 'rgba(248,113,113,0.2)', text: '#f87171', label: 'Bearish', tag: '[-]' },
+    'strong_negative': { bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', text: '#ef4444', label: 'Strong Bearish', tag: '[--]' },
   };
   var style = impactColors[outlook.impact] || impactColors['neutral'];
   var rVal = outlook.correlation || 0;
@@ -338,7 +463,7 @@ function renderOutlookCard(outlook) {
   var html = '<div class="cm-outlook-card glass-card" style="padding:14px 16px;background:' + style.bg + ';border:1px solid ' + style.border + ';">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
   html += '<span style="font-size:13px;font-weight:600;color:#1e293b;">' + escHtml(outlook.aSector) + '</span>';
-  html += '<span style="font-size:16px;">' + style.icon + '</span>';
+  html += '<span style="font-size:11px;font-weight:700;color:' + style.text + ';">' + style.tag + '</span>';
   html += '</div>';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
   html += '<span style="font-size:10px;color:#64748b;">via ' + escHtml(outlook.etf) + '</span>';
@@ -454,7 +579,7 @@ function renderMarketCycleDashboard(cycle) {
 
   // MA Alignment
   var ma = details.ma || {};
-  var maLabel = ma.alignment === 'bullish' ? '多头排列 ▲' : (ma.alignment === 'bearish' ? '空头排列 ▼' : (ma.alignment === 'slightly_bullish' ? '短期偏多 ↗' : (ma.alignment === 'slightly_bearish' ? '短期偏空 ↘' : '均线纠缠 ─')));
+  var maLabel = ma.alignment === 'bullish' ? '多头排列 [UP]' : (ma.alignment === 'bearish' ? '空头排列 [DN]' : (ma.alignment === 'slightly_bullish' ? '短期偏多 [^]' : (ma.alignment === 'slightly_bearish' ? '短期偏空 [v]' : '均线纠缠 [--]')));
   var maColor = ma.alignment === 'bullish' ? '#10b981' : (ma.alignment === 'bearish' ? '#ef4444' : (ma.alignment === 'slightly_bullish' ? '#34d399' : (ma.alignment === 'slightly_bearish' ? '#f59e0b' : '#94a3b8')));
   html += '<div style="background:rgba(255,255,255,0.5);border-radius:6px;padding:10px;text-align:center;">';
   html += '<div style="font-size:9px;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;">均线排列</div>';
@@ -476,7 +601,7 @@ function renderMarketCycleDashboard(cycle) {
 
   // Market breadth
   var breadth = details.breadth || {};
-  var brLabel = breadth.breadth === 'wide_high' ? '强势 ▲' : (breadth.breadth === 'narrow_low' ? '弱势 ▼' : '中性 ─');
+  var brLabel = breadth.breadth === 'wide_high' ? '强势 [UP]' : (breadth.breadth === 'narrow_low' ? '弱势 [DN]' : '中性 [--]');
   var brColor = breadth.breadth === 'wide_high' ? '#10b981' : (breadth.breadth === 'narrow_low' ? '#ef4444' : '#94a3b8');
   html += '<div style="background:rgba(255,255,255,0.5);border-radius:6px;padding:10px;text-align:center;">';
   html += '<div style="font-size:9px;color:#94a3b8;letter-spacing:1px;margin-bottom:4px;">市场宽度</div>';

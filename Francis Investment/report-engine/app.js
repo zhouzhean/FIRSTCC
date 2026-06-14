@@ -1,5 +1,5 @@
 // Francis Investment Report Engine — Dashboard Controller
-// Section-based navigation: click a section → see that content
+// Section-based navigation: click a section ->  see that content
 // v2.2 — simfolio-first layout, live countdown, merged report, AI status badge
 
 // -- State --
@@ -20,8 +20,6 @@ var state = {
   tradeNotifications: [],
   lastSimfolioRefresh: null,
   simfolioData: null,          // cached simfolio data for live rendering
-  countdownSec: 0,             // live countdown seconds
-  countdownInterval: null,     // countdown timer ref
   summaryDates: [],            // dates with available summaries (for calendar dots)
 };
 
@@ -51,9 +49,9 @@ function getMarketTimeState() {
   var inMorningSession = t >= 9*60+30 && t < 11*60+30;
   var inAfternoonSession = t >= 13*60 && t < 15*60;
 
-  if (inMorningSession || inAfternoonSession) return 'trading';      // 交易中 → 暂不可用
-  if (t >= 15*60 && t < 16*60) return 'generating';                   // 15:00-16:00 → 正在生成
-  if (t >= 16*60 || (t >= 0 && t < 9*60+30)) return 'ready';         // 16:00后 → 可查看总结
+  if (inMorningSession || inAfternoonSession) return 'trading';      // 交易中 ->  暂不可用
+  if (t >= 15*60 && t < 16*60) return 'generating';                   // 15:00-16:00 ->  正在生成
+  if (t >= 16*60 || (t >= 0 && t < 9*60+30)) return 'ready';         // 16:00后 ->  可查看总结
   return 'closed';
 }
 
@@ -63,13 +61,13 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
 
   if (timeState === 'trading') {
     html += '<div class="unavailable-placeholder">';
-    html += '<div class="lock-icon">⏳</div>';
+    html += '<div class="lock-icon"></div>';
     html += '<div class="lock-title">' + sectionLabel + ' — 暂不可用</div>';
     html += '<div class="lock-desc">市场交易中，AI 量化交易员正在实时监控。盘后总结报告将于每日16:00自动生成，届时可在此查看完整分析。</div>';
     html += '</div>';
   } else if (timeState === 'generating') {
     html += '<div class="unavailable-placeholder" style="border:2px dashed #f59e0b;">';
-    html += '<div class="lock-icon">🔄</div>';
+    html += '<div class="lock-icon"></div>';
     html += '<div class="lock-title">正在分析并生成中...</div>';
     html += '<div class="lock-desc">市场已收盘，AI 正在汇总今日交易数据、量化评分、资金流向和板块动态，预计16:00前完成。请稍后再来查看。</div>';
     html += '</div>';
@@ -77,7 +75,7 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
     // Try to load daily summary
     html += '<div id="daily-summary-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
     html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-    html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+    html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
     html += '<div style="font-size:16px;font-weight:600;">正在加载今日总结...</div>';
     html += '</div></div>';
     // Async load
@@ -98,8 +96,7 @@ var SECTIONS = [
   { id: 'usMarket',        label: '海外市场',         icon: '', render: function(d,m) { renderUSMarketDirect(); return ''; } },
   { id: 'predict',        label: '预测引擎',         icon: '', render: function(d,m) { renderPredictDashboard(); return ''; } },
   { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
-  { id: 'historyReview',   label: '历史复盘',         icon: '', render: function(d,m) { return renderHistoryReviewSection(d,m); } },
-  { id: 'weekendAnalysis', label: '周末深度分析',     icon: '', render: function(d,m) { renderWeekendAnalysisDirect(); return ''; } },
+  { id: 'historyReview',   label: '历史复盘',         icon: '', render: function(d,m) { renderHistoryReviewUnified(); return ''; } },
   { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
 
@@ -142,7 +139,6 @@ function initApp() {
     // Enter live monitoring mode
     state.liveMode = true;
     startLivePoll();
-    startCountdown();
   });
 
   // Bind events - PDF & email buttons
@@ -155,7 +151,7 @@ function initApp() {
     var sidebar = document.getElementById('sidebar');
     if (sidebar) {
       sidebar.style.display = sidebar.style.display === 'none' ? '' : 'none';
-      this.textContent = sidebar.style.display === 'none' ? '📅 展开' : '📅 日历';
+      this.textContent = sidebar.style.display === 'none' ? ' 展开' : ' 日历';
     }
   });
 
@@ -173,8 +169,7 @@ function initApp() {
     }
   });
 
-  // Update weekend analysis visibility
-  updateWeekendAnalysisVisibility();
+  // (weekend analysis visibility merged into history review in v2.9)
 
   // Section nav delegation
   $sectionNavList.addEventListener('click', function(e) {
@@ -199,7 +194,7 @@ function checkServerStatus(callback) {
       state.serverStatus = data;
       state.schedulerStatus = data.scheduler || null;
       if (!state.liveMode) {
-        updateStatus('Mosaic Server · ' + data.date + ' ' + data.weekday + ' · ' + (data.isTradingDay ? '🟢 交易日' : '⚫ 休市'));
+        updateStatus('Mosaic Server · ' + data.date + ' ' + data.weekday + ' · ' + (data.isTradingDay ? ' 交易日' : ' 休市'));
       }
       if (callback) callback();
     })
@@ -280,7 +275,7 @@ function renderSimfolioLive(data, mode) {
 
 function renderSimfolioEmpty() {
   var html = '<div class="unavailable-placeholder">';
-  html += '<div class="lock-icon">📊</div>';
+  html += '<div class="lock-icon"></div>';
   html += '<div class="lock-title">等待交易数据...</div>';
   html += '<div class="lock-desc">AI 量化交易员正在后台运行，交易数据将在开盘后自动生成。请确保 Mosaic Server 已启动。</div>';
   html += '</div>';
@@ -311,7 +306,7 @@ function renderSimfolioLivePanel(sfData) {
   var diagHTML = '';
   if (factorDiagnostics.length > 0) {
     diagHTML = '<div style="margin:0 16px 8px;padding:10px 14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">';
-    diagHTML += '<div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px;">⚠️ 因子诊断</div>';
+    diagHTML += '<div style="font-size:12px;font-weight:600;color:#92400e;margin-bottom:6px;">[!]  因子诊断</div>';
     for (var d = 0; d < factorDiagnostics.length; d++) {
       var diag = factorDiagnostics[d];
       var sevColor = diag.severity === 'warning' ? '#dc2626' : '#f59e0b';
@@ -322,13 +317,22 @@ function renderSimfolioLivePanel(sfData) {
     diagHTML += '</div>';
   }
 
+  // Portfolio-in-loss protective mode banner
+  var lossBannerHTML = '';
+  if (snap.totalReturn != null && snap.totalReturn < -5 && snap.positions && snap.positions.length >= 3) {
+    lossBannerHTML = '<div style="margin:0 16px 8px;padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;">';
+    lossBannerHTML += '<div style="font-size:12px;font-weight:600;color:#991b1b;margin-bottom:4px;">[X] 组合浮亏保护模式</div>';
+    lossBannerHTML += '<div style="font-size:11px;color:#7f1d1d;">持有' + snap.positions.length + '只股票且总收益为负（' + snap.totalReturn.toFixed(1) + '%），暂停新买入。请耐心等待现有持仓恢复或止损出场。</div>';
+    lossBannerHTML += '</div>';
+  }
+
   // Build trade activity feed
   var feedHTML = renderTradeActivityFeed(trades);
 
   // Build positions table (compact)
   var posHTML = '';
   if (snap.positions && snap.positions.length > 0) {
-    posHTML += '<h3 style="font-size:14px;color:#1e293b;margin:16px 16px 8px;">📌 当前持仓</h3>';
+    posHTML += '<h3 style="font-size:14px;color:#1e293b;margin:16px 16px 8px;"> 当前持仓</h3>';
     posHTML += renderCompactPositions(snap.positions);
   }
 
@@ -337,7 +341,7 @@ function renderSimfolioLivePanel(sfData) {
 
   // Market sentiment indicators
   var sentimentHTML = '<div id="market-sentiment-indicators" style="margin:0 16px 8px;padding:0;">' +
-    '<div style="font-size:14px;color:#1e293b;margin-bottom:8px;">📡 市场情绪指标</div>' +
+    '<div style="font-size:14px;color:#1e293b;margin-bottom:8px;"> 市场情绪指标</div>' +
     '<div id="sentiment-indicators-content" style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">' +
     '<div style="background:#fff;border-radius:6px;padding:10px;border:1px solid #e2e5eb;text-align:center;">' +
     '<div style="font-size:10px;color:#94a3b8;margin-bottom:2px;">两融情绪</div>' +
@@ -350,7 +354,7 @@ function renderSimfolioLivePanel(sfData) {
     '<div style="font-size:16px;font-weight:700;color:#64748b;" id="sent-sm">--</div></div>' +
     '</div></div>';
 
-  var html = countdownHTML + cardsHTML + diagHTML + healthHTML + feedHTML + posHTML + sectorHTML + sentimentHTML;
+  var html = countdownHTML + cardsHTML + diagHTML + lossBannerHTML + healthHTML + feedHTML + posHTML + sectorHTML + sentimentHTML;
 
   // Async load sentiment data
   setTimeout(function() { loadMarketSentimentIndicators(); }, 500);
@@ -361,31 +365,24 @@ function renderSimfolioLivePanel(sfData) {
 
 function renderCountdownBar(sched) {
   var stateLabels = {
-    'closed': '⚫ 休市等待中',
-    'pre_market': '🌅 盘前准备',
-    'morning_session': '🟢 早盘交易中',
-    'lunch_break': '🍱 午间休市',
-    'afternoon_session': '🟢 午盘交易中',
-    'post_market': '🌇 盘后总结',
+    'closed': '休市', 'pre_market': '盘前准备',
+    'morning_session': '早盘', 'lunch_break': '午休',
+    'afternoon_session': '午盘', 'post_market': '盘后',
   };
   var label = stateLabels[sched.state] || sched.state;
-  var nextTickMs = sched.nextTickMs || 0;
-  var nextSec = Math.max(0, Math.round(nextTickMs / 1000));
   var isActive = sched.state === 'morning_session' || sched.state === 'afternoon_session';
+  var dotCls = isActive ? 'green' : (sched.state === 'pre_market' || sched.state === 'post_market' ? 'amber' : 'gray');
 
-  var html = '<div class="sf-countdown-bar' + (nextSec <= 10 && isActive ? ' flash-warn' : '') + '" id="sf-countdown-bar">';
-  html += '<span style="font-size:14px;">⏱</span>';
-  html += '<span>下次检查:</span>';
-  html += '<span class="countdown-num" id="sf-countdown-num">' + nextSec + '</span>';
-  html += '<span>秒</span>';
-  html += '<span style="flex:1;"></span>';
+  var html = '<div class="sf-status-bar" id="sf-countdown-bar">';
+  html += '<span class="status-dot ' + dotCls + '"></span>';
   html += '<span>' + label + '</span>';
+  html += '<span class="spacer"></span>';
+  if (sched.opsRunning) {
+    html += '<span class="running-badge"> 扫描中</span>';
+  }
   if (sched.lastPipeline) {
     var ago = Math.round((Date.now() - new Date(sched.lastPipeline).getTime()) / 60000);
-    html += '<span style="font-size:10px;opacity:0.7;"> · 上次扫描:' + ago + '分钟前</span>';
-  }
-  if (sched.opsRunning) {
-    html += '<span style="font-size:11px;color:#f59e0b;"> · ⚙ 运行中...</span>';
+    html += '<span class="scan-label">上次扫描 ' + ago + ' 分钟前</span>';
   }
   html += '</div>';
   return html;
@@ -409,7 +406,7 @@ function renderSimfolioCards(snap, stats) {
   }
   var dpFlash = prevSnap ? flashClass(snap.totalValue, prevSnap.totalValue) : '';
 
-  var html = '<div class="sf-cards-scroll"><div class="sf-cards-row" style="display:grid;grid-template-columns:repeat(5,minmax(155px,1fr));gap:10px;padding:12px 16px;">';
+  var html = '<div class="sf-cards-scroll"><div class="sf-cards-row">';
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">总资产</div>';
@@ -450,7 +447,7 @@ function renderSimfolioCards(snap, stats) {
   var ddLevel = stats.drawdownLevel || 'normal';
   var ddColor = ddLevel === 'halt' ? '#dc2626' : (ddLevel === 'restrict' ? '#f59e0b' : (ddLevel === 'warn' ? '#eab308' : '#64748b'));
   var ddBg = ddLevel === 'halt' ? '#fef2f2' : (ddLevel === 'restrict' ? '#fffbeb' : (ddLevel === 'warn' ? '#fefce8' : '#fff'));
-  var ddLabel = ddLevel === 'halt' ? '🔴 熔断' : (ddLevel === 'restrict' ? '🟡 限仓' : (ddLevel === 'warn' ? '⚪ 提醒' : '🟢 正常'));
+  var ddLabel = ddLevel === 'halt' ? ' 熔断' : (ddLevel === 'restrict' ? ' 限仓' : (ddLevel === 'warn' ? 'O 提醒' : ' 正常'));
 
   html += '<div style="background:#fff;border-radius:8px;padding:14px;border:1px solid #e2e5eb;">';
   html += '<div style="font-size:11px;color:' + MUTED_COLOR + ';margin-bottom:4px;">持仓 / 统计</div>';
@@ -477,7 +474,7 @@ function renderTradeActivityFeed(trades) {
   }
 
   var html = '<div class="sf-trade-feed">';
-  html += '<div class="sf-trade-feed-header">📋 交易动态 <span style="font-weight:400;font-size:10px;margin-left:auto;" id="feed-update-time"></span></div>';
+  html += '<div class="sf-trade-feed-header"> 交易动态 <span style="font-weight:400;font-size:10px;margin-left:auto;" id="feed-update-time"></span></div>';
 
   if (!filtered || filtered.length === 0) {
     html += '<div class="sf-trade-feed-empty">暂无交易记录 — AI 交易员将在开盘后自动执行买卖</div>';
@@ -488,7 +485,7 @@ function renderTradeActivityFeed(trades) {
       var isBuy = t.action === 'buy';
       var isAuto = !!t.triggeredBy;
       var cls = isAuto ? 'auto' : (isBuy ? 'buy' : 'sell');
-      var icon = isAuto ? '🤖' : (isBuy ? '🔴' : '🟢');
+      var icon = isAuto ? '[Auto] ' : (isBuy ? '' : '');
       var actionLabel = isBuy ? '买入' : '卖出';
 
       html += '<div class="sf-trade-feed-item ' + cls + '">';
@@ -546,7 +543,7 @@ function renderSectorLiveChart() {
   var html = '<div id="sector-live-container" style="margin:0 16px 16px;">';
   html += '<div style="background:#fff;border-radius:8px;padding:16px;border:1px solid #e2e5eb;">';
   html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">';
-  html += '<h3 style="font-size:14px;color:#1e293b;margin:0;">📊 板块实时走势</h3>';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0;"> 板块实时走势</h3>';
   html += '<span style="font-size:10px;color:#94a3b8;" id="sector-update-time">' + (isHistorical ? activeDate : '加载中...') + '</span>';
   html += '</div>';
 
@@ -642,7 +639,7 @@ function renderNewsPolicySection(data, mode) {
   // timeState === 'ready': load news from API
   var html = '<div id="news-policy-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
   html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-  html += '<div style="font-size:32px;margin-bottom:12px;">📰</div>';
+  html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
   html += '<div>正在加载时政要点...</div>';
   html += '</div></div>';
   setTimeout(function() { loadNewsIntoDOM(); }, 100);
@@ -660,7 +657,7 @@ function loadNewsIntoDOM() {
     .then(function(data) {
       if (!data.ok || !data.news || !data.news.items || data.news.items.length === 0) {
         container.innerHTML = '<div class="unavailable-placeholder">' +
-          '<div class="lock-icon">📭</div>' +
+          '<div class="lock-icon"></div>' +
           '<div class="lock-title">暂无重大财经新闻</div>' +
           '<div class="lock-desc">新闻采集API可能暂时不可用或今日暂无重要新闻，请稍后刷新重试。</div>' +
           '</div>';
@@ -670,7 +667,7 @@ function loadNewsIntoDOM() {
     })
     .catch(function() {
       container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-icon">[!] </div>' +
         '<div class="lock-title">加载失败</div>' +
         '<div class="lock-desc">无法获取新闻数据，请检查 Mosaic Server 是否运行。</div>' +
         '</div>';
@@ -679,7 +676,7 @@ function loadNewsIntoDOM() {
 
 function renderNewsDigest(news, date) {
   var html = '';
-  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📰 ' + date + ' 时政要点</h2>';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;"> ' + date + ' 时政要点</h2>';
   html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 16px;">共 ' + news.count + ' 条新闻 · 由 Mosaic AI 自动采集自新浪财经</p>';
 
   // Category counts
@@ -720,13 +717,13 @@ function renderNewsDigest(news, date) {
     var sentLabel = '', sentBg = '', sentColor = '#64748b';
     if (sent && sent.sentiment) {
       var sentMap = {
-        'strongly_positive': { label: '强正👍', bg: 'rgba(220,38,38,0.08)', color: '#dc2626' },
+        'strongly_positive': { label: '强正[+] ', bg: 'rgba(220,38,38,0.08)', color: '#dc2626' },
         'positive': { label: '利好', bg: 'rgba(234,88,12,0.06)', color: '#ea580c' },
         'slightly_positive': { label: '偏正', bg: 'rgba(245,158,11,0.05)', color: '#d97706' },
         'neutral': { label: '中性', bg: 'rgba(100,116,139,0.05)', color: '#64748b' },
         'slightly_negative': { label: '偏负', bg: 'rgba(22,163,74,0.05)', color: '#16a34a' },
         'negative': { label: '利空', bg: 'rgba(5,150,105,0.06)', color: '#059669' },
-        'strongly_negative': { label: '强负👎', bg: 'rgba(22,163,74,0.08)', color: '#16a34a' },
+        'strongly_negative': { label: '强负[-] ', bg: 'rgba(22,163,74,0.08)', color: '#16a34a' },
       };
       var sm = sentMap[sent.sentiment] || sentMap['neutral'];
       sentLabel = sm.label;
@@ -751,18 +748,18 @@ function renderNewsDigest(news, date) {
   html += '</div>';
 
   if (news.items.length === 0) {
-    html += '<div style="text-align:center;padding:40px;color:#94a3b8;">📭 今日暂无重大财经新闻</div>';
+    html += '<div style="text-align:center;padding:40px;color:#94a3b8;"> 今日暂无重大财经新闻</div>';
   }
 
   // News Impact Prediction
   if (news.impact && news.impact.keyThemes && news.impact.keyThemes.length > 0) {
     var imp = news.impact;
     var sentColors = { positive: '#dc2626', negative: '#16a34a', neutral: '#64748b' };
-    var sentIcons = { positive: '📈', negative: '📉', neutral: '➡️' };
+    var sentIcons = { positive: '', negative: '', neutral: '-> ' };
     var sentLabels = { positive: '偏多', negative: '偏空', neutral: '中性' };
 
     html += '<div style="background:linear-gradient(135deg,#fef3c7,#fef9e7);border-radius:10px;padding:20px;margin-top:20px;border:1px solid #f59e0b;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔮 AI 新闻影响预测</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> AI 新闻影响预测</h3>';
 
     // Overall sentiment bar
     var scoreWidth = imp.impactScore || 50;
@@ -778,9 +775,9 @@ function renderNewsDigest(news, date) {
     // Stats
     if (imp.stats) {
       html += '<div style="display:flex;gap:16px;margin-bottom:14px;font-size:12px;">';
-      html += '<span style="color:#dc2626;">📈 利好 ' + (imp.stats.positive || 0) + '条</span>';
-      html += '<span style="color:#16a34a;">📉 利空 ' + (imp.stats.negative || 0) + '条</span>';
-      html += '<span style="color:#64748b;">➡️ 中性 ' + (imp.stats.neutral || 0) + '条</span>';
+      html += '<span style="color:#dc2626;"> 利好 ' + (imp.stats.positive || 0) + '条</span>';
+      html += '<span style="color:#16a34a;"> 利空 ' + (imp.stats.negative || 0) + '条</span>';
+      html += '<span style="color:#64748b;">->  中性 ' + (imp.stats.neutral || 0) + '条</span>';
       html += '</div>';
     }
 
@@ -816,7 +813,7 @@ function renderNewsDigest(news, date) {
 
     // Risk events
     if (imp.riskEvents && imp.riskEvents.length > 0) {
-      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">⚠ 风险关注: ' + imp.riskEvents.map(function(r) { return escHtml(r).slice(0,50); }).join(' · ') + '</div>';
+      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">[!]  风险关注: ' + imp.riskEvents.map(function(r) { return escHtml(r).slice(0,50); }).join(' · ') + '</div>';
     }
 
     html += '</div>'; // end impact card
@@ -856,7 +853,7 @@ function renderTradeAnalysisSection(data, mode) {
   }
   var html = '<div id="trade-analysis-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
   html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-  html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+  html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
   html += '<div>正在加载交易分析...</div>';
   html += '</div></div>';
   setTimeout(function() { loadTradeAnalysisIntoDOM(); }, 100);
@@ -874,7 +871,7 @@ function loadTradeAnalysisIntoDOM() {
     .then(function(data) {
       if (!data.ok || !data.tradeAnalysis) {
         container.innerHTML = '<div class="unavailable-placeholder">' +
-          '<div class="lock-icon">📊</div>' +
+          '<div class="lock-icon"></div>' +
           '<div class="lock-title">暂无交易分析</div>' +
           '<div class="lock-desc">今日无交易发生或分析尚未生成，请于16:00后查看。</div>' +
           '</div>';
@@ -889,7 +886,7 @@ function loadTradeAnalysisIntoDOM() {
     })
     .catch(function() {
       container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-icon">[!] </div>' +
         '<div class="lock-title">加载失败</div>' +
         '<div class="lock-desc">无法获取分析数据，请检查 Mosaic Server 是否运行。</div>' +
         '</div>';
@@ -916,7 +913,7 @@ function loadKnowledgeBaseIntoDOM() {
 function renderKnowledgeBaseCard(kb) {
   var html = '';
   html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-top:16px;border:2px solid #b8942c;">';
-  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 4px;">🧠 AI 自我成长知识库</h3>';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 4px;"> AI 自我成长知识库</h3>';
   html += '<p style="font-size:11px;color:#94a3b8;margin:0 0 16px;">累计学习 ' + (kb.totalDays || 0) + ' 天 · 追踪 ' + (kb.factorTracker.factors ? kb.factorTracker.factors.length : 0) + ' 个因子 · 总触发 ' + (kb.factorTracker.totalTriggers || 0) + ' 次 · 更新于 ' + new Date(kb.lastUpdated).toLocaleString('zh-CN') + '</p>';
 
   // Factor performance ranking
@@ -950,7 +947,7 @@ function renderKnowledgeBaseCard(kb) {
     var activeFactors = sorted.filter(function(f) { return f.triggerCount > 0; });
     if (activeFactors.length > 0) {
       html += '<div style="background:#fef9e7;border-radius:6px;padding:14px;font-size:12px;line-height:1.8;">';
-      html += '<b style="color:#1e293b;">📊 学习总结</b><br>';
+      html += '<b style="color:#1e293b;"> 学习总结</b><br>';
       html += '<span style="color:#64748b;">过去 ' + kb.totalDays + ' 个交易日中，共触发了 ' + kb.factorTracker.totalTriggers + ' 次因子信号。<br>';
       if (activeFactors.length > 0) {
         var topF = activeFactors[0];
@@ -973,16 +970,16 @@ function renderKnowledgeBaseCard(kb) {
 
 function renderQuantAnalysisReport(anal, date) {
   var html = '';
-  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📊 ' + date + ' 交易分析与报告</h2>';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;"> ' + date + ' 交易分析与报告</h2>';
   html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">Mosaic AI 量化引擎自动生成 · ' + new Date(anal.generatedAt).toTimeString().slice(0,8) + '</p>';
 
   // 1. Market Narrative
   if (anal.marketNarrative && anal.marketNarrative.narrative) {
     var mn = anal.marketNarrative;
     var sentimentColors = { bullish: '#dc2626', bearish: '#16a34a', neutral: '#64748b' };
-    var sentimentLabels = { bullish: '偏多 ↑', bearish: '偏空 ↓', neutral: '中性 →' };
+    var sentimentLabels = { bullish: '偏多 UP ', bearish: '偏空 DOWN ', neutral: '中性 -> ' };
     html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border-left:4px solid #b8942c;">';
-    html += '<h3 style="margin:0 0 12px;font-size:14px;">🏛 市场叙事</h3>';
+    html += '<h3 style="margin:0 0 12px;font-size:14px;"> 市场叙事</h3>';
     html += '<p style="font-size:14px;line-height:1.9;color:#334155;margin:0;">' + escHtml(mn.narrative) + '</p>';
     if (mn.keyDrivers && mn.keyDrivers.length > 0) {
       html += '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">';
@@ -1001,12 +998,12 @@ function renderQuantAnalysisReport(anal, date) {
 
   // 2. Per-Trade Deep Analysis
   if (anal.tradesAnalysis && anal.tradesAnalysis.length > 0) {
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:20px 0 12px;">📋 交易决策深度解析 (' + anal.tradesAnalysis.length + '笔)</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:20px 0 12px;"> 交易决策深度解析 (' + anal.tradesAnalysis.length + '笔)</h3>';
     for (var t = 0; t < anal.tradesAnalysis.length; t++) {
       var ta = anal.tradesAnalysis[t];
       var isBuy = ta.action === 'buy';
       var actionColor = isBuy ? UP_COLOR : DOWN_COLOR;
-      var actionIcon = isBuy ? '🔴 买入' : '🟢 卖出';
+      var actionIcon = isBuy ? ' 买入' : ' 卖出';
       var stock = ta.stock || {};
 
       html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
@@ -1046,7 +1043,7 @@ function renderQuantAnalysisReport(anal, date) {
         for (var dim = 0; dim < ta.dimensionBreakdown.length; dim++) {
           var db = ta.dimensionBreakdown[dim];
           var stars = '';
-          for (var s = 0; s < 5; s++) stars += s < Math.floor(db.score) ? '★' : '☆';
+          for (var s = 0; s < 5; s++) stars += s < Math.floor(db.score) ? '*' : '*';
           html += '<div style="background:#f8fafc;padding:8px;border-radius:6px;text-align:center;font-size:11px;">';
           html += '<div style="color:#64748b;">' + db.dimension + '</div>';
           html += '<div style="color:#f59e0b;font-size:13px;">' + stars + '</div>';
@@ -1057,8 +1054,8 @@ function renderQuantAnalysisReport(anal, date) {
 
       // Risk + Prediction
       html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
-      html += '<div style="background:#fef3c7;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b>⚠ 风险评估</b><br><span style="color:#64748b;">' + escHtml(ta.riskAssessment || '') + '</span></div>';
-      html += '<div style="background:#dbeafe;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b>📈 预测</b><br><span style="color:#64748b;">' + escHtml(ta.prediction || '') + '</span></div>';
+      html += '<div style="background:#fef3c7;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b>[!]  风险评估</b><br><span style="color:#64748b;">' + escHtml(ta.riskAssessment || '') + '</span></div>';
+      html += '<div style="background:#dbeafe;padding:10px 12px;border-radius:6px;font-size:12px;line-height:1.5;"><b> 预测</b><br><span style="color:#64748b;">' + escHtml(ta.prediction || '') + '</span></div>';
       html += '</div>';
 
       html += '</div>'; // end trade card
@@ -1069,7 +1066,7 @@ function renderQuantAnalysisReport(anal, date) {
   if (anal.factorSummary && anal.factorSummary.topSignals && anal.factorSummary.topSignals.length > 0) {
     var fs = anal.factorSummary;
     html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;margin:0 0 12px;">🔬 全市场因子触发汇总</h3>';
+    html += '<h3 style="font-size:14px;margin:0 0 12px;"> 全市场因子触发汇总</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">';
     for (var si = 0; si < fs.topSignals.length; si++) {
       var sig = fs.topSignals[si];
@@ -1085,7 +1082,7 @@ function renderQuantAnalysisReport(anal, date) {
   if (anal.forwardPredictions) {
     var fp = anal.forwardPredictions;
     html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;margin:0 0 12px;">🔮 前瞻展望</h3>';
+    html += '<h3 style="font-size:14px;margin:0 0 12px;"> 前瞻展望</h3>';
     if (fp.shortTermOutlook) {
       html += '<p style="font-size:14px;line-height:1.9;color:#334155;margin:0 0 12px;">' + escHtml(fp.shortTermOutlook) + '</p>';
     }
@@ -1098,7 +1095,7 @@ function renderQuantAnalysisReport(anal, date) {
       html += '</div>';
     }
     if (fp.riskFactors && fp.riskFactors.length > 0) {
-      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">⚠ 风险因素: ' + fp.riskFactors.map(function(rf) { return escHtml(rf); }).join(' · ') + '</div>';
+      html += '<div style="font-size:11px;color:#dc2626;line-height:1.7;">[!]  风险因素: ' + fp.riskFactors.map(function(rf) { return escHtml(rf); }).join(' · ') + '</div>';
     }
     html += '</div>';
   }
@@ -1108,7 +1105,7 @@ function renderQuantAnalysisReport(anal, date) {
     (anal.tradesAnalysis && anal.tradesAnalysis.length > 0);
   if (!hasContent) {
     html += '<div style="text-align:center;padding:40px;color:#94a3b8;background:#fff;border-radius:8px;">';
-    html += '<div style="font-size:32px;margin-bottom:12px;">📊</div>';
+    html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
     html += '<div style="font-size:14px;font-weight:600;">暂无交易分析数据</div>';
     html += '<div style="font-size:12px;margin-top:4px;">今日无交易发生或分析尚未生成</div></div>';
   }
@@ -1121,7 +1118,7 @@ function renderQuantAnalysisReport(anal, date) {
 function renderKnowledgeBaseSection(data, mode) {
   var html = '<div id="knowledge-base-section-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
   html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-  html += '<div style="font-size:32px;margin-bottom:12px;">🧠</div>';
+  html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
   html += '<div>正在加载 AI 知识库...</div>';
   html += '</div></div>';
   setTimeout(function() { loadKnowledgeBaseSection(); }, 100);
@@ -1136,7 +1133,7 @@ function loadKnowledgeBaseSection() {
     .then(function(data) {
       if (!data.ok || !data.factorTracker) {
         container.innerHTML = '<div class="unavailable-placeholder">' +
-          '<div class="lock-icon">🧠</div>' +
+          '<div class="lock-icon"></div>' +
           '<div class="lock-title">知识库数据暂不可用</div>' +
           '<div class="lock-desc">知识库需要至少一个交易日的分析数据才能激活。请等待今日盘后总结生成。</div>' +
           '</div>';
@@ -1146,7 +1143,7 @@ function loadKnowledgeBaseSection() {
     })
     .catch(function() {
       container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-icon">[!] </div>' +
         '<div class="lock-title">加载失败</div>' +
         '<div class="lock-desc">无法连接知识库服务，请检查 Mosaic Server 是否运行。</div>' +
         '</div>';
@@ -1155,7 +1152,7 @@ function loadKnowledgeBaseSection() {
 
 function renderKnowledgeBaseFull(kb) {
   var html = '';
-  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">🧠 AI 自我成长知识库</h2>';
+  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;"> AI 自我成长知识库</h2>';
   html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">量化因子追踪 · 模式学习 · 交易复盘 · 知识累积</p>';
 
   // Overview card
@@ -1178,7 +1175,7 @@ function renderKnowledgeBaseFull(kb) {
     // Active factors
     if (activeFactors.length > 0) {
       html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-      html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔥 活跃因子排行</h3>';
+      html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">HOT:  活跃因子排行</h3>';
       for (var i = 0; i < activeFactors.length; i++) {
         var f = activeFactors[i];
         var barW = Math.max(3, Math.round(f.triggerCount / maxTrigger * 100));
@@ -1198,7 +1195,7 @@ function renderKnowledgeBaseFull(kb) {
     // Dormant factors
     if (inactiveFactors.length > 0) {
       html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-      html += '<h3 style="font-size:14px;color:#94a3b8;margin:0 0 12px;">💤 待激活因子</h3>';
+      html += '<h3 style="font-size:14px;color:#94a3b8;margin:0 0 12px;">COLD:  待激活因子</h3>';
       html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
       for (var di = 0; di < inactiveFactors.length; di++) {
         html += '<span style="padding:4px 12px;background:#f8fafc;border-radius:12px;font-size:11px;color:#94a3b8;border:1px solid #e5e7eb;">' + inactiveFactors[di].id + ' ' + inactiveFactors[di].name + '</span>';
@@ -1210,7 +1207,7 @@ function renderKnowledgeBaseFull(kb) {
 
     // Factor details table
     html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 因子详细数据</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 因子详细数据</h3>';
     html += '<div style="overflow-x:auto;">';
     html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
     html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
@@ -1232,7 +1229,7 @@ function renderKnowledgeBaseFull(kb) {
 
     // Learning insight
     html += '<div style="background:#fef9e7;border-radius:8px;padding:16px;border:1px solid #f59e0b;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">💡 系统学习洞察</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;"> 系统学习洞察</h3>';
     html += '<ul style="font-size:12px;color:#64748b;line-height:1.9;margin:0;padding-left:18px;">';
     html += '<li>知识库已运行 <b>' + kb.totalDays + ' 天</b>，累计追踪了 ' + kb.factorTracker.factors.length + ' 个量化因子</li>';
     if (activeFactors.length > 0) {
@@ -1248,149 +1245,80 @@ function renderKnowledgeBaseFull(kb) {
   return html;
 }
 
-// ============ History Review Section (历史复盘) ============
+// ============ History Review Section (统一历史复盘 v2.9) ============
 
-function renderHistoryReviewSection(data, mode) {
-  var html = '<div id="history-review-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
-  html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-  html += '<div style="font-size:32px;margin-bottom:12px;">📋</div>';
-  html += '<div>正在加载历史复盘数据...</div>';
-  html += '</div></div>';
-  setTimeout(function() { loadHistoryReviewSection(); }, 100);
-  return html;
+function renderHistoryReviewUnified() {
+  $contentArea.innerHTML = '';
+  var container = document.createElement('div');
+  container.style.cssText = 'height:100%;overflow-y:auto;';
+
+  // Inject CSS
+  var styleEl = document.createElement('style');
+  if (typeof renderHistoryReviewCSS === 'function') {
+    styleEl.textContent = renderHistoryReviewCSS();
+  }
+  container.appendChild(styleEl);
+
+  var contentDiv = document.createElement('div');
+  contentDiv.id = 'history-review-unified';
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px;color:#64748b;">' +
+    '<div style="font-size:32px;margin-bottom:12px;">--</div>' +
+    '<div style="font-size:15px;">正在加载历史复盘数据...</div>' +
+    '</div>';
+  container.appendChild(contentDiv);
+  $contentArea.appendChild(container);
+
+  // Fetch full report from history engine
+  setTimeout(function() { loadHistoryReviewUnified(); }, 100);
 }
 
-function loadHistoryReviewSection() {
-  var container = document.getElementById('history-review-container');
+function loadHistoryReviewUnified() {
+  var container = document.getElementById('history-review-unified');
   if (!container) return;
 
-  // Load knowledge base + summary dates in parallel
+  // Try fetching full report, patterns, and verification in parallel
   Promise.all([
-    fetch('/api/knowledge/summary').then(function(r) { return r.json(); }).catch(function() { return null; }),
-    fetch('/api/summary-dates').then(function(r) { return r.json(); }).catch(function() { return null; }),
-    fetch('/api/knowledge/factor-combos').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/history/report?mode=full').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/history/patterns').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/history/verification-history').then(function(r) { return r.json(); }).catch(function() { return null; }),
   ]).then(function(results) {
-    var kb = results[0];
-    var summaryDates = results[1];
-    var combos = results[2];
+    var report = results[0] || {};
+    var patterns = results[1] || {};
+    var verif = results[2] || {};
 
-    if (!kb || !kb.ok || !summaryDates || !summaryDates.ok) {
-      container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">📋</div>' +
-        '<div class="lock-title">历史复盘数据暂不可用</div>' +
-        '<div class="lock-desc">需要至少一个交易日的复盘数据。请等待今日盘后总结生成。</div>' +
+    // Merge data
+    var data = report;
+    if (patterns.ok) {
+      data.factorCombos = patterns.factorCombos || null;
+      data.sectorFactorEffects = patterns.sectorFactorEffects || null;
+      data.discoveries = patterns.discoveries || data.discoveries || [];
+    }
+    if (verif.ok) {
+      data.verificationHistory = verif;
+    }
+
+    if (!data.ok && !patterns.ok) {
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+        '<div style="font-size:48px;margin-bottom:16px;">--</div>' +
+        '<div style="font-size:15px;">历史复盘引擎尚未启动</div>' +
+        '<div style="font-size:12px;margin-top:8px;">每日盘后自动运行，周末深度分析在周六 10:30 启动</div>' +
         '</div>';
       return;
     }
 
-    container.innerHTML = renderHistoryReviewFull(kb, summaryDates.dates || [], combos);
+    if (typeof renderHistoryReviewDashboard === 'function') {
+      var html = renderHistoryReviewDashboard(data);
+      container.innerHTML = html;
+      // Draw canvases after DOM update
+      setTimeout(function() {
+        if (typeof drawHistoryReviewCanvases === 'function') {
+          drawHistoryReviewCanvases();
+        }
+      }, 150);
+    } else {
+      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">模板未加载 — 请刷新页面</div>';
+    }
   });
-}
-
-function renderHistoryReviewFull(kb, dates, combos) {
-  // Sort dates chronologically
-  var sortedDates = dates.slice().sort();
-  var today = new Date().toISOString().slice(0, 10);
-
-  var html = '';
-  html += '<h2 style="font-size:20px;color:#1e293b;margin:0 0 4px;">📋 历史复盘</h2>';
-  html += '<p style="font-size:12px;color:#94a3b8;margin:0 0 20px;">交易日回顾 · 因子表现追踪 · 历史模式匹配 · 盘后总结归档</p>';
-
-  // Overview
-  html += '<div style="background:linear-gradient(135deg,#1e293b,#334155);border-radius:10px;padding:20px;margin-bottom:16px;color:#fff;">';
-  html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:16px;text-align:center;">';
-  html += '<div><div style="font-size:28px;font-weight:700;">' + (dates.length || 0) + '</div><div style="font-size:11px;color:#94a3b8;">复盘天数</div></div>';
-  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker ? kb.factorTracker.factors.length : 0) + '</div><div style="font-size:11px;color:#94a3b8;">追踪因子</div></div>';
-  html += '<div><div style="font-size:28px;font-weight:700;">' + (kb.factorTracker ? kb.factorTracker.totalTriggers : 0) + '</div><div style="font-size:11px;color:#94a3b8;">累计触发</div></div>';
-  html += '<div><div style="font-size:28px;font-weight:700;">' + new Date(kb.lastUpdated).toLocaleDateString('zh-CN') + '</div><div style="font-size:11px;color:#94a3b8;">最后更新</div></div>';
-  html += '</div></div>';
-
-  // Factor combo patterns
-  if (combos && combos.ok && combos.combos && combos.combos.length > 0) {
-    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔗 因子组合模式</h3>';
-    html += '<div style="overflow-x:auto;">';
-    html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-    html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
-    html += '<th style="padding:8px;color:#64748b;">组合</th><th style="padding:8px;color:#64748b;text-align:right;">命中率</th><th style="padding:8px;color:#64748b;text-align:right;">样本量</th><th style="padding:8px;color:#64748b;text-align:center;">置信度</th><th style="padding:8px;color:#64748b;">最近日期</th></tr></thead>';
-    html += '<tbody>';
-    for (var i = 0; i < combos.combos.length; i++) {
-      var c = combos.combos[i];
-      var confColor = c.confidence === 'high' ? '#16a34a' : c.confidence === 'medium' ? '#b8942c' : '#94a3b8';
-      var confBg = c.confidence === 'high' ? '#f0fdf4' : c.confidence === 'medium' ? '#fef9e7' : '#f8fafc';
-      html += '<tr style="border-bottom:1px solid #f1f5f9;">';
-      html += '<td style="padding:8px;font-weight:600;font-family:monospace;">' + c.combo + '</td>';
-      html += '<td style="padding:8px;text-align:right;font-weight:600;">' + Math.round(c.hitRate * 100) + '%</td>';
-      html += '<td style="padding:8px;text-align:right;">' + c.sampleSize + '</td>';
-      html += '<td style="padding:8px;text-align:center;"><span style="padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600;color:' + confColor + ';background:' + confBg + ';">' + (c.confidence === 'high' ? '高' : c.confidence === 'medium' ? '中' : '低') + '</span></td>';
-      html += '<td style="padding:8px;font-size:11px;color:#94a3b8;">' + (c.recentDates || []).join(', ') + '</td>';
-      html += '</tr>';
-    }
-    html += '</tbody></table></div></div>';
-  }
-
-  // Date list — trading day archive
-  if (dates.length > 0) {
-    html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📅 交易日复盘归档</h3>';
-    html += '<div style="display:flex;flex-wrap:wrap;gap:8px;">';
-    for (var di = 0; di < sortedDates.length; di++) {
-      var date = sortedDates[di];
-      var isTodayDate = date === today;
-      var dateStyle = isTodayDate
-        ? 'padding:6px 14px;border-radius:16px;font-size:12px;font-weight:600;background:var(--accent);color:#fff;cursor:pointer;'
-        : 'padding:6px 14px;border-radius:16px;font-size:12px;background:#f8fafc;color:#64748b;border:1px solid #e5e7eb;cursor:pointer;transition:all 0.15s;';
-      html += '<span style="' + dateStyle + '" onclick="onDateClick(\'' + date + '\')" onmouseover="if(!this.classList.contains(\'today-chip\')){this.style.borderColor=\'var(--accent)\';this.style.color=\'var(--accent-dark)\';}" onmouseout="if(!this.classList.contains(\'today-chip\')){this.style.borderColor=\'#e5e7eb\';this.style.color=\'#64748b\';}">' + date + (isTodayDate ? ' (今天)' : '') + '</span>';
-    }
-    html += '</div>';
-    html += '<p style="font-size:11px;color:#cbd5e1;margin-top:12px;">点击日期可跳转查看对应交易日的模拟交易与报告数据</p>';
-    html += '</div>';
-  }
-
-  // Factor tracking from knowledge base
-  if (kb.factorTracker && kb.factorTracker.factors) {
-    var factors = kb.factorTracker.factors.slice();
-    factors.sort(function(a, b) { return b.triggerCount - a.triggerCount; });
-    var activeFactors = factors.filter(function(f) { return f.triggerCount > 0; });
-
-    if (activeFactors.length > 0) {
-      html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-      html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔥 因子表现排行</h3>';
-      html += '<div style="overflow-x:auto;">';
-      html += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-      html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e5eb;">';
-      html += '<th style="padding:8px;color:#64748b;">因子</th><th style="padding:8px;color:#64748b;">名称</th><th style="padding:8px;color:#64748b;text-align:right;">触发次数</th><th style="padding:8px;color:#64748b;text-align:right;">Top日数</th><th style="padding:8px;color:#64748b;text-align:right;">平均贡献</th><th style="padding:8px;color:#64748b;">最近触发</th></tr></thead>';
-      html += '<tbody>';
-      for (var fi = 0; fi < activeFactors.length; fi++) {
-        var f = activeFactors[fi];
-        html += '<tr style="border-bottom:1px solid #f1f5f9;">';
-        html += '<td style="padding:8px;font-weight:600;">' + f.id + '</td>';
-        html += '<td style="padding:8px;">' + f.name + '</td>';
-        html += '<td style="padding:8px;text-align:right;font-weight:600;">' + f.triggerCount + '</td>';
-        html += '<td style="padding:8px;text-align:right;">' + (f.daysTopSignal || 0) + '</td>';
-        html += '<td style="padding:8px;text-align:right;">' + (f.avgContribution > 0 ? f.avgContribution + '%' : '--') + '</td>';
-        html += '<td style="padding:8px;font-size:11px;color:#94a3b8;">' + (f.lastTriggered || '--') + '</td>';
-        html += '</tr>';
-      }
-      html += '</tbody></table></div></div>';
-    }
-  }
-
-  // Learning insights
-  html += '<div style="background:#fef9e7;border-radius:8px;padding:16px;border:1px solid #f59e0b;">';
-  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">💡 复盘洞察</h3>';
-  html += '<ul style="font-size:12px;color:#64748b;line-height:1.9;margin:0;padding-left:18px;">';
-  html += '<li>系统已追踪 <b>' + dates.length + ' 个交易日</b>的复盘数据</li>';
-  if (combos && combos.ok && combos.combos) {
-    var highConfCombos = combos.combos.filter(function(c) { return c.confidence === 'high'; });
-    var medConfCombos = combos.combos.filter(function(c) { return c.confidence === 'medium'; });
-    html += '<li>因子组合模式: <b>' + highConfCombos.length + ' 个高置信度</b>，' + medConfCombos.length + ' 个中置信度</li>';
-  }
-  html += '<li>随着交易日累积，历史模式匹配将逐步提升预测准确率</li>';
-  html += '<li>点击上方日期标签可跳转到对应交易日的完整数据</li>';
-  html += '</ul></div>';
-
-  return html;
 }
 
 // ============ Placeholder Helper ============
@@ -1400,15 +1328,15 @@ function renderPlaceholder(label, phase) {
   if (phase === 'generating') html += ' style="border:2px dashed #f59e0b;"';
   html += '">';
   if (phase === 'trading') {
-    html += '<div class="lock-icon">⏳</div>';
+    html += '<div class="lock-icon"></div>';
     html += '<div class="lock-title">' + label + ' — 暂不可用</div>';
     html += '<div class="lock-desc">市场交易中，AI 量化交易员正在实时监控。盘后总结报告将于每日16:00自动生成，届时可在此查看完整内容。</div>';
   } else if (phase === 'generating') {
-    html += '<div class="lock-icon">🔄</div>';
+    html += '<div class="lock-icon"></div>';
     html += '<div class="lock-title">正在分析并生成中...</div>';
     html += '<div class="lock-desc">市场已收盘，AI 正在汇总今日数据，预计16:00前完成，请稍后再来查看。</div>';
   } else if (phase === 'closed') {
-    html += '<div class="lock-icon">🔒</div>';
+    html += '<div class="lock-icon"></div>';
     html += '<div class="lock-title">' + label + ' — 休市</div>';
     html += '<div class="lock-desc">今日非交易日，请在下一个交易日16:00后查看盘后总结。</div>';
   }
@@ -1432,7 +1360,7 @@ function renderUSMarketDirect() {
   contentDiv.className = 'report-preview';
   contentDiv.id = 'us-market-content';
   contentDiv.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;">🌍</div>' +
+    '<div style="font-size:32px;margin-bottom:12px;"></div>' +
     '<div style="font-size:16px;font-weight:600;">正在加载海外市场数据...</div>' +
     '</div>';
   container.appendChild(contentDiv);
@@ -1465,7 +1393,7 @@ function loadUSMarketIntoDOM() {
           });
       } else {
         container.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
-          '<div style="font-size:48px;margin-bottom:16px;">🌍</div>' +
+          '<div style="font-size:48px;margin-bottom:16px;"></div>' +
           '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">海外市场数据暂不可用</div>' +
           '<div style="font-size:13px;">美股实时数据将在每日晚间（北京时间21:30后）自动采集</div>' +
           '<div style="font-size:12px;color:#94a3b8;margin-top:8px;">服务器正在启动数据采集，请稍后再试</div>' +
@@ -1473,7 +1401,7 @@ function loadUSMarketIntoDOM() {
       }
     }).catch(function() {
       container.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
-        '<div style="font-size:48px;margin-bottom:16px;">🌍</div>' +
+        '<div style="font-size:48px;margin-bottom:16px;"></div>' +
         '<div style="font-size:16px;font-weight:600;">无法连接服务器</div>' +
         '</div>';
     });
@@ -1489,7 +1417,7 @@ function renderPredictDashboard() {
   contentDiv.className = 'predict-dashboard-container';
   contentDiv.id = 'predict-content';
   contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;">&#x1F9E0;</div>' +
+    '<div style="font-size:32px;margin-bottom:12px;"></div>' +
     '<div style="font-size:16px;font-weight:600;">正在加载预测引擎数据...</div>' +
     '</div>';
   container.appendChild(contentDiv);
@@ -1502,16 +1430,25 @@ function loadPredictIntoDOM() {
   var container = document.getElementById('predict-content');
   if (!container) return;
 
+  // Fetch all 5 prediction APIs in parallel (including pipeline last-result for ranking)
   Promise.all([
     fetch('/api/predict/factor-performance').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/dynamic-weights').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/sector-leadlag').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/cycle-factor-matrix').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/pipeline/last-result').then(function(r) { return r.json(); }).catch(function() { return null; }),
   ]).then(function(results) {
-    var factorPerf = results[0];
-    var dynamicWeights = results[1];
-    var sectorLeadLag = results[2];
-    var cycleFactorMatrix = results[3];
+    var factorPerfRaw = results[0];
+    var dynamicWeightsRaw = results[1];
+    var sectorLeadLagRaw = results[2];
+    var cycleFactorMatrixRaw = results[3];
+    var lastResultRaw = results[4];
+
+    // Build fallback objects so sub-renderers always receive structured data
+    var factorPerf = (factorPerfRaw && factorPerfRaw.ok) ? factorPerfRaw : { ok: false, available: false, factors: [], summary: {} };
+    var dynamicWeights = (dynamicWeightsRaw && dynamicWeightsRaw.ok) ? dynamicWeightsRaw : { ok: false, weights: {}, _source: 'config' };
+    var sectorLeadLag = (sectorLeadLagRaw && sectorLeadLagRaw.ok) ? sectorLeadLagRaw : { ok: false, available: false };
+    var cycleFactorMatrix = (cycleFactorMatrixRaw && cycleFactorMatrixRaw.ok) ? cycleFactorMatrixRaw : { ok: false, heatmap: null, preferences: {} };
 
     // Mark current cycle in heatmap
     if (cycleFactorMatrix && cycleFactorMatrix.heatmap && cycleFactorMatrix.heatmap.cycles) {
@@ -1521,18 +1458,43 @@ function loadPredictIntoDOM() {
       });
     }
 
-    // Build ranking data from factorPerf context
+    // Build ranking from pipeline last-result (top5 stocks) — not from factorPerf
     var ranking = null;
-    if (factorPerf && factorPerf.ok) {
-      ranking = { items: factorPerf.factors, minExpectedReturn: 0 };
+    if (lastResultRaw && lastResultRaw.ok && lastResultRaw.top5 && lastResultRaw.top5.length > 0) {
+      // Pre-build expected return lookup from server-side computation (v2.8)
+      var erLookup = {};
+      if (lastResultRaw.expectedReturns && lastResultRaw.expectedReturns.length > 0) {
+        for (var ei = 0; ei < lastResultRaw.expectedReturns.length; ei++) {
+          var er = lastResultRaw.expectedReturns[ei];
+          erLookup[er.code] = er;
+        }
+      }
+      ranking = [];
+      for (var i = 0; i < lastResultRaw.top5.length; i++) {
+        var stock = lastResultRaw.top5[i];
+        var erData = erLookup[stock.code];
+        ranking.push({
+          code: stock.code,
+          name: stock.name || stock.code,
+          rank: i + 1,
+          score: stock.score,
+          rating: stock.rating,
+          signals: stock.signals || [],
+          prediction: erData ? {
+            expectedReturn: erData.expectedReturn,
+            confidence: erData.confidence,
+            label: erData.label,
+          } : null,
+        });
+      }
     }
 
     var data = {
       ranking: ranking,
-      factorPerf: factorPerf && factorPerf.ok ? factorPerf : null,
-      dynamicWeights: dynamicWeights && dynamicWeights.ok ? dynamicWeights : null,
-      sectorLeadLag: sectorLeadLag && sectorLeadLag.ok ? sectorLeadLag : null,
-      cycleFactorMatrix: cycleFactorMatrix && cycleFactorMatrix.ok ? cycleFactorMatrix : null,
+      factorPerf: factorPerf,
+      dynamicWeights: dynamicWeights,
+      sectorLeadLag: sectorLeadLag,
+      cycleFactorMatrix: cycleFactorMatrix,
     };
 
     container.innerHTML = renderPredictionDashboard.render(data);
@@ -1554,7 +1516,7 @@ function renderCrossMarketDirect() {
   contentDiv.className = 'cm-dashboard';
   contentDiv.id = 'cross-market-content';
   contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;">&#x1F52E;</div>' +
+    '<div style="font-size:32px;margin-bottom:12px;"></div>' +
     '<div style="font-size:16px;font-weight:600;">正在加载跨市场分析...</div>' +
     '</div>';
   container.appendChild(contentDiv);
@@ -1581,253 +1543,30 @@ function loadCrossMarketIntoDOM() {
       }
       var html = renderCrossMarket(null, 'app', analysis);
       container.innerHTML = html;
+      // Execute inline scripts (Canvas gauges won't render via innerHTML alone)
+      execInlineScripts(container);
     } else {
       var cycleHTML = '';
       if (cycleData && cycleData.ok) {
         cycleHTML = renderMarketCycleDashboard(cycleData);
       }
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-        '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
+        '<div style="font-size:48px;margin-bottom:16px;"></div>' +
         '<div style="font-size:15px;">' + escHtml(analysis.message || '分析数据暂不可用') + '</div>' +
         '</div>' + cycleHTML;
+      execInlineScripts(container);
     }
   }).catch(function() {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-        '<div style="font-size:48px;margin-bottom:16px;">&#x1F52E;</div>' +
+        '<div style="font-size:48px;margin-bottom:16px;"></div>' +
         '<div style="font-size:15px;">无法连接服务器</div>' +
         '</div>';
     });
 }
 
-// ============ Weekend Analysis Section ============
-function renderWeekendAnalysisDirect() {
-  $contentArea.innerHTML = '';
-  var container = document.createElement('div');
-  container.style.cssText = 'height:100%;overflow-y:auto;';
-
-  var isWeekend = (new Date().getDay() === 0 || new Date().getDay() === 6);
-
-  var styleEl = document.createElement('style');
-  if (typeof renderWeekendAnalysisCSS === 'function') {
-    styleEl.textContent = renderWeekendAnalysisCSS();
-  }
-  container.appendChild(styleEl);
-
-  // Also inject verification CSS
-  if (typeof renderWeekendVerificationCSS === 'function') {
-    var verifStyleEl = document.createElement('style');
-    verifStyleEl.textContent = renderWeekendVerificationCSS();
-    container.appendChild(verifStyleEl);
-  }
-
-  var contentDiv = document.createElement('div');
-  contentDiv.className = 'wa-dashboard';
-  contentDiv.id = 'weekend-analysis-content';
-  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;">🔬</div>' +
-    '<div style="font-size:16px;font-weight:600;">正在加载深度分析...</div>' +
-    '</div>';
-  container.appendChild(contentDiv);
-
-  // On weekdays, show a subtle banner above the content
-  if (!isWeekend) {
-    var banner = document.createElement('div');
-    banner.style.cssText = 'text-align:center;padding:10px 16px;background:#fef3c7;color:#92400e;' +
-      'font-size:12px;border-radius:8px;margin:12px 16px 0 16px;';
-    banner.textContent = '⚠️ 当前非周末，以下为上次周末分析结果，仅供参考。新分析将在周六自动运行。';
-    contentDiv.insertBefore(banner, contentDiv.firstChild);
-  }
-
-  $contentArea.appendChild(container);
-
-  setTimeout(function() { loadWeekendAnalysisIntoDOM(); }, 100);
-}
-
-function loadWeekendAnalysisIntoDOM() {
-  var container = document.getElementById('weekend-analysis-content');
-  if (!container) return;
-
-  fetch('/api/weekend-analysis/report')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.ok) {
-        if (typeof renderWeekendAnalysis === 'function') {
-          var html = renderWeekendAnalysis(data, 'app', null);
-          container.innerHTML = html;
-          // Render sparkline canvases after DOM is updated
-          setTimeout(function() { renderWeekendSparklines(); }, 100);
-
-          // Load verification data for this weekend
-          var generatedAt = data.generatedAt;
-          if (generatedAt) {
-            var d = new Date(generatedAt);
-            // Adjust to Saturday of that weekend
-            var dayOfWeek = d.getDay();
-            if (dayOfWeek === 0) d.setDate(d.getDate() - 1); // Sunday → Saturday
-            else if (dayOfWeek >= 1 && dayOfWeek <= 5) d.setDate(d.getDate() - dayOfWeek - 1);
-            var verifyWeek = d.toISOString().slice(0, 10);
-
-            fetch('/api/weekend-analysis/verification?week=' + verifyWeek)
-              .then(function(r) { return r.json(); })
-              .then(function(vData) {
-                if (vData.ok && typeof renderWeekendVerification === 'function') {
-                  var vHtml = renderWeekendVerification(vData);
-                  container.insertAdjacentHTML('beforeend', vHtml);
-                  _loadWeekendTrendBars(container);
-                }
-              }).catch(function() { /* verification is optional */ });
-          }
-
-          // Load weekend context (verification → this week's parameter adjustments)
-          loadWeekendFeedbackChain(container);
-        } else {
-          container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-            '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
-            '<div style="font-size:15px;">模板未加载</div></div>';
-        }
-      } else {
-        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-          '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
-          '<div style="font-size:15px;">' + escHtml(data.message || '周末分析引擎尚未启动') + '</div>' +
-          '<div style="font-size:12px;color:#94a3b8;margin-top:8px;">分析将在周末自动运行</div>' +
-          '</div>';
-      }
-    }).catch(function() {
-      container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
-        '<div style="font-size:48px;margin-bottom:16px;">🔬</div>' +
-        '<div style="font-size:15px;">无法连接服务器</div></div>';
-    });
-}
-
-// ============ Weekend Verification → Feedback Chain ============
-function loadWeekendFeedbackChain(container) {
-  fetch('/api/weekend-analysis/context')
-    .then(function(r) { return r.json(); })
-    .then(function(ctx) {
-      if (!ctx.ok || !ctx.verificationContext) return;
-
-      var vc = ctx.verificationContext;
-      var html = '<div style="margin-top:16px;padding:14px 18px;background:rgba(167,139,250,0.04);border:1px solid rgba(167,139,250,0.15);border-radius:8px;">';
-      html += '<div style="font-size:12px;font-weight:600;color:#7c3aed;margin-bottom:10px;">🔗 验证反馈 → 下周参数调整</div>';
-
-      var adjustments = [
-        { label: '危机门槛', before: '50分', after: vc.crisisThreshold || 50, unit: '分', up: (vc.crisisThreshold || 50) > 50 },
-        { label: '相似度权重', before: '默认', after: (vc.similarityWeight != null ? (vc.similarityWeight * 100).toFixed(0) + '%' : '默认'), unit: '', up: (vc.similarityWeight || 0.5) > 0.5 },
-        { label: '板块偏好', before: '正常', after: vc.sectorBias || '正常', unit: '', up: vc.sectorBias === 'enhanced' },
-        { label: '仓位建议', before: '正常', after: vc.positionAdvice || '正常', unit: '', up: vc.positionAdvice === 'aggressive' },
-        { label: '板块权重', before: '1.0x', after: vc.sectorWeight != null ? vc.sectorWeight.toFixed(1) + 'x' : '1.0x', unit: '', up: (vc.sectorWeight || 1.0) > 1.0 },
-      ];
-
-      for (var i = 0; i < adjustments.length; i++) {
-        var adj = adjustments[i];
-        var arrow = adj.up ? ' ↑' : (adj.after !== adj.before ? ' ↓' : ' →');
-        var arrowColor = adj.up ? '#dc2626' : (adj.after !== adj.before ? '#16a34a' : '#94a3b8');
-        html += '<div style="display:flex;align-items:center;gap:8px;padding:4px 0;font-size:11px;">';
-        html += '<span style="color:#64748b;min-width:64px;">' + adj.label + '</span>';
-        html += '<span style="color:#94a3b8;">' + adj.before + ' → </span>';
-        html += '<span style="color:' + (adj.after !== adj.before ? '#1e293b' : '#94a3b8') + ';font-weight:' + (adj.after !== adj.before ? '600' : 'normal') + ';">' + adj.after + adj.unit + '</span>';
-        html += '<span style="color:' + arrowColor + ';">' + arrow + '</span>';
-        html += '</div>';
-      }
-
-      html += '<div style="font-size:10px;color:#94a3b8;margin-top:6px;">基于上周验证报告自动调整 · 有效期至周一</div>';
-      html += '</div>';
-
-      container.insertAdjacentHTML('beforeend', html);
-    })
-    .catch(function() { /* context not available */ });
-}
-
-function _loadWeekendTrendBars(container) {
-  fetch('/api/weekend-analysis/verification-history')
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!data.ok || !data.history || data.history.length < 2) return;
-      var trendDiv = document.getElementById('wv-weekly-trend');
-      if (!trendDiv) {
-        // Create trend panel after the last wv-panel
-        var panels = container.querySelectorAll('.wv-panel');
-        var lastPanel = panels.length > 0 ? panels[panels.length - 1] : null;
-        var html = '<div class="wv-panel"><div class="wv-panel-header" onclick="toggleVerificationPanel(this)">' +
-          '<span class="wv-panel-arrow">▶</span>' +
-          '<span class="wv-panel-title">多周准确度趋势</span>' +
-          '<span style="font-size:12px;color:#94a3b8;">' + data.history.length + ' 周</span></div>' +
-          '<div class="wv-panel-body" id="wv-weekly-trend">';
-
-        // Build bar chart
-        var maxScore = 0;
-        for (var i = 0; i < data.history.length; i++) {
-          if (data.history[i].overallScore > maxScore) maxScore = data.history[i].overallScore;
-        }
-        if (maxScore < 50) maxScore = 50;
-        if (maxScore > 100) maxScore = 100;
-
-        html += '<div class="wv-trend-bars">';
-        for (var j = 0; j < data.history.length; j++) {
-          var entry = data.history[j];
-          var score = entry.overallScore || 0;
-          var grade = entry.overallGrade || 'C';
-          var barH = Math.max(4, (score / maxScore) * 120);
-          var weekendLabel = (entry.weekend || '').slice(5); // MM-DD
-          html += '<div class="wv-trend-bar-wrap">';
-          html += '<div class="wv-trend-bar grade-' + grade + '" style="height:' + barH.toFixed(0) + 'px;" title="' + weekendLabel + ': ' + score.toFixed(0) + '分 (' + grade + ')"></div>';
-          html += '<div class="wv-trend-bar-score">' + score.toFixed(0) + '</div>';
-          html += '<div class="wv-trend-bar-label">' + weekendLabel + '</div>';
-          html += '</div>';
-        }
-        html += '</div></div></div>';
-
-        if (lastPanel) {
-          lastPanel.insertAdjacentHTML('afterend', html);
-        } else {
-          container.insertAdjacentHTML('beforeend', html);
-        }
-      }
-    }).catch(function() { /* optional */ });
-}
-
-function renderWeekendSparklines() {
-  // Render mini sparkline charts for similarity cards
-  var canvases = document.querySelectorAll('.wa-sim-canvas');
-  for (var i = 0; i < canvases.length; i++) {
-    var canvas = canvases[i];
-    var valuesStr = canvas.getAttribute('data-values');
-    if (!valuesStr) continue;
-    var values = valuesStr.split(',').map(Number);
-    if (values.length === 0) continue;
-
-    var ctx = canvas.getContext('2d');
-    var w = canvas.offsetWidth;
-    var h = canvas.offsetHeight;
-    canvas.width = w * (window.devicePixelRatio || 1);
-    canvas.height = h * (window.devicePixelRatio || 1);
-    ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-
-    var min = Math.min.apply(null, values.concat([0]));
-    var max = Math.max.apply(null, values.concat([0]));
-    var range = max - min || 1;
-
-    ctx.strokeStyle = values[values.length - 1] >= 0 ? '#059669' : '#dc2626';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    for (var j = 0; j < values.length; j++) {
-      var x = (j / (values.length - 1)) * w;
-      var y = h - ((values[j] - min) / range) * h * 0.8 - h * 0.1;
-      if (j === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-
-    // Zero line
-    var zeroY = h - ((0 - min) / range) * h * 0.8 - h * 0.1;
-    ctx.strokeStyle = '#e2e8f0';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, zeroY);
-    ctx.lineTo(w, zeroY);
-    ctx.stroke();
-  }
-}
+// ============ Weekend Analysis Section (DEPRECATED v2.9) ============
+// All weekend analysis functionality merged into renderHistoryReviewUnified()
+function renderWeekendAnalysisDirect() { renderHistoryReviewUnified(); }
 
 // ============ Daily Summary Loading ============
 function loadDailySummaryIntoDOM() {
@@ -1842,7 +1581,7 @@ function loadDailySummaryIntoDOM() {
     .then(function(data) {
       if (!data.ok) {
         container.innerHTML = '<div class="unavailable-placeholder">' +
-          '<div class="lock-icon">📊</div>' +
+          '<div class="lock-icon"></div>' +
           '<div class="lock-title">今日总结尚未生成</div>' +
           '<div class="lock-desc">' + (data.message || '请于16:00后查看') + '</div>' +
           '</div>';
@@ -1852,7 +1591,7 @@ function loadDailySummaryIntoDOM() {
     })
     .catch(function() {
       container.innerHTML = '<div class="unavailable-placeholder">' +
-        '<div class="lock-icon">⚠️</div>' +
+        '<div class="lock-icon">[!] </div>' +
         '<div class="lock-title">加载失败</div>' +
         '<div class="lock-desc">无法连接到服务器，请检查 Mosaic Server 是否运行。</div>' +
         '</div>';
@@ -1864,14 +1603,14 @@ function renderDailySummary(s) {
 
   // Title
   html += '<div style="text-align:center;margin-bottom:24px;">';
-  html += '<h2 style="font-size:22px;color:#1e293b;margin:0 0 4px;">📋 ' + (s.date || '') + ' 盘后总结报告</h2>';
+  html += '<h2 style="font-size:22px;color:#1e293b;margin:0 0 4px;"> ' + (s.date || '') + ' 盘后总结报告</h2>';
   html += '<p style="font-size:12px;color:#94a3b8;">生成时间: ' + new Date(s.generatedAt).toTimeString().slice(0,8) + ' · Mosaic AI 量化引擎自动生成</p>';
   html += '</div>';
 
   // Market Overview
   if (s.market && s.market.indices && s.market.indices.length > 0) {
     html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📈 大盘行情</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 大盘行情</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;">';
     for (var i = 0; i < s.market.indices.length; i++) {
       var idx = s.market.indices[i];
@@ -1892,7 +1631,7 @@ function renderDailySummary(s) {
     var retColor = p.totalReturn >= 0 ? UP_COLOR : DOWN_COLOR;
     var alphaColor = p.alpha >= 0 ? UP_COLOR : DOWN_COLOR;
     html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">💰 模拟交易总结</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 模拟交易总结</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">总资产</div><div style="font-size:18px;font-weight:700;">¥' + formatMoneyCN(p.totalValue) + '</div></div>';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">总收益</div><div style="font-size:18px;font-weight:700;color:' + retColor + ';">' + (p.totalReturn >= 0 ? '+' : '') + p.totalReturn.toFixed(2) + '%</div></div>';
@@ -1923,14 +1662,14 @@ function renderDailySummary(s) {
   // Today's Trades
   if (s.todayTrades && s.todayTrades.length > 0) {
     html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📋 今日交易记录 (' + s.todayTrades.length + '笔)</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 今日交易记录 (' + s.todayTrades.length + '笔)</h3>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
     html += '<thead><tr style="background:#f8fafc;border-bottom:2px solid #b8942c;">';
     html += '<th style="padding:8px;">时间</th><th style="padding:8px;">操作</th><th style="padding:8px;">股票</th><th style="padding:8px;text-align:right;">价格</th><th style="padding:8px;text-align:right;">数量</th><th style="padding:8px;text-align:right;">金额</th><th style="padding:8px;">原因</th></tr></thead><tbody>';
     for (var k = 0; k < s.todayTrades.length; k++) {
       var tr = s.todayTrades[k];
       var isBuy = tr.action === 'buy';
-      var actionLabel = isBuy ? '🔴 买入' : '🟢 卖出';
+      var actionLabel = isBuy ? ' 买入' : ' 卖出';
       html += '<tr style="border-bottom:1px solid #f1f5f9;">';
       html += '<td style="padding:8px;font-size:11px;">' + (tr.date||'') + ' ' + (tr.time||'') + '</td>';
       html += '<td style="padding:8px;font-weight:600;color:' + (isBuy ? UP_COLOR : DOWN_COLOR) + ';">' + actionLabel + '</td>';
@@ -1948,12 +1687,12 @@ function renderDailySummary(s) {
   if (s.pipeline) {
     var pl = s.pipeline;
     html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">🔬 量化分析总结</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 量化分析总结</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;">';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">扫描类型</div><div style="font-size:16px;font-weight:600;">' + (pl.type === 'full' ? '全量扫描' : '盘中扫描') + '</div></div>';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">深度分析</div><div style="font-size:16px;font-weight:600;">' + (pl.analyzed || 0) + ' 只</div></div>';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">平均分</div><div style="font-size:16px;font-weight:600;">' + (pl.avgScore || 0) + '</div></div>';
-    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最高分</div><div style="font-size:16px;font-weight:600;color:#f59e0b;">' + (pl.maxScore || 0) + '</div></div>';
+    html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最高评级</div><div style="font-size:16px;font-weight:600;color:#f59e0b;">' + (pl.maxRating || pl.maxScore || '--') + '</div></div>';
     html += '</div>';
 
     if (pl.top5 && pl.top5.length > 0) {
@@ -1963,8 +1702,7 @@ function renderDailySummary(s) {
         html += '<div style="padding:4px 0;font-size:13px;border-bottom:1px solid #f1f5f9;">';
         html += '<span style="font-weight:600;color:#1e293b;">#' + (ti+1) + ' ' + escHtml(top.name) + '</span> ';
         html += '<span style="color:#94a3b8;">' + top.code + '</span> ';
-        html += '<span style="color:#f59e0b;font-weight:600;">' + top.score + '分</span> ';
-        html += '<span style="color:#94a3b8;">' + (top.rating || '') + '</span>';
+        html += (top.rating ? '<span class="cand-rating ' + top.rating + '" style="display:inline-block;font-size:10px;padding:1px 6px;border-radius:3px;font-weight:600;background:#dcfce7;color:#166534;">' + top.rating + '</span>' : '');
         html += '</div>';
       }
     }
@@ -1974,7 +1712,7 @@ function renderDailySummary(s) {
   // Stats
   if (s.stats) {
     html += '<div style="background:#fff;border-radius:8px;padding:16px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;">📊 账户统计</h3>';
+    html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 12px;"> 账户统计</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">胜率</div><div style="font-size:16px;font-weight:600;">' + (s.stats.winRate != null ? s.stats.winRate + '%' : '--') + '</div></div>';
     html += '<div style="text-align:center;"><div style="font-size:11px;color:#94a3b8;">最大回撤</div><div style="font-size:16px;font-weight:600;color:#dc2626;">' + (s.stats.maxDrawdown || 0).toFixed(2) + '%</div></div>';
@@ -1985,11 +1723,11 @@ function renderDailySummary(s) {
 
   // Activity summary
   html += '<div style="background:#fff;border-radius:8px;padding:16px;border:1px solid #e2e5eb;">';
-  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;">📡 今日活动</h3>';
+  html += '<h3 style="font-size:14px;color:#1e293b;margin:0 0 8px;"> 今日活动</h3>';
   html += '<div style="font-size:13px;color:#64748b;line-height:1.8;">';
-  html += '<div>🔍 量化扫描: <b>' + (s.scanCount || 0) + '</b> 次</div>';
-  html += '<div>💹 交易执行: <b>' + (s.tradeCount || 0) + '</b> 笔</div>';
-  html += '<div>📝 事件记录: <b>' + (s.eventCount || 0) + '</b> 条</div>';
+  html += '<div> 量化扫描: <b>' + (s.scanCount || 0) + '</b> 次</div>';
+  html += '<div> 交易执行: <b>' + (s.tradeCount || 0) + '</b> 笔</div>';
+  html += '<div> 事件记录: <b>' + (s.eventCount || 0) + '</b> 条</div>';
   html += '</div></div>';
 
   return html;
@@ -1999,7 +1737,7 @@ function renderDailySummary(s) {
 
 function renderHoldingsUnavailable(data, mode) {
   var html = '<div class="unavailable-placeholder">';
-  html += '<div class="lock-icon">🔒</div>';
+  html += '<div class="lock-icon"></div>';
   html += '<div class="lock-title">持仓分析 — 暂不可用</div>';
   html += '<div class="lock-desc">您当前的持仓策略是长期持有等待宇树科技上市后再清仓。持仓分析功能将在您准备进行下一步操作时重新开放。</div>';
   html += '</div>';
@@ -2022,47 +1760,6 @@ var _notifiedTradeIds = (function() {
 
 function _persistNotifiedTradeIds() {
   try { localStorage.setItem('_notifiedTradeIds', JSON.stringify(_notifiedTradeIds)); } catch (e) {}
-}
-
-function startCountdown() {
-  if (state.countdownInterval) clearInterval(state.countdownInterval);
-  state.countdownInterval = setInterval(tickCountdown, 1000);
-}
-
-function tickCountdown() {
-  if (!state.schedulerStatus || state.schedulerStatus.nextTickMs == null) return;
-
-  var ms = state.schedulerStatus.nextTickMs - 1000;
-  if (ms < 0) ms = 0;
-  state.schedulerStatus.nextTickMs = ms;
-
-  var sec = Math.round(ms / 1000);
-  state.countdownSec = sec;
-
-  // Update countdown in simfolio panel
-  var countdownEl = document.getElementById('sf-countdown-num');
-  if (countdownEl) {
-    countdownEl.textContent = sec;
-    if (sec <= 10) {
-      countdownEl.style.color = '#ef4444';
-    } else if (sec <= 30) {
-      countdownEl.style.color = '#f59e0b';
-    } else {
-      countdownEl.style.color = '#d4a843';
-    }
-  }
-
-  // Flash the countdown bar when close to tick
-  var bar = document.getElementById('sf-countdown-bar');
-  if (bar) {
-    var isActive = state.schedulerStatus.state === 'morning_session' || state.schedulerStatus.state === 'afternoon_session';
-    if (sec <= 10 && isActive) {
-      bar.classList.add('flash-warn');
-    } else {
-      bar.classList.remove('flash-warn');
-    }
-  }
-
 }
 
 // ============ Market Sentiment Indicators ============
@@ -2129,7 +1826,6 @@ function startLivePoll() {
 function stopLivePoll() {
   state.liveMode = false;
   if (_livePollTimer) { clearTimeout(_livePollTimer); _livePollTimer = null; }
-  if (state.countdownInterval) { clearInterval(state.countdownInterval); state.countdownInterval = null; }
 }
 
 function pollLiveStatus() {
@@ -2237,16 +1933,16 @@ function updateLiveStatusDisplay(sched) {
   if (!sched) return;
 
   var stateLabels = {
-    'closed': '⚫ 休市',
-    'pre_market': '🌅 盘前准备',
-    'morning_session': '🟢 早盘交易中',
-    'lunch_break': '🍱 午休',
-    'afternoon_session': '🟢 午盘交易中',
-    'post_market': '🌇 盘后总结',
+    'closed': ' 休市',
+    'pre_market': ' 盘前准备',
+    'morning_session': ' 早盘交易中',
+    'lunch_break': ' 午休',
+    'afternoon_session': ' 午盘交易中',
+    'post_market': ' 盘后总结',
   };
 
   var label = stateLabels[sched.state] || sched.state;
-  var statusText = '📡 ' + label;
+  var statusText = ' ' + label;
 
   if (sched.nextTickMs != null && sched.nextTickMs > 0) {
     var secs = Math.round(sched.nextTickMs / 1000);
@@ -2259,7 +1955,7 @@ function updateLiveStatusDisplay(sched) {
       if (sched.positionAlerts[i].priority === 'critical') criticalCount++;
     }
     if (criticalCount > 0) {
-      statusText += ' · ⚠️ ' + criticalCount + '个股触发止损';
+      statusText += ' · [!]  ' + criticalCount + '个股触发止损';
     }
   }
 
@@ -2506,7 +2202,7 @@ function loadReportByMeta(meta) {
     $contentArea.innerHTML = '<iframe src="' + meta.sourceFile + '" style="width:100%;height:100%;border:none;min-height:80vh;"></iframe>';
     updateStatus('已加载 ' + meta.title + ' (' + meta.date + ')  [原始报告]');
   } else if (meta.viewMode === 'pdf-only') {
-    $contentArea.innerHTML = '<div class="content-placeholder"><p style="font-size:48px;margin-bottom:16px;">📄</p><p style="font-size:16px;font-weight:600;">' + meta.title + '</p><p style="font-size:13px;color:#94a3b8;">此报告仅存有 PDF 版本，请在文件管理器中打开</p></div>';
+    $contentArea.innerHTML = '<div class="content-placeholder"><p style="font-size:48px;margin-bottom:16px;"></p><p style="font-size:16px;font-weight:600;">' + meta.title + '</p><p style="font-size:13px;color:#94a3b8;">此报告仅存有 PDF 版本，请在文件管理器中打开</p></div>';
     updateStatus(meta.title + ' (' + meta.date + ') — 仅PDF，无预览');
   }
 }
@@ -2566,7 +2262,16 @@ function renderCurrentSection() {
     return;
   }
   if (sectionId === 'weekendAnalysis') {
-    renderWeekendAnalysisDirect();
+    renderHistoryReviewUnified();
+    return;
+  }
+  // Prediction engine + History Review: render directly (async DOM manipulation)
+  if (sectionId === 'predict') {
+    renderPredictDashboard();
+    return;
+  }
+  if (sectionId === 'historyReview') {
+    renderHistoryReviewUnified();
     return;
   }
 
@@ -2673,10 +2378,7 @@ function renderSimfolioDirectDOM() {
 
   $contentArea.appendChild(container);
 
-  // Initialize countdown display
-  if (state.schedulerStatus) {
-    tickCountdown();
-  }
+
 
   // Refresh simfolio data in background (only for today, not historical)
   if (!sfData || !sfData.isHistorical) {
@@ -2748,22 +2450,22 @@ function showSendPdfModal(dateStr, safeTitle, emailCmd, pdfPath, emailSubject, e
   var modal = document.createElement('div');
   modal.style.cssText = 'background:#fff;border-radius:12px;padding:28px 32px;max-width:620px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;';
 
-  modal.innerHTML = '<h3 style="margin:0 0 8px;font-size:18px;">📧 发送PDF至邮箱</h3>' +
+  modal.innerHTML = '<h3 style="margin:0 0 8px;font-size:18px;"> 发送PDF至邮箱</h3>' +
     '<p style="margin:0 0 16px;font-size:13px;color:#64748b;">PDF打印对话框已打开，请<b>选择"另存为PDF"</b>保存到以下路径，然后复制命令到终端发送邮件。</p>' +
     '<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 16px;margin-bottom:10px;">' +
-    '<div style="font-size:11px;color:#64748b;margin-bottom:4px;">📌 邮件主题：</div>' +
+    '<div style="font-size:11px;color:#64748b;margin-bottom:4px;"> 邮件主题：</div>' +
     '<div style="font-size:13px;font-weight:600;color:#166534;">' + escHtml(emailSubject) + '</div>' +
     '</div>' +
     '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:10px;">' +
-    '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">📝 邮件正文：</div>' +
+    '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;"> 邮件正文：</div>' +
     '<div style="font-size:12px;color:#475569;line-height:1.5;">' + escHtml(emailBody) + '</div>' +
     '</div>' +
     '<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:10px;">' +
-    '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">📎 PDF 保存路径：</div>' +
+    '<div style="font-size:11px;color:#94a3b8;margin-bottom:4px;"> PDF 保存路径：</div>' +
     '<code style="font-size:11px;word-break:break-all;color:#334155;">' + escHtml(pdfPath) + '</code>' +
     '</div>' +
     '<div style="background:#1e293b;border-radius:8px;padding:14px 16px;margin-bottom:16px;position:relative;">' +
-    '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;">📋 邮件发送命令（点击复制）：</div>' +
+    '<div style="font-size:11px;color:#94a3b8;margin-bottom:6px;"> 邮件发送命令（点击复制）：</div>' +
     '<code id="send-pdf-cmd" style="font-size:11px;color:#e2e8f0;word-break:break-all;white-space:pre-wrap;">' + escHtml(emailCmd) + '</code>' +
     '</div>' +
     '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
@@ -2838,13 +2540,13 @@ function renderCalendar() {
   // Mobile toggle row (hidden on desktop via CSS)
   html += '<div class="calendar-mobile-row">';
   html += '<span class="calendar-month-label">' + year + '年 ' + monthNames[month - 1] + '</span>';
-  html += '<button class="cal-toggle-btn" onclick="toggleCalendarMobile(event)">📅 展开</button>';
+  html += '<button class="cal-toggle-btn" onclick="toggleCalendarMobile(event)"> 展开</button>';
   html += '</div>';
 
   html += '<div class="calendar-header">';
-  html += '<button class="calendar-nav" onclick="calPrevMonth()">◀</button>';
+  html += '<button class="calendar-nav" onclick="calPrevMonth()"><</button>';
   html += '<span class="calendar-month-label">' + year + '年 ' + monthNames[month - 1] + '</span>';
-  html += '<button class="calendar-nav" onclick="calNextMonth()">▶</button>';
+  html += '<button class="calendar-nav" onclick="calNextMonth()">> </button>';
   html += '</div>';
 
   html += '<div class="calendar-grid">';
@@ -2904,7 +2606,7 @@ function toggleCalendarMobile(e) {
   if (!w) return;
   var btn = w.querySelector('.cal-toggle-btn');
   w.classList.toggle('expanded');
-  if (btn) btn.textContent = w.classList.contains('expanded') ? '📅 收起' : '📅 展开';
+  if (btn) btn.textContent = w.classList.contains('expanded') ? ' 收起' : ' 展开';
 }
 
 function onDateClick(dateStr) {
@@ -2917,7 +2619,7 @@ function onDateClick(dateStr) {
   if (w && w.classList.contains('expanded')) {
     w.classList.remove('expanded');
     var btn = w.querySelector('.cal-toggle-btn');
-    if (btn) btn.textContent = '📅 展开';
+    if (btn) btn.textContent = ' 展开';
   }
 
   // If there's a report for this date, load it
@@ -2985,6 +2687,20 @@ function formatDateChinese(dateStr) {
   var dt = new Date(y, m - 1, d);
   var wd = weekdays[dt.getDay()];
   return y + '年' + m + '月' + d + '日 ' + wd;
+}
+
+/**
+ * Execute all inline <script> tags inside a DOM element.
+ * innerHTML does NOT execute scripts — this helper finds them and runs them.
+ */
+function execInlineScripts(container) {
+  var scripts = container.querySelectorAll('script');
+  for (var i = 0; i < scripts.length; i++) {
+    var oldScript = scripts[i];
+    var newScript = document.createElement('script');
+    newScript.textContent = oldScript.textContent;
+    oldScript.parentNode.replaceChild(newScript, oldScript);
+  }
 }
 
 function escHtml(str) {
@@ -3096,8 +2812,8 @@ function renderDateStrip() {
 
   // Build HTML: floating arrows + scroll container
   var html = '';
-  html += '<button class="strip-arrow arrow-left" onclick="shiftDateStrip(-5)" title="前5天">◀</button>';
-  html += '<button class="strip-arrow arrow-right" onclick="shiftDateStrip(5)" title="后5天">▶</button>';
+  html += '<button class="strip-arrow arrow-left" onclick="shiftDateStrip(-5)" title="前5天"><</button>';
+  html += '<button class="strip-arrow arrow-right" onclick="shiftDateStrip(5)" title="后5天">> </button>';
   html += '<div id="date-strip-scroll">';
   for (var i = 0; i < dates.length; i++) {
     var dt = dates[i];
@@ -3111,7 +2827,7 @@ function renderDateStrip() {
       '<span class="pill-weekday">' + dt.weekday + '</span>' +
       '</div>';
   }
-  html += '<button class="strip-cal-btn" onclick="openCalOverlay()" title="日历">📅</button>';
+  html += '<button class="strip-cal-btn" onclick="openCalOverlay()" title="日历"></button>';
   html += '</div>';
   strip.innerHTML = html;
 
@@ -3243,51 +2959,8 @@ function renderSectionTabs() {
   tabs.innerHTML = html;
 }
 
-function updateWeekendAnalysisVisibility() {
-  var navItem = document.getElementById('nav-weekend-analysis');
-  if (!navItem) return;
-
-  var today = new Date();
-  var isWeekend = today.getDay() === 0 || today.getDay() === 6;
-
-  // Always show the nav item; on weekdays mark as unavailable
-  navItem.style.display = '';
-
-  // Update label suffix
-  var label = navItem.querySelector('.section-nav-label');
-  if (label) {
-    if (isWeekend) {
-      label.textContent = '周末深度分析';
-    } else {
-      label.textContent = '周末深度分析（暂不可用）';
-    }
-  }
-  // Dim the dot on weekdays
-  var dot = navItem.querySelector('.section-nav-dot');
-  if (dot) {
-    dot.style.opacity = isWeekend ? '1' : '0.4';
-  }
-  // Always allow click — weekdays show last weekend's cached analysis
-  navItem.classList.remove('section-nav-disabled');
-
-  if (isWeekend) {
-    var nowHour = today.getHours();
-    // On weekends before 16:00, suggest weekend analysis
-    if (state.activeSection === 'simfolio' && nowHour < 16) {
-      // Only auto-switch if we haven't already picked a section this session
-      if (!state.hasSwitchedSection) {
-        setActiveSection('weekendAnalysis');
-        state.hasSwitchedSection = true;
-      }
-    }
-    // Start polling for status updates
-    pollWeekendAnalysisStatus();
-  }
-
-  // Also update mobile tabs
-  if (isMobile()) renderSectionTabs();
-}
-
+// (DEPRECATED v2.9 — replaced by history engine polling)
+function updateWeekendAnalysisVisibility() { /* no-op */ }
 var _weekendPollTimer = null;
 function pollWeekendAnalysisStatus() {
   if (_weekendPollTimer) clearInterval(_weekendPollTimer);

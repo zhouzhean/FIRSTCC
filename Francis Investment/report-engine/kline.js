@@ -580,3 +580,171 @@ function escHtmlKV(str) {
   if (!str) return '';
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ===========================================================================
+// Mini K-line Canvas — lightweight, ~200×120, for candidate stock cards
+// White background, candles + MA5 only, no MACD/BOLL
+// Returns HTML string: <canvas> + inline <script> with staggered entrance animation
+// ===========================================================================
+function renderMiniKline(stockCode, klineData) {
+  var priceMin   = klineData.priceMin;
+  var priceMax   = klineData.priceMax;
+  var candles    = klineData.candles || [];
+  var ma5Values  = klineData.ma5Values || [];
+
+  var W = 200, H = 120;
+  var chartPadL = 6, chartPadR = 6, chartPadT = 8, chartPadB = 18;
+  var plotW = W - chartPadL - chartPadR;
+  var plotH = H - chartPadT - chartPadB;
+
+  var priceSpan = priceMax - priceMin;
+  if (priceSpan <= 0) priceSpan = priceMax * 0.02 || 1;
+
+  function yp(p) { return chartPadT + plotH * (1 - (p - priceMin) / priceSpan); }
+
+  var n = Math.min(candles.length, 5);
+  var spacing = plotW / Math.max(n, 1);
+  var bodyW = Math.max(4, spacing * 0.55);
+
+  var canvasId = 'mkl_' + stockCode + '_' + Math.random().toString(36).slice(2, 7);
+
+  // Serialize data as compact JSON
+  var dataJSON = JSON.stringify({
+    W: W, H: H,
+    priceMin: priceMin, priceMax: priceMax, priceSpan: priceSpan,
+    chartPadT: chartPadT, chartPadL: chartPadL, chartPadB: chartPadB,
+    plotH: plotH, plotW: plotW, n: n, spacing: spacing, bodyW: bodyW,
+    candles: candles.slice(0, n),
+    ma5Values: ma5Values.slice(0, n),
+    canvasId: canvasId,
+  });
+
+  return '<canvas id="' + canvasId + '" width="' + W + '" height="' + H +
+    '" style="display:block;width:200px;height:120px;border-radius:4px;"></canvas>\n' +
+    '<script>(function(){var d=' + dataJSON + ';' +
+    'var c=document.getElementById(d.canvasId);if(!c)return;' +
+    'var ctx=c.getContext("2d");' +
+    'function yp(p){return d.chartPadT+d.plotH*(1-(p-d.priceMin)/d.priceSpan);}' +
+    // Background
+    'ctx.fillStyle="#fafbfc";ctx.fillRect(0,0,d.W,d.H);' +
+    // Grid (subtle)
+    'ctx.strokeStyle="#f0f0f0";ctx.lineWidth=0.5;' +
+    'for(var i=0;i<3;i++){var gy=d.chartPadT+d.plotH*i/2;' +
+    'ctx.beginPath();ctx.moveTo(d.chartPadL,gy);ctx.lineTo(d.W-d.chartPadR,gy);ctx.stroke();}' +
+    // Candles
+    'for(var i=0;i<d.n;i++){' +
+    'var cd=d.candles[i],cx=d.chartPadL+d.spacing*(i+0.5);' +
+    'if(!cd)continue;' +
+    'var oy=yp(cd.open),cy=yp(cd.close),hy=yp(cd.high),ly=yp(cd.low);' +
+    'var up=cd.close>cd.open,clr=up?"#dc2626":"#16a34a";' +
+    'ctx.strokeStyle=clr;ctx.lineWidth=1;' +
+    'ctx.beginPath();ctx.moveTo(cx,hy);ctx.lineTo(cx,ly);ctx.stroke();' +
+    'var top=Math.min(oy,cy),bot=Math.max(oy,cy),bh=Math.max(1,bot-top);' +
+    'ctx.fillStyle=clr;ctx.fillRect(cx-d.bodyW/2,top,d.bodyW,bh);' +
+    '}' +
+    // MA5 line
+    'if(d.ma5Values&&d.ma5Values.length>=2){' +
+    'ctx.strokeStyle="#d97706";ctx.lineWidth=1;ctx.setLineDash([2,2]);ctx.beginPath();' +
+    'for(var i=0;i<d.n;i++){' +
+    'var mx=d.chartPadL+d.spacing*(i+0.5),my=yp(d.ma5Values[i]||0);' +
+    'if(i===0)ctx.moveTo(mx,my);else ctx.lineTo(mx,my);' +
+    '}' +
+    'ctx.stroke();ctx.setLineDash([]);' +
+    '}' +
+    // Date labels (last only)
+    'if(d.n>0){var ld=d.candles[d.n-1];' +
+    'ctx.fillStyle="#94a3b8";ctx.font="8px sans-serif";ctx.textAlign="center";' +
+    'var lx=d.chartPadL+d.spacing*(d.n-0.5);' +
+    'ctx.fillText(ld.date?ld.date.slice(5):"",lx,d.H-4);}' +
+    '})();</' + 'script>';
+}
+
+/**
+ * drawMiniKline(canvas, klineData)
+ * Direct canvas drawing — no inline script evaluation.
+ * Much faster than renderMiniKline for initial paint.
+ * canvas: existing <canvas> element (200x120).
+ * klineData: { candles[], ma5Values[], priceMin, priceMax }
+ */
+function drawMiniKline(canvas, klineData) {
+  if (!canvas || !klineData) return;
+  var W = canvas.width || 200, H = canvas.height || 120;
+  var priceMin = klineData.priceMin;
+  var priceMax = klineData.priceMax;
+  var candles = klineData.candles || [];
+  var ma5Values = klineData.ma5Values || [];
+
+  var chartPadL = 6, chartPadR = 6, chartPadT = 8, chartPadB = 18;
+  var plotW = W - chartPadL - chartPadR;
+  var plotH = H - chartPadT - chartPadB;
+
+  var priceSpan = priceMax - priceMin;
+  if (priceSpan <= 0) priceSpan = priceMax * 0.02 || 1;
+
+  function yp(p) { return chartPadT + plotH * (1 - (p - priceMin) / priceSpan); }
+
+  var n = Math.min(candles.length, 5);
+  var spacing = plotW / Math.max(n, 1);
+  var bodyW = Math.max(4, spacing * 0.55);
+
+  var ctx = canvas.getContext('2d');
+  // Background
+  ctx.fillStyle = '#fafbfc';
+  ctx.fillRect(0, 0, W, H);
+
+  // Grid (subtle)
+  ctx.strokeStyle = '#f0f0f0';
+  ctx.lineWidth = 0.5;
+  for (var i = 0; i < 3; i++) {
+    var gy = chartPadT + plotH * i / 2;
+    ctx.beginPath();
+    ctx.moveTo(chartPadL, gy);
+    ctx.lineTo(W - chartPadR, gy);
+    ctx.stroke();
+  }
+
+  // Candles
+  for (var i = 0; i < n; i++) {
+    var cd = candles[i];
+    if (!cd) continue;
+    var cx = chartPadL + spacing * (i + 0.5);
+    var oy = yp(cd.open), cy = yp(cd.close), hy = yp(cd.high), ly = yp(cd.low);
+    var up = cd.close > cd.open, clr = up ? '#dc2626' : '#16a34a';
+    // Wick
+    ctx.strokeStyle = clr;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, hy);
+    ctx.lineTo(cx, ly);
+    ctx.stroke();
+    // Body
+    var top = Math.min(oy, cy), bot = Math.max(oy, cy), bh = Math.max(1, bot - top);
+    ctx.fillStyle = clr;
+    ctx.fillRect(cx - bodyW / 2, top, bodyW, bh);
+  }
+
+  // MA5 line
+  if (ma5Values && ma5Values.length >= 2) {
+    ctx.strokeStyle = '#d97706';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    for (var i = 0; i < n; i++) {
+      var mx = chartPadL + spacing * (i + 0.5), my = yp(ma5Values[i] || 0);
+      if (i === 0) ctx.moveTo(mx, my);
+      else ctx.lineTo(mx, my);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Date labels (last only)
+  if (n > 0) {
+    var ld = candles[n - 1];
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'center';
+    var lx = chartPadL + spacing * (n - 0.5);
+    ctx.fillText(ld.date ? ld.date.slice(5) : '', lx, H - 4);
+  }
+}

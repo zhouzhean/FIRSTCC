@@ -20,7 +20,7 @@ function renderSimfolio(data, mode) {
   // Section header
   if (!isPDF) {
     html += '<div class="section-header" style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">';
-    html += '<span style="font-size:24px;">💰</span>';
+    html += '<span style="font-size:24px;"></span>';
     html += '<h2 style="margin:0;font-size:18px;font-weight:700;color:' + text + ';">Simfolio 模拟交易看板</h2>';
     html += '<span style="font-size:11px;color:' + muted + ';">初始资金 ¥100,000 · T+1 · 真实费率</span>';
     html += '</div>';
@@ -32,9 +32,9 @@ function renderSimfolio(data, mode) {
   var sf = data._simfolio;
   if (!sf || !sf.snapshot) {
     html += '<div class="callout" style="background:' + cardBg + ';border:1px solid ' + (isPDF ? '#1e3050' : '#e2e5eb') + ';border-radius:8px;padding:24px;text-align:center;">';
-    html += '<p style="font-size:32px;margin:0 0 8px;">📊</p>';
+    html += '<p style="font-size:32px;margin:0 0 8px;"></p>';
     html += '<p style="color:' + muted + ';margin:0;">模拟交易数据将在量化分析运行后自动生成</p>';
-    html += '<p style="color:' + muted + ';font-size:12px;margin:8px 0 0;">点击工具栏 "⚡ 运行分析" 启动全流程</p>';
+    html += '<p style="color:' + muted + ';font-size:12px;margin:8px 0 0;">点击工具栏 "[!] 运行分析" 启动全流程</p>';
     html += '</div>';
     return html;
   }
@@ -88,7 +88,7 @@ function renderSimfolio(data, mode) {
 
   // ==== Positions Table ====
   if (snap.positions && snap.positions.length > 0) {
-    html += '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;">📌 当前持仓</h3>';
+    html += '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;"> 当前持仓</h3>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:12px;color:' + text + ';">';
     html += '<thead><tr style="border-bottom:2px solid ' + accent + ';">';
     html += '<th style="padding:8px;text-align:left;">股票</th><th style="padding:8px;text-align:right;">成本价</th><th style="padding:8px;text-align:right;">现价</th><th style="padding:8px;text-align:right;">股数</th><th style="padding:8px;text-align:right;">市值</th><th style="padding:8px;text-align:right;">盈亏</th><th style="padding:8px;text-align:left;">入场理由</th>';
@@ -112,7 +112,7 @@ function renderSimfolio(data, mode) {
 
   // ==== Trade History ====
   if (tradeHistory.length > 0) {
-    html += '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;">📋 交易记录（最近20条）</h3>';
+    html += '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;"> 交易记录（最近20条）</h3>';
     html += '<table style="width:100%;border-collapse:collapse;font-size:11px;color:' + text + ';">';
     html += '<thead><tr style="border-bottom:2px solid ' + accent + ';">';
     html += '<th style="padding:6px;text-align:left;">日期</th><th style="padding:6px;text-align:left;">时间</th><th style="padding:6px;">方向</th><th style="padding:6px;text-align:left;">股票</th><th style="padding:6px;text-align:right;">价格</th><th style="padding:6px;text-align:right;">股数</th><th style="padding:6px;text-align:right;">金额</th><th style="padding:6px;text-align:right;">盈亏</th><th style="padding:6px;text-align:left;">原因</th>';
@@ -160,7 +160,7 @@ function renderNavChart(dailyNav, isPDF) {
   var padding = 10;
 
   // Render simple SVG chart
-  var html = '<h3 style="font-size:14px;color:' + (isPDF ? '#c9d1d9' : '#1e293b') + ';margin:20px 0 10px;">📈 净值曲线</h3>';
+  var html = '<h3 style="font-size:14px;color:' + (isPDF ? '#c9d1d9' : '#1e293b') + ';margin:20px 0 10px;"> 净值曲线</h3>';
   html += '<svg width="100%" viewBox="0 0 ' + (width + padding * 2) + ' ' + (height + padding * 2) + '" style="background:' + (isPDF ? '#080e18' : '#fafbfc') + ';border-radius:8px;">';
 
   // Gridlines
@@ -219,7 +219,7 @@ function renderHoldingsHealthCards(healthCards, isPDF) {
   var muted = isPDF ? '#8b949e' : '#64748b';
   var accent = isPDF ? '#c9a84c' : '#b8942c';
 
-  var html = '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;">💊 持仓健康度</h3>';
+  var html = '<h3 style="font-size:14px;color:' + text + ';margin:20px 0 10px;"> 持仓健康度</h3>';
   html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-bottom:16px;">';
 
   for (var i = 0; i < healthCards.length; i++) {

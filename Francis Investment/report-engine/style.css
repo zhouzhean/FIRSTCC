@@ -367,6 +367,12 @@ body {
   .btn { padding: 6px 10px; font-size: 11px; }
   .toolbar-right { gap: 4px; }
 }
+.sf-cards-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(155px, 1fr));
+  gap: 10px;
+  padding: 12px 16px;
+}
 
 @media (max-width: 720px) {
   body { overflow: auto; background: #f5f6fa; color: #1e293b; }
@@ -813,35 +819,57 @@ body {
   height: 100%;
   overflow-y: auto;
 }
-.sf-countdown-bar {
+.sf-status-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  background: linear-gradient(135deg, #0a1628, #162d50);
-  color: #b8942c;
-  font-size: 12px;
-  font-weight: 600;
-  border-bottom: 1px solid #1e3050;
-  position: sticky;
-  top: 0;
-  z-index: 5;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #fff;
+  border: 1px solid #e2e5eb;
+  border-radius: 8px;
+  font-size: 11px;
+  color: #64748b;
+  font-weight: 500;
 }
-.sf-countdown-bar .countdown-num {
-  font-size: 18px;
+.sf-status-bar .status-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0;
+}
+.sf-status-bar .status-dot.green { background: #16a34a; box-shadow: 0 0 4px rgba(22,163,74,0.3); }
+.sf-status-bar .status-dot.amber { background: #d97706; box-shadow: 0 0 4px rgba(217,119,6,0.3); }
+.sf-status-bar .status-dot.gray  { background: #94a3b8; }
+.sf-status-bar .countdown-num {
+  font-size: 14px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  min-width: 28px;
+  min-width: 22px;
   text-align: center;
-  color: #d4a843;
+  color: #1e293b;
+  background: #f1f5f9;
+  border-radius: 4px;
+  padding: 1px 6px;
 }
-.sf-countdown-bar.flash-warn {
-  animation: countdown-warn 1s infinite;
+.sf-status-bar .scan-label {
+  font-size: 10px;
+  color: #94a3b8;
 }
-@keyframes countdown-warn {
-  0%, 100% { background: linear-gradient(135deg, #0a1628, #162d50); }
-  50% { background: linear-gradient(135deg, #1a0a0a, #3a1010); }
+.sf-status-bar .spacer { flex: 1; }
+.sf-status-bar .running-badge {
+  font-size: 10px; padding: 2px 8px; border-radius: 10px;
+  background: #fef3c7; color: #92400e; font-weight: 600;
+  animation: runPulse 1.5s ease-in-out infinite;
+}
+@keyframes runPulse {
+  0%,100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+.sf-status-bar.warn .countdown-num {
+  background: #fef2f2; color: #dc2626;
+  animation: numPulse 0.8s ease-in-out infinite;
+}
+@keyframes numPulse {
+  0%,100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
 }
 
 /* Trade activity feed */

@@ -72,28 +72,31 @@ function collectTrainingData(lookbackDays) {
 
       const futureReturn = (targetRec.price - rec.price) / rec.price * 100;
 
-      // We only have compositeScore and factorSignals, not raw dimension scores
-      // Approximate: use compositeScore as dominant input
-      // For now, collect what we have — compositeScore proxies multiple dimensions
+      // Use raw dimension scores if available (v2.8+ pipeline saves them),
+      // otherwise fall back to composite score proxy (backward compatible).
       if (rec.compositeScore != null) {
-        // Create feature vector from available data
-        // Since we don't store raw dimension scores in daily records,
-        // we approximate: compositeScore is a weighted sum of dimensions
-        // Use factor signal count as proxy for hidden score
-        const nSignals = (rec.factorSignals || []).length;
-        const signalStrength = rec.factorSignals
-          ? rec.factorSignals.reduce((sum, s) => sum + (s.level === 'strong' ? 2 : s.level === 'medium' ? 1 : 0), 0)
-          : 0;
+        var fundProxy, techProxy, hiddenProxy, flowProxy, eventProxy;
 
-        // Approximate dimension scores from composite:
-        // compositeScore ~= f*wf + t*wt + h*wh + c*wc + e*we
-        // We split compositeScore into proxy components
-        const baseScore = rec.compositeScore || 50;
-        const hiddenProxy = Math.min(100, 50 + signalStrength * 10);
-        const flowProxy = baseScore; // use composite as proxy for all dims
-        const fundProxy = baseScore;
-        const techProxy = baseScore;
-        const eventProxy = 50;
+        if (rec.rawScores && rec.rawScores.fundamental != null) {
+          // Real dimension scores from pipeline — use them directly
+          fundProxy = rec.rawScores.fundamental;
+          techProxy = rec.rawScores.technical != null ? rec.rawScores.technical : 50;
+          hiddenProxy = rec.rawScores.hidden != null ? rec.rawScores.hidden : 50;
+          flowProxy = rec.rawScores.capitalFlow != null ? rec.rawScores.capitalFlow : 50;
+          eventProxy = rec.rawScores.event != null ? rec.rawScores.event : 50;
+        } else {
+          // Fallback: approximate from compositeScore and signal strength
+          const nSignals = (rec.factorSignals || []).length;
+          const signalStrength = rec.factorSignals
+            ? rec.factorSignals.reduce((sum, s) => sum + (s.level === 'strong' ? 2 : s.level === 'medium' ? 1 : 0), 0)
+            : 0;
+          const baseScore = rec.compositeScore || 50;
+          hiddenProxy = Math.min(100, 50 + signalStrength * 10);
+          flowProxy = baseScore;
+          fundProxy = baseScore;
+          techProxy = baseScore;
+          eventProxy = 50;
+        }
 
         X.push([fundProxy, techProxy, hiddenProxy, flowProxy, eventProxy]);
         y.push(futureReturn);
@@ -257,13 +260,41 @@ function emaSmooth(oldWeights, newWeights, alpha) {
 }
 
 /**
+ * 读取网格搜索找到的最优超参数。
+ * 如果存在 bestParams，用其覆盖默认的 lookbackDays 和 emaAlpha。
+ */
+function getGridSearchParams() {
+  try {
+    if (fs.existsSync(DYNAMIC_WEIGHTS_FILE)) {
+      var dw = JSON.parse(fs.readFileSync(DYNAMIC_WEIGHTS_FILE, 'utf8'));
+      if (dw.bestParams && dw.bestParams.lookbackDays && dw.bestParams.testHitRate > 0.45) {
+        return {
+          lookbackDays: dw.bestParams.lookbackDays,
+          emaAlpha: dw.bestParams.emaAlpha,
+          source: 'grid_search',
+          testHitRate: dw.bestParams.testHitRate,
+        };
+      }
+    }
+  } catch (_) {}
+  return { lookbackDays: 20, emaAlpha: 0.3, source: 'default' };
+}
+
+/**
  * 主函数：计算并更新动态权重。
  * 应在每日盘后调用。
+ *
+ * 增强：优先使用网格搜索的最优超参数（如果存在且验证通过）。
  *
  * @returns {object} { updated, weights, r2, sampleCount, message }
  */
 function updateDynamicWeights() {
-  const trainingData = collectTrainingData(20);
+  // Read grid search best params
+  var gridParams = getGridSearchParams();
+  var lookbackDays = gridParams.lookbackDays;
+  var emaAlpha = gridParams.emaAlpha;
+
+  const trainingData = collectTrainingData(lookbackDays);
 
   if (!trainingData.available) {
     return {
@@ -272,6 +303,7 @@ function updateDynamicWeights() {
       r2: null,
       sampleCount: trainingData.sampleCount || 0,
       message: trainingData.reason || '数据不足',
+      gridParams: gridParams,
     };
   }
 
@@ -283,6 +315,7 @@ function updateDynamicWeights() {
       r2: null,
       sampleCount: trainingData.sampleCount,
       message: '回归方程奇异，无法求解',
+      gridParams: gridParams,
     };
   }
 
@@ -293,6 +326,7 @@ function updateDynamicWeights() {
       r2: +regression.r2.toFixed(3),
       sampleCount: trainingData.sampleCount,
       message: 'R²过小(' + regression.r2.toFixed(3) + ')，模型无解释力，保持默认权重',
+      gridParams: gridParams,
     };
   }
 
@@ -304,6 +338,7 @@ function updateDynamicWeights() {
       r2: +regression.r2.toFixed(3),
       sampleCount: trainingData.sampleCount,
       message: '无法从回归系数转换为有效权重',
+      gridParams: gridParams,
     };
   }
 
@@ -313,10 +348,10 @@ function updateDynamicWeights() {
     newWeights[DIMENSIONS[i]] = rawWeights[i];
   }
 
-  // EMA smooth with existing weights
+  // EMA smooth with existing weights — use grid search alpha
   const existingData = loadDynamicWeights();
   const existingWeights = existingData ? existingData.weights : null;
-  const smoothed = emaSmooth(existingWeights, newWeights, 0.3);
+  const smoothed = emaSmooth(existingWeights, newWeights, emaAlpha);
 
   // Save
   const weightsData = {
@@ -327,12 +362,19 @@ function updateDynamicWeights() {
     sampleCount: trainingData.sampleCount,
     updatedAt: new Date().toISOString(),
     rawWeights: newWeights,
-    message: '基于' + trainingData.sampleCount + '条数据更新，R²=' + regression.r2.toFixed(3),
+    lookbackDays: lookbackDays,
+    emaAlpha: emaAlpha,
+    gridParams: gridParams,
+    message: '基于' + trainingData.sampleCount + '条数据更新(lookback=' + lookbackDays + ', α=' + emaAlpha + ')，R²=' + regression.r2.toFixed(3),
   };
 
   try {
     const dir = path.dirname(DYNAMIC_WEIGHTS_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    // Preserve bestParams if already present
+    if (existingData && existingData.bestParams) {
+      weightsData.bestParams = existingData.bestParams;
+    }
     fs.writeFileSync(DYNAMIC_WEIGHTS_FILE, JSON.stringify(weightsData, null, 2), 'utf8');
   } catch (_) {}
 
@@ -342,6 +384,7 @@ function updateDynamicWeights() {
     r2: +regression.r2.toFixed(3),
     sampleCount: trainingData.sampleCount,
     message: weightsData.message,
+    gridParams: gridParams,
   };
 }
 

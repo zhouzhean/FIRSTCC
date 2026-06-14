@@ -41,12 +41,32 @@ function recordDailyStockSignals(date, allResults) {
   const records = [];
   for (const r of allResults) {
     if (!r.code || !r.hiddenSignals || r.hiddenSignals.length === 0) continue;
+
+    // Extract raw dimension scores from composite result (if available)
+    var rawScores = null;
+    if (r.rawScores) {
+      rawScores = {
+        fundamental: r.rawScores.fundamental != null ? r.rawScores.fundamental : null,
+        technical: r.rawScores.technical != null ? r.rawScores.technical : null,
+        hidden: r.rawScores.hidden != null ? r.rawScores.hidden : null,
+        capitalFlow: r.rawScores.capitalFlow != null ? r.rawScores.capitalFlow : null,
+        event: r.rawScores.event != null ? r.rawScores.event : null,
+      };
+    }
+
     records.push({
       code: r.code,
       name: r.name || '',
       price: r.price || 0,
       compositeScore: r.compositeScore || 0,
-      factorSignals: r.hiddenSignals.map(s => ({ id: s.id, level: s.level })),
+      pe: r.pe != null ? r.pe : null,
+      pb: r.pb != null ? r.pb : null,
+      turnover: r.turnover != null ? r.turnover : null,
+      turnoverRate: r.turnoverRate != null ? r.turnoverRate : null,
+      marketCap: r.marketCap != null ? r.marketCap : null,
+      changePercent: r.changePercent != null ? r.changePercent : null,
+      rawScores: rawScores,
+      factorSignals: r.hiddenSignals.map(function(s) { return { id: s.id, level: s.level }; }),
     });
   }
 
@@ -74,6 +94,9 @@ function recordDailyStockSignals(date, allResults) {
  * 计算个股级别因子绩效。
  * 对每个有足够数据的日期，检查因子触发的股票在后续 1/3/5 天的实际收益。
  *
+ * 如果 stock_factor_performance.json 已由夜间回测引擎标记 backtestVerified=true，
+ * 则优先使用回测验证的统计数据（基于真实K线），而非从 dailyRecords 粗糙估算。
+ *
  * @param {number} minSamples - 最少需要多少个样本才输出结果（默认 5）
  * @returns {object} 各因子的个股级别绩效
  */
@@ -87,13 +110,51 @@ function computeStockFactorPerformance(minSamples) {
     return { available: false, message: '至少需要2天数据', factors: [], updatedAt: new Date().toISOString() };
   }
 
-  // For each factor, collect per-stock trigger → future return
+  // === P0: 优先使用夜间回测验证的因子统计（基于真实K线） ===
+  if (data.backtestVerified && data.backtestStats && data.backtestStats.factors) {
+    var btFactors = data.backtestStats.factors;
+    var factors = [];
+    for (var fi = 0; fi < FACTORS.length; fi++) {
+      var f = FACTORS[fi];
+      var bt = btFactors.find(function(x) { return x.id === f.id; }) || null;
+      if (bt && bt.totalSamples >= minS) {
+        factors.push({
+          id: f.id,
+          name: f.name,
+          perf1d: bt.perf1d || { totalSamples: 0, hitRate: null, avgReturn: null },
+          perf3d: bt.perf3d || { totalSamples: 0, hitRate: null, avgReturn: null },
+          perf5d: bt.perf5d || { totalSamples: 0, hitRate: null, avgReturn: null },
+          totalSamples: bt.totalSamples,
+          hitRate: bt.hitRate,
+          avgReturn: bt.avgReturn,
+          status: bt.status || 'stable',
+          _source: 'backtest',
+        });
+      } else {
+        // Factor not in backtest data — fallback placeholder
+        factors.push({ id: f.id, name: f.name, perf1d: { totalSamples: 0 }, perf3d: { totalSamples: 0 }, perf5d: { totalSamples: 0 }, totalSamples: 0, hitRate: null, avgReturn: null, status: 'stable', _source: 'backtest_partial' });
+      }
+    }
+    var totalTriggered = factors.reduce(function(a, b) { return a + b.totalSamples; }, 0);
+    return {
+      available: totalTriggered >= minS,
+      factors: factors,
+      summary: {
+        updatedAt: data.backtestLastRun || data.updatedAt || new Date().toISOString(),
+        totalDays: dates.length,
+        totalStockTriggers: totalTriggered,
+        minSamples: minS,
+        source: '夜间K线回测验证',
+      },
+    };
+  }
+
+  // === 回退：从 dailyRecords 估算（旧逻辑） ===
   const factorOutcomes = {};
   for (const f of FACTORS) {
     factorOutcomes[f.id] = { triggers1d: [], triggers3d: [], triggers5d: [] };
   }
 
-  // Get stock price history from index_recorder or daily K-line data
   const stockPriceCache = buildStockPriceCache(dailyRecords);
 
   for (let i = 0; i < dates.length - 1; i++) {
@@ -101,7 +162,6 @@ function computeStockFactorPerformance(minSamples) {
     const records = dailyRecords[date] || [];
 
     for (const rec of records) {
-      // Get this stock's future prices
       const future1d = getStockFutureReturn(rec.code, date, 1, dates, dailyRecords, stockPriceCache);
       const future3d = getStockFutureReturn(rec.code, date, 3, dates, dailyRecords, stockPriceCache);
       const future5d = getStockFutureReturn(rec.code, date, 5, dates, dailyRecords, stockPriceCache);
@@ -116,15 +176,13 @@ function computeStockFactorPerformance(minSamples) {
     }
   }
 
-  // Compute summary stats per factor
-  const factors = [];
+  const factors2 = [];
   for (const f of FACTORS) {
     const outcomes = factorOutcomes[f.id];
     const perf1d = computeOutcomeStats(outcomes.triggers1d);
     const perf3d = computeOutcomeStats(outcomes.triggers3d);
     const perf5d = computeOutcomeStats(outcomes.triggers5d);
 
-    // Combined score: use 5d as primary (more predictive), 1d as supplementary
     const totalSamples = perf5d.totalSamples;
     const hitRate = perf5d.hitRate;
     const avgReturn = perf5d.avgReturn;
@@ -135,7 +193,7 @@ function computeStockFactorPerformance(minSamples) {
       else if (hitRate != null && hitRate < 0.40) status = 'cold';
     }
 
-    factors.push({
+    factors2.push({
       id: f.id,
       name: f.name,
       perf1d: perf1d,
@@ -145,23 +203,22 @@ function computeStockFactorPerformance(minSamples) {
       hitRate: hitRate,
       avgReturn: avgReturn,
       status: status,
+      _source: 'dailyRecords_approx',
     });
   }
 
-  // Count total unique triggers across all factors
-  let totalTriggered = 0;
-  for (const f of factors) {
-    totalTriggered += f.totalSamples;
-  }
+  let totalTriggered2 = 0;
+  for (const f of factors2) totalTriggered2 += f.totalSamples;
 
   return {
-    available: totalTriggered >= minS,
-    factors: factors,
+    available: totalTriggered2 >= minS,
+    factors: factors2,
     summary: {
       updatedAt: new Date().toISOString(),
       totalDays: dates.length,
-      totalStockTriggers: totalTriggered,
+      totalStockTriggers: totalTriggered2,
       minSamples: minS,
+      source: '每日记录估算(待夜间回测)',
     },
   };
 }

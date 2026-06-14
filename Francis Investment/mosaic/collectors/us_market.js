@@ -134,7 +134,7 @@ function formatUSSessionStatus() {
  * Parse Sina US stock (gb_) response.
  * Fields (~ comma-delimited, within quotes):
  *   [0]=name  [1]=price  [2]=changePercent  [3]=datetime  [4]=change
- *   [30]=prevClose (confirmed for stocks and ETFs)
+ *   [5]=high  [6]=open  [7]=low  [26]=prevClose (after "Jun 08 04:00PM EDT")
  */
 function parseSinaUSLine(symbol, rawLine) {
   var m = rawLine.match(/"([^"]*)"/);
@@ -147,8 +147,9 @@ function parseSinaUSLine(symbol, rawLine) {
 
   var changePercent = parseFloat(fields[2]) || 0;
   var change = parseFloat(fields[4]) || 0;
-  var prevClose = fields.length > 30 ? parseFloat(fields[30]) : null;
-  if (!prevClose) {
+  // prevClose is at index 26 (after "Jun 08 04:00PM EDT" field at index 25)
+  var prevClose = fields.length > 26 ? parseFloat(fields[26]) : null;
+  if (!prevClose || prevClose <= 0) {
     prevClose = price - change;
   }
 

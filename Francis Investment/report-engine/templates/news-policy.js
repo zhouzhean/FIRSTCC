@@ -19,7 +19,7 @@ function renderNewsPolicy(data, mode) {
 
   if (mode === 'app') {
     // Software mode: event cards, no academic numbering
-    html += '<div class="section-header"><span class="icon">📰</span><h2>近日重大新闻与时政分析</h2></div>\n';
+    html += '<div class="section-header"><span class="icon"></span><h2>近日重大新闻与时政分析</h2></div>\n';
 
     // Core events as cards
     if (d.coreEvents && d.coreEvents.length > 0) {

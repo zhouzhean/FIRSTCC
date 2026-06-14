@@ -16,7 +16,7 @@ function renderUSMarket(data, mode, usData) {
 
   if (!usData || !usData.time) {
     return '<div class="us-market-empty" style="text-align:center;padding:40px;color:' + muted + ';">' +
-      '<div style="font-size:48px;margin-bottom:16px;">🌍</div>' +
+      '<div style="font-size:48px;margin-bottom:16px;">[US]</div>' +
       '<div style="font-size:16px;font-weight:600;margin-bottom:8px;">海外市场数据加载中...</div>' +
       '<div style="font-size:13px;">美股实时数据将在每个交易日晚间自动更新</div>' +
       '</div>';
@@ -35,7 +35,7 @@ function renderUSMarket(data, mode, usData) {
       ? 'background:linear-gradient(135deg,#0a1628,#1a2a40);color:#fff;border:1px solid #1e3050;'
       : 'background:' + cardBg + ';border:1px solid ' + border + ';') +
     '">' +
-    '<span style="font-size:24px;">' + (isUSActive ? '🟢' : '⚫') + '</span>' +
+    '<span style="font-size:24px;">' + (isUSActive ? '[ON]' : '[OFF]') + '</span>' +
     '<div>' +
     '<div style="font-size:15px;font-weight:700;">' + escHtml(status.label || '美股市场') + '</div>' +
     '<div style="font-size:11px;color:' + (isUSActive ? '#94a3b8' : muted) + ';">' +
@@ -46,28 +46,28 @@ function renderUSMarket(data, mode, usData) {
     '</div>';
 
   // ==== Major Indices (4-column grid) ====
-  html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">📊 核心指数</h3>';
+  html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;"> 核心指数</h3>';
   html += renderQuoteGrid(usData.indices, cardBg, text, muted, up, down, border, isNight);
 
   // ==== Macro Indicators ====
-  html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">🏛️ 宏观指标</h3>';
+  html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;"> 宏观指标</h3>';
   html += renderMacroCards(usData.macro, cardBg, text, muted, up, down, border, isNight);
 
   // ==== Chinese ADRs (horizontal scroll strip) ====
   if (usData.adrs && usData.adrs.length > 0) {
-    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">🇨🇳 中概股 ADR</h3>';
+    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">[CN] 中概股 ADR</h3>';
     html += renderADRStrip(usData.adrs, cardBg, text, muted, up, down, isNight);
   }
 
   // ==== Sector ETFs → A-stock mapping ====
   if (usData.sectorETFs && usData.sectorETFs.length > 0) {
-    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">🔗 板块映射 ETF → A股板块</h3>';
+    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;"> 板块映射 ETF → A股板块</h3>';
     html += renderSectorMappingGrid(usData.sectorETFs, cardBg, text, muted, up, down, border, isNight);
   }
 
   // ==== Sentiment Barometers ====
   if (usData.sentiment && usData.sentiment.length > 0) {
-    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">⭐ 情绪标杆</h3>';
+    html += '<h3 style="font-size:14px;color:' + text + ';margin:16px 0 8px;">* 情绪标杆</h3>';
     html += renderQuoteGrid(usData.sentiment, cardBg, text, muted, up, down, border, isNight);
   }
 
@@ -118,20 +118,20 @@ function renderMacroCards(items, cardBg, text, muted, up, down, border, isNight)
 
     var interpretation = '';
     if (q.symbol === 'VXX') {
-      if (q.price >= 40) interpretation = '⚠️ 恐慌级别 — 全球避险模式';
-      else if (q.price >= 30) interpretation = '⚡ 警戒 — 市场焦虑上升';
-      else if (q.price >= 25) interpretation = '📊 正常偏高 — 保持关注';
-      else interpretation = '✅ 低波动 — 风险偏好积极';
+      if (q.price >= 40) interpretation = '[!] 恐慌级别 — 全球避险模式';
+      else if (q.price >= 30) interpretation = '[!] 警戒 — 市场焦虑上升';
+      else if (q.price >= 25) interpretation = ' 正常偏高 — 保持关注';
+      else interpretation = '[OK] 低波动 — 风险偏好积极';
     } else if (q.symbol === 'UUP') {
-      if (q.changePercent >= 0.5) interpretation = '📈 美元走强 — 人民币承压';
-      else if (q.changePercent <= -0.5) interpretation = '📉 美元走弱 — 利好人民币资产';
-      else interpretation = '📊 美元中性区间';
+      if (q.changePercent >= 0.5) interpretation = ' 美元走强 — 人民币承压';
+      else if (q.changePercent <= -0.5) interpretation = ' 美元走弱 — 利好人民币资产';
+      else interpretation = ' 美元中性区间';
     } else if (q.symbol === 'TLT') {
-      if (q.changePercent <= -1) interpretation = '⚠️ 收益率急升 — 利空全球成长股';
-      else if (q.changePercent <= -0.5) interpretation = '📈 收益率上升 — 成长股承压';
-      else if (q.changePercent >= 1) interpretation = '✅ 收益率下降 — 利好成长股';
-      else if (q.changePercent >= 0.5) interpretation = '📉 收益率下行 — 偏向宽松';
-      else interpretation = '📊 收益率平稳';
+      if (q.changePercent <= -1) interpretation = '[!] 收益率急升 — 利空全球成长股';
+      else if (q.changePercent <= -0.5) interpretation = ' 收益率上升 — 成长股承压';
+      else if (q.changePercent >= 1) interpretation = '[OK] 收益率下降 — 利好成长股';
+      else if (q.changePercent >= 0.5) interpretation = ' 收益率下行 — 偏向宽松';
+      else interpretation = ' 收益率平稳';
     }
 
     html += '<div class="us-quote-card" style="background:' + (isNight ? '#0f1f3a' : cardBg) + ';border:1px solid ' + border + ';' +
@@ -188,11 +188,11 @@ function renderSectorMappingGrid(items, cardBg, text, muted, up, down, border, i
     var sign = pct >= 0 ? '+' : '';
     var aSector = sectorMap[q.symbol] || q.symbol;
 
-    var impactIcon = '➡️';
-    if (pct >= 1.5) impactIcon = '🔥';
-    else if (pct >= 0.5) impactIcon = '✅';
-    else if (pct <= -1.5) impactIcon = '❄️';
-    else if (pct <= -0.5) impactIcon = '⚠️';
+    var impactIcon = '->';
+    if (pct >= 1.5) impactIcon = 'HOT';
+    else if (pct >= 0.5) impactIcon = '[OK]';
+    else if (pct <= -1.5) impactIcon = 'COLD';
+    else if (pct <= -0.5) impactIcon = '[!]';
 
     html += '<div class="us-quote-card" style="background:' + (isNight ? '#0f1f3a' : cardBg) + ';border:1px solid ' + border + ';' +
       'border-radius:8px;padding:12px;' + (isNight ? 'color:#c9d1d9;' : '') + '">' +
@@ -213,16 +213,15 @@ function renderOvernightSummaryCard(summary, cardBg, text, muted, up, down, acce
     'border:2px solid ' + accent + ';border-radius:10px;padding:20px;margin-top:20px;">';
 
   html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;">' +
-    '<span style="font-size:24px;">🔮</span>' +
-    '<span style="font-size:16px;font-weight:700;color:' + accent + ';">A股明日盘前参考</span>' +
+    '<span style="font-size:14px;font-weight:700;color:' + accent + ';">A股明日盘前参考</span>' +
     '</div>';
 
   if (summary.aStockSentiment) {
     var s = summary.aStockSentiment;
     var levelLabels = {
-      'strong_bullish': '强烈看多 🚀', 'bullish': '看多 📈', 'slightly_bullish': '偏多 ↗️',
-      'neutral': '中性 ➡️',
-      'slightly_bearish': '偏空 ↘️', 'bearish': '看空 📉', 'strong_bearish': '强烈看空 ⚠️',
+      'strong_bullish': '强烈看多 [++]', 'bullish': '看多 [+]', 'slightly_bullish': '偏多 [^]',
+      'neutral': '中性 [--]',
+      'slightly_bearish': '偏空 [v]', 'bearish': '看空 [-]', 'strong_bearish': '强烈看空 [!]',
     };
     var sentimentColor = s.score >= 20 ? up : (s.score <= -20 ? down : muted);
 

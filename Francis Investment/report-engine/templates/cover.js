@@ -35,7 +35,7 @@ function renderCover(data, mode) {
   <div class="meta-row">
     <div class="meta-item"><strong>核心事件</strong> ${meta.coreEvent || "—"}</div>
   </div>
-  <div class="alert-line">⚠ 本报告不构成投资建议 · 股市有风险 · 投资需谨慎</div>
+  <div class="alert-line">[!] 本报告不构成投资建议 · 股市有风险 · 投资需谨慎</div>
 </div>`;
   }
 

@@ -22,7 +22,7 @@ function renderRecommendationHistory() {
   html += '<span style="font-size:18px;font-weight:700;">推荐历史数据库</span>';
   html += '<span style="margin-left:10px;font-size:12px;color:var(--text-muted);">共 ' + stocks.length + ' 只（上限 ' + (hist.maxStocks || 50) + ' 只）</span>';
   html += '</div>';
-  html += '<button onclick="parent.closeRecommendationHistory()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px;color:var(--text-muted);">✕ 关闭</button>';
+  html += '<button onclick="parent.closeRecommendationHistory()" style="background:none;border:1px solid var(--border);border-radius:6px;padding:5px 14px;cursor:pointer;font-size:13px;color:var(--text-muted);">x 关闭</button>';
   html += '</div>';
 
   // Legend

@@ -64,7 +64,7 @@ function renderMarketOverview(data, mode) {
   }
 
   const sectionTitle = mode === 'app'
-    ? '<div class="section-header"><span class="icon">📊</span><h2>大盘综述</h2></div>'
+    ? '<div class="section-header"><span class="icon"></span><h2>大盘综述</h2></div>'
     : '<h2>二、大盘综述</h2>';
 
   return `

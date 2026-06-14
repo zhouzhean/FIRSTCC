@@ -611,7 +611,7 @@ function renderWeekendVerification(vData) {
 
   var html = '<div class="wv-container">';
   html += '<div class="wv-header">';
-  html += '<div class="wv-header-title"><span class="icon">🔍</span>预测验证报告</div>';
+  html += '<div class="wv-header-title"><span class="icon"></span>预测验证报告</div>';
   html += '</div>';
 
   // 1. Summary card
@@ -652,10 +652,10 @@ function renderWeekendVerification(vData) {
 function _renderNoVerificationData() {
   return '<div class="wv-container">' +
     '<div class="wv-header">' +
-    '<div class="wv-header-title"><span class="icon">🔍</span>预测验证报告</div>' +
+    '<div class="wv-header-title"><span class="icon"></span>预测验证报告</div>' +
     '</div>' +
     '<div class="wv-no-data">' +
-    '<div class="icon">📭</div>' +
+    '<div class="icon"></div>' +
     '<div class="text">暂无验证数据</div>' +
     '<div class="sub">验证报告将在完整交易周结束后自动生成</div>' +
     '</div></div>';
@@ -698,7 +698,7 @@ function _renderSummaryCard(vData) {
 
 function _panelHeader(title, badgeGrade, subTitle) {
   var html = '<div class="wv-panel-header" onclick="toggleVerificationPanel(this)">';
-  html += '<span class="wv-panel-arrow">▶</span>';
+  html += '<span class="wv-panel-arrow">></span>';
   html += '<span class="wv-panel-title">' + title + '</span>';
   if (badgeGrade) {
     html += '<span class="wv-panel-badge grade-' + badgeGrade + '">' + badgeGrade + '</span>';
@@ -740,7 +740,7 @@ function _renderSimilarityPanel(sim) {
       html += '<tr><td>' + hLabels[h] + '</td><td colspan="5" style="color:#94a3b8;">数据不足</td></tr>';
       continue;
     }
-    var dirIcon = e.directionCorrect ? '<span class="wv-cell-correct">✓ 正确</span>' : '<span class="wv-cell-wrong">✗ 错误</span>';
+    var dirIcon = e.directionCorrect ? '<span class="wv-cell-correct">[OK] 正确</span>' : '<span class="wv-cell-wrong">[X] 错误</span>';
     html += '<tr>';
     html += '<td><strong>' + hLabels[h] + '</strong></td>';
     html += '<td>' + (e.predicted >= 0 ? '+' : '') + e.predicted.toFixed(2) + '%</td>';
@@ -757,7 +757,7 @@ function _renderSimilarityPanel(sim) {
     html += '<tr style="background:#f8fafc;"><td colspan="6" style="font-size:12px;color:#94a3b8;padding:8px 10px;">各历史匹配 5 日预测验证</td></tr>';
     for (var j = 0; j < matches.length; j++) {
       var m = matches[j];
-      var dirIcon2 = m.directionCorrect ? '<span class="wv-cell-correct">✓</span>' : '<span class="wv-cell-wrong">✗</span>';
+      var dirIcon2 = m.directionCorrect ? '<span class="wv-cell-correct">[OK]</span>' : '<span class="wv-cell-wrong">[X]</span>';
       var simPct = m.similarity ? (m.similarity.toFixed(0) + '%') : '';
       html += '<tr>';
       html += '<td style="font-size:11px;color:#94a3b8;">' + m.startDate + '~' + (m.endDate || '') + ' <span style="color:#64748b;">' + simPct + '</span></td>';
@@ -866,8 +866,8 @@ function _renderSectorPanel(sector) {
         var cls = 'no-pred';
         var symbol = '';
         if (cell.result === 'diagonal') { cls = 'diagonal'; symbol = ''; }
-        else if (cell.result === 'tp_lead' || cell.result === 'tp_lag') { cls = 'correct'; symbol = '✓'; }
-        else if (cell.result === 'fp_lead' || cell.result === 'fp_lag') { cls = 'wrong'; symbol = '✗'; }
+        else if (cell.result === 'tp_lead' || cell.result === 'tp_lag') { cls = 'correct'; symbol = '[OK]'; }
+        else if (cell.result === 'fp_lead' || cell.result === 'fp_lag') { cls = 'wrong'; symbol = '[X]'; }
         else if (cell.result === 'tp_sync') { cls = 'correct'; symbol = '≈'; }
         else if (cell.result === 'fp_sync') { cls = 'wrong'; symbol = '≠'; }
         else if (cell.result === 'no_data') { cls = 'no-data'; symbol = '·'; }
@@ -884,8 +884,8 @@ function _renderSectorPanel(sector) {
     html += '<div class="wv-phase-result">阶段判断: <strong>' + sector.phaseName + '</strong>';
     if (phaseCorrect != null) {
       html += ' → ' + (phaseCorrect
-        ? '<span class="correct">✓ 正确</span>'
-        : '<span class="wrong">✗ 错误</span>');
+        ? '<span class="correct">[OK] 正确</span>'
+        : '<span class="wrong">[X] 错误</span>');
     }
     html += '</div>';
   }
@@ -956,7 +956,7 @@ function _renderInsightsPanel(insights) {
   html += '<div class="wv-verdict-list">';
   for (var i = 0; i < verdicts.length; i++) {
     var v = verdicts[i];
-    var icon = v.outcome === 'good' ? '✅' : (v.outcome === 'bad' ? '❌' : '➖');
+    var icon = v.outcome === 'good' ? '[OK]' : (v.outcome === 'bad' ? '[X]' : '-');
     var typeNames = {
       regime_alert: '风控预警',
       historical_parallel: '历史对比',
