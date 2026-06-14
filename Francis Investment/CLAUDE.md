@@ -1,6 +1,74 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 + 跨市场分析引擎 + 历史复盘引擎 + 预测引擎 + **24/7进化引擎**。Node.js 零外部依赖，24/7 阿里云 ECS 运行。全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪+历史复盘学习+市场周期识别+6维期望收益预测+动态权重学习+交易归因反馈+期望收益验证。**7条反馈闭环全部接通，历史复盘引擎统一，云端 v2.9.1 运行中。**
+A股量化交易系统 + 跨市场分析引擎 + 历史复盘引擎 + 预测引擎 + **24/7进化引擎**。Node.js 零外部依赖，24/7 阿里云 ECS 运行。全自动采集+评分+模拟交易+盘后总结+美股→A股相关性追踪+历史复盘学习+市场周期识别+6维期望收益预测+动态权重学习+交易归因反馈+期望收益验证。**7条反馈闭环全部接通，历史复盘引擎统一，云端 v2.9.2 运行中。**
+
+---
+
+## v2.9.2 预测引擎维度修复 + UI 生动性改造 + 风险仪表盘重设计 (2026-06-14 下午) — 已部署云端 2026-06-14 13:48 CST
+
+### 预测引擎 3 Bug 修复 — 5/6 维度从"空转"到"激活"
+
+预测引擎 6 维期望收益公式 E[R5d] 原本只有 1/6 维度工作（scorePercentile 10%权重），confidence=0.17，所有股票 E[R5d] 都是 0.19%-0.3%。修复后 4/6 维度激活，confidence 预计 0.50-0.83，E[R5d] 有 -2% 到 +4% 的区分度。
+
+**fix 1: marketCycle 维度（15%权重）永久为 null**
+- 根因：`scheduler.js:1486` 调用 `mc.getCurrentCycle()` 但 `market_cycle.js` 导出的是 `getMarketCycle()`
+- `?.` 安全调用静默吞下错误 → marketCycle 永远是 null
+- 修复：函数名 `getCurrentCycle` → `getMarketCycle`
+- 文件：`mosaic/scheduler.js`
+
+**fix 2: sectorFlow 维度（20%权重）永远 unavailable**
+- 根因：`sectorFlowMap` 是 pipeline 运行时的 `Map` 对象，pipeline 结束后被丢弃；`_saveLastPipelineResult()` 从未传给 context
+- 修复：(a) `pipeline.js` 在 result 中序列化 `sectorFlowMap` 为 `[{code, name, majorNetFlow}]` 数组；(b) `scheduler.js` 读取 `result.sectorFlowMap` 注入 `context.sectorFlowRank`
+- 同时完全重写了 `computeSectorFlowBias()` 函数：支持 Map/object/array 三种输入格式，使用 `SECTOR_PATTERNS` 按股票名称匹配板块，按 `majorNetFlow` 降序计算排名百分比
+- 文件：`mosaic/pipeline.js`, `mosaic/scheduler.js`, `mosaic/predict/expected_return.js`
+
+**fix 3: factorCombo 维度（30%权重）阈值过高**
+- 根因：`totalSamples >= 5` 要求至少 5 天因子经验，但数据集只有 4 天 → factorCombo 从不贡献
+- 修复：`>= 5` → `>= 3`，4 天数据立即可用
+- 文件：`mosaic/predict/expected_return.js` 第 95 行
+
+**额外增强**：
+- `scheduler.js` `_saveLastPipelineResult()` 在 `expectedReturns` 中保存 `breakdown`（6 维贡献值），前端可直接用
+- `app.js` `loadPredictIntoDOM()` 增加第 6 个并行 fetch `/api/market/cycle` 并传入 `marketCycle` 数据
+- 预测仪表板顶部新增市场周期状态条（`renderCycleStatusBar()`）
+
+### 预测引擎 UI 改进
+
+- **市场周期状态条**：`predict.js` 新增 `renderCycleStatusBar()` — 显示当前周期（牛市/熊市/震荡）+ 颜色编码圆点 + 置信度 + 建议持仓上限
+- **6 维度圆点指示**：每个候选股渲染 6 个彩色圆点（因子/板块/周期/北向/相似/评分），绿色=正向/红色=负向/灰色=无数据，hover 显示维度名称+数值
+- **置信度彩色编码**：≥67% 绿色 / 33-67% 琥珀色 / <33% 灰色
+- 文件：`report-engine/templates/predict.js`, `report-engine/app.js`, `report-engine/style.css`
+
+### UI 生动性改造（v2.9.2 综合）
+
+**动画工具模块**（`app.js` 顶部新增）：
+- `animateNumber(el, target, options)` — 数字缓动动画（easeOutCubic），支持 money/pct/int 三种格式
+- `triggerBarTransitions(container)` — 触发 CSS 柱状条从 0 生长过渡（`data-bar-width` → `style.width`）
+- `applyStaggeredEntrance(container, selector, staggerMs)` — 交错入场动画
+- `renderShimmerSkeleton(w, h, r)` — 骨架屏加载占位符
+- `transitionValue(el, newHTML, options)` — 内联值切换渐变
+
+**动画覆盖范围**：
+- 所有面板的 innerHTML 后自动调用 `applyStaggeredEntrance()` + `triggerBarTransitions()`
+- 柱状条统一使用 `data-bar-width` 属性 + CSS `transition: width 0.6s ease-out`
+- 文件：`app.js`, `style.css`, `templates/predict.js`, `templates/history-review.js`, `think-tank.html`
+
+### 跨市场风险仪表盘重设计
+
+**文件**：`report-engine/templates/cross-market.js`
+
+**改动**：Canvas 风险仪表盘从机械指针风格 → Apple Watch 环形进度弧风格
+- 移除指针线（needle line with shadow）
+- 保留背景分段弧（红→橙→灰→绿→深绿，alpha 0.3 轨道）
+- 新增发光进度弧：从 0 扫到目标角度，颜色=riskColor，shadowBlur=8, lineWidth=10
+- 中心大号分数读数 + regime 标签（替换旧指针，信息更清晰）
+- 保持 800ms easeOutCubic 动画 + DPI 适配 + legend
+
+### 已知陷阱（v2.9.2 新增）
+
+- **预测引擎数据依赖**：nbSentiment（15%）和 stockSimilarity（10%）两个维度仍需更多数据积累才能激活。当前活跃维度：factorCombo + sectorFlow + marketCycle + scorePercentile = 4/6。
+- **sectorFlow 依赖 pipeline 结果**：板块资金流匹配只在实际 pipeline 扫描时更新（非 midScan）。MidDay scan 中 `sectorFlowMap` 为空 Map 时不注入 context。
+- **`.entrance-item` CSS 现在默认 `animation-play-state: running`**：即使 JS 未调用 `applyStaggeredEntrance`，入场动画也会自动播放。`applyStaggeredEntrance` 仍被调用以设置精确的 `animation-delay`。
 
 ---
 
