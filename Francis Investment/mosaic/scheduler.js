@@ -31,7 +31,8 @@ class Scheduler extends EventEmitter {
     this._usDataToday = [];         // 美股当日分钟线数据
     this._lastUSRecord = null;      // 上次美股记录时间
     this._usOpsRunning = false;     // 美股操作锁
-    this._weekendAnalysisRunning = false; // 周末分析运行标记
+    this._weekendAnalysisRunning = false; // 周末分析运行标记 (DEPRECATED v2.9)
+    this._historyWeekendActive = false;   // 历史复盘周末持续运行标记
     this._broadcastSSE = null;      // SSE 广播函数引用
   }
 
@@ -86,7 +87,12 @@ class Scheduler extends EventEmitter {
   /** Set SSE broadcast function (called by mosaic_server) */
   setSSEBroadcast(fn) {
     this._broadcastSSE = fn;
-    // Also propagate to weekend analyzer if available
+    // Also propagate to history review engine
+    try {
+      const historyReview = require('./analysis/history_review');
+      historyReview.setSSEBroadcast(fn);
+    } catch (_) {}
+    // Backward compat: also set on weekend_analyzer if still loaded
     try {
       const weekendAnalyzer = require('./analysis/weekend_analyzer');
       weekendAnalyzer.setSSEBroadcast(fn);
@@ -130,6 +136,47 @@ class Scheduler extends EventEmitter {
       this._transition(newState, 'tick');
     }
 
+    // === Pre-market warmup (09:00-09:30, once per day) ===
+    // Load overnight US summary and cross-market risk state before the opening scan,
+    // so the 09:30 pipeline starts with pre-warmed context.
+    var preMarketKey = 'premarket_brief_' + dateStr;
+    if (this._state === 'pre_market' && !this._scheduledOps.has(preMarketKey)) {
+      this._scheduledOps.add(preMarketKey);
+      try {
+        var preBrief = {};
+        // Load US overnight summary
+        try {
+          var usSummaryPath = path.join(config.DATA_DIR, 'us_market', 'us_close_' + dateStr + '.json');
+          if (fs.existsSync(usSummaryPath)) {
+            preBrief.usSummary = JSON.parse(fs.readFileSync(usSummaryPath, 'utf8'));
+          }
+        } catch (_) {}
+        // Load cross-market risk state
+        try {
+          var crossMarket = require('./analysis/cross_market');
+          preBrief.riskState = crossMarket.getCachedRiskState();
+        } catch (_) {}
+        // Load weekend context if still valid
+        try {
+          var wcPath = path.join(config.DATA_DIR, 'simfolio', 'weekend_context.json');
+          if (fs.existsSync(wcPath)) {
+            var wc = JSON.parse(fs.readFileSync(wcPath, 'utf8'));
+            if (wc.validUntil && wc.validUntil >= dateStr) {
+              preBrief.weekendContext = { validUntil: wc.validUntil, insightCount: (wc.insights || []).length };
+            }
+          }
+        } catch (_) {}
+        if (Object.keys(preBrief).length > 0) {
+          this.emit('think_status', {
+            type: 'premarket_brief',
+            brief: preBrief,
+            time: new Date().toISOString(),
+          });
+          this._logEvent('premarket_brief', { items: Object.keys(preBrief).join(',') });
+        }
+      } catch (_) {}
+    }
+
     // 活跃时段：检查是否有操作到期
     if (this._state === 'morning_session' || this._state === 'afternoon_session') {
       this._checkScheduledOps(now);
@@ -166,6 +213,73 @@ class Scheduler extends EventEmitter {
       this._runOvernightSummary(dateStr);
     }
 
+    // === 历史复盘引擎 (v2.9) ===
+    // Daily Light: 工作日 16:30
+    var hrConfig = config.HISTORY_REVIEW || {};
+    var hrDaily = hrConfig.daily || {};
+    var hrDailyTime = hrDaily.time || { hour: 16, minute: 30 };
+    var hrDailyKey = 'history_daily_' + dateStr;
+    if (this._isTradingDay(now) && hourNow === hrDailyTime.hour && now.getMinutes() >= hrDailyTime.minute &&
+        !this._scheduledOps.has(hrDailyKey)) {
+      this._scheduledOps.add(hrDailyKey);
+      try {
+        var historyReview = require('./analysis/history_review');
+        historyReview.runDaily();
+        this._logEvent('history_daily', { date: dateStr });
+      } catch (e) {
+        console.error('[Scheduler] History daily error:', e.message);
+      }
+    }
+
+    // Weekend Deep: 周六 10:30
+    var hrDeep = hrConfig.deep || {};
+    var hrDeepTime = hrDeep.time || { hour: 10, minute: 30 };
+    var hrDeepKey = 'history_deep_' + dateStr;
+    if (now.getDay() === 6 && hourNow === hrDeepTime.hour && now.getMinutes() >= hrDeepTime.minute &&
+        !this._scheduledOps.has(hrDeepKey)) {
+      this._scheduledOps.add(hrDeepKey);
+      try {
+        var hr = require('./analysis/history_review');
+        hr.runWeekendDeep();
+        this._logEvent('history_deep_start', { date: dateStr });
+      } catch (e) {
+        console.error('[Scheduler] History deep error:', e.message);
+      }
+    }
+
+    // Sunday Discovery: 周日 09:00
+    var hrSun = hrConfig.sundayDiscovery || {};
+    var hrSunTime = hrSun.time || { hour: 9, minute: 0 };
+    var hrSunKey = 'history_discovery_' + dateStr;
+    if (now.getDay() === 0 && hourNow === hrSunTime.hour && now.getMinutes() >= hrSunTime.minute &&
+        !this._scheduledOps.has(hrSunKey)) {
+      this._scheduledOps.add(hrSunKey);
+      try {
+        var hr2 = require('./analysis/history_review');
+        hr2.runWeekendDiscovery({ similarityWindow: hrSun.similarityWindow || 30, similarityTopN: hrSun.similarityTopN || 8, similarityStride: hrSun.similarityStride || 3 });
+        this._logEvent('history_discovery_start', { date: dateStr });
+      } catch (e) {
+        console.error('[Scheduler] History discovery error:', e.message);
+      }
+    }
+
+    // Weekend ticks: Saturday 14:00-23:00 and Sunday 12:00-23:00 (every 2 hours)
+    if ((now.getDay() === 6 && hourNow >= 14) || (now.getDay() === 0 && hourNow >= 12)) {
+      if (!this._historyWeekendActive) {
+        this._historyWeekendActive = true;
+        // The engine handles its own tick timer via _startWeekendTicks()
+      }
+    }
+    if (now.getDay() === 1 && this._historyWeekendActive) {
+      // Monday — stop weekend ticks
+      this._historyWeekendActive = false;
+      try {
+        var hr3 = require('./analysis/history_review');
+        hr3.stopWeekendTicks();
+      } catch (_) {}
+    }
+
+    // === DEPRECATED v2.9: 保留旧 weekend_analyzer 作为 fallback (如果 history engine 不存在) ===
     // 周末深度分析：周六/周日全天运行
     if (this._isWeekend(now) && !this._weekendAnalysisRunning) {
       this._startWeekendAnalysis();
@@ -173,14 +287,27 @@ class Scheduler extends EventEmitter {
       this._stopWeekendAnalysis();
     }
 
-    // 周五 15:30 后：触发周末分析验证
-    const VConfig = config.WEEKEND_VERIFICATION || {};
+    // === DEPRECATED v2.9: 周五验证现在由 history engine 自动处理 ===
+    // 旧的 weekend_verification 仅作为 fallback
+    var VConfig = config.WEEKEND_VERIFICATION || {};
     const vHour = (VConfig.verificationSchedule && VConfig.verificationSchedule.hour) || 15;
     const vMinute = (VConfig.verificationSchedule && VConfig.verificationSchedule.minute) || 30;
     if (now.getDay() === 5 && hourNow === vHour && now.getMinutes() >= vMinute &&
         !this._scheduledOps.has('weekend_verification_' + dateStr)) {
       this._scheduledOps.add('weekend_verification_' + dateStr);
       this._runWeekendVerification();
+    }
+
+    // === 24/7 自主学习进化引擎 (v2.8: 每5分钟检查一次，非每次tick) ===
+    if (config.EVOLUTION && config.EVOLUTION.enabled !== false) {
+      var evoMin = now.getMinutes();
+      if (this._lastEvoCheckMinute == null || Math.abs(evoMin - this._lastEvoCheckMinute) >= 5 || evoMin < this._lastEvoCheckMinute) {
+        this._lastEvoCheckMinute = evoMin;
+        try {
+          const evolutionScheduler = require('./evolution/evolution_scheduler');
+          evolutionScheduler.checkAndRun(now, dateStr);
+        } catch (e) { /* 进化任务调度失败不影响主流程 */ }
+      }
     }
 
     this._saveState();
@@ -214,7 +341,18 @@ class Scheduler extends EventEmitter {
 
   _isTradingDay(date) {
     const d = date.getDay();
-    return d >= 1 && d <= 5;
+    if (d < 1 || d > 5) return false; // weekend
+    // Check public holidays
+    const dateStr = date.toISOString().slice(0, 10);
+    if (this._isHoliday(dateStr)) return false;
+    return true;
+  }
+
+  _isHoliday(dateStr) {
+    try {
+      const holidays = config.HOLIDAYS_2026 || [];
+      return holidays.indexOf(dateStr) >= 0;
+    } catch (_) { return false; }
   }
 
   _isWeekend(date) {
@@ -434,6 +572,12 @@ class Scheduler extends EventEmitter {
       // Persist result for think-tank initial load
       this._saveLastPipelineResult(result, 'full');
 
+      // P3: Record stock-level factor signals for prediction engine (Loop 5)
+      try {
+        const stockPredictor = require('./predict/stock_predictor');
+        stockPredictor.recordDailyStockSignals(this._todayDate, result.allResults || []);
+      } catch (_) {}
+
       this.emit('think_scan', {
         type: 'scan_complete',
         totalStocks: result.totalStocks,
@@ -512,8 +656,39 @@ class Scheduler extends EventEmitter {
             time: new Date().toISOString(),
           });
         }
+
+        // Persist gate state + emit decision SSE for think-tank
+        if (tradeResult.gateResults) {
+          try {
+            const fs = require('fs');
+            const path = require('path');
+            const DATA_DIR = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+            const gateStatePath = path.join(DATA_DIR, 'last_gate_state.json');
+            const gateState = {
+              ...tradeResult.gateResults,
+              timestamp: new Date().toISOString(),
+              scanType: 'full',
+              executed: (tradeResult.executed || []).map(t => ({ action: t.action, code: t.code, name: t.name, price: t.price, shares: t.shares, reason: t.reason })),
+              nearMisses: tradeResult.nearMisses || [],
+              decisions: (tradeResult.decisions || []).length,
+            };
+            fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
+          } catch (_) {}
+          this.emit('think_decision', {
+            type: 'decision_update',
+            scanType: 'full',
+            gateResults: tradeResult.gateResults,
+            executed: (tradeResult.executed || []).map(t => ({ action: t.action, code: t.code, name: t.name, price: t.price, shares: t.shares, reason: t.reason })),
+            nearMisses: tradeResult.nearMisses || [],
+            decisions: (tradeResult.decisions || []).length,
+            time: new Date().toISOString(),
+          });
+        }
       } catch (tradeErr) {
-        this._logEvent('trade_error', { error: tradeErr.message });
+        this._logEvent('trade_error', {
+          error: tradeErr.message,
+          stack: tradeErr.stack ? tradeErr.stack.split('\n').slice(1, 3).map(function(s){return s.trim();}).join(' -> ') : '(no stack)',
+        });
       }
     } catch (err) {
       this._logEvent('pipeline_error', { error: err.message, reason });
@@ -567,53 +742,9 @@ class Scheduler extends EventEmitter {
         .sort((a, b) => (b.turnover || 0) - (a.turnover || 0))
         .slice(0, SC.midScanTopCount);
 
-      // 预评分 — 使用增强的8维评分（与Full Pipeline一致）
-      const preScored = topByTurnover.map(s => {
-        let score = 0;
-        // 1. PE估值
-        const pe = s.peTTM || s.pe;
-        if (pe && pe > 0 && pe < 12) score += 25;
-        else if (pe && pe > 0 && pe < 18) score += 18;
-        else if (pe && pe > 0 && pe < 25) score += 10;
-        else if (pe && pe > 0 && pe < 40) score += 3;
-        else if (!pe) score += 8;
-        else score -= 3;
-        // 2. PB
-        if (s.pb && s.pb > 0 && s.pb < 1.0) score += 10;
-        else if (s.pb && s.pb > 0 && s.pb < 2.0) score += 5;
-        // 3. 动量
-        const chg = s.changePercent || 0;
-        if (chg > 1 && chg < 5) score += 12;
-        else if (chg > 0 && chg <= 1) score += 6;
-        else if (chg > -1 && chg <= 0) score += 2;
-        else if (chg > -3) score -= 2;
-        else score -= 5;
-        // 4. 流动性
-        const to = s.turnover || 0;
-        if (to > 5e8) score += 20;
-        else if (to > 2e8) score += 14;
-        else if (to > 1e8) score += 8;
-        // 5. 换手率
-        const tr = s.turnoverRate || 0;
-        if (tr >= 1 && tr <= 5) score += 8;
-        else if (tr > 0.5 && tr < 1) score += 4;
-        // 6. 振幅
-        const ampl = s.amplitude || 0;
-        if (ampl > 2 && ampl < 6) score += 5;
-        else if (ampl >= 1 && ampl <= 2) score += 2;
-        // 7. 资金流
-        if (s.majorNetFlow != null && to > 0) {
-          const fr = s.majorNetFlow / to;
-          if (fr > 0.05) score += 10;
-          else if (fr > 0.02) score += 6;
-          else if (fr > 0) score += 3;
-          else if (fr < -0.05) score -= 8;
-        }
-        // 8. 流通市值
-        const cmv = s.circCap || 0;
-        if (cmv > 2e9 && cmv < 5e10) score += 5;
-        return { ...s, preScore: score };
-      }).sort((a, b) => b.preScore - a.preScore);
+      // 预评分 — 使用共享的8维评分（v2.8: 复用pipeline.preScoreStocks）
+      var preScoreStocks = require('./pipeline').preScoreStocks;
+      var preScored = preScoreStocks(topByTurnover).sort(function(a, b) { return b.preScore - a.preScore; });
 
       // 对 Top N 进行深析
       const deepList = preScored.slice(0, SC.midScanDeepAnalyze);
@@ -668,6 +799,12 @@ class Scheduler extends EventEmitter {
       });
       // Persist mid-scan result for think-tank
       this._saveLastPipelineResult({ totalStocks: allStocks.length, candidates: candidates.length, analyzed: results.length, top5: results.slice(0, 5), allResults: results }, 'mid');
+
+      // P3: Record stock-level factor signals for prediction engine (Loop 5)
+      try {
+        const stockPredictor = require('./predict/stock_predictor');
+        stockPredictor.recordDailyStockSignals(this._todayDate, results);
+      } catch (_) {}
 
       // Record north-bound sentiment for mid-scan too
       if (nbSentiment && nbSentiment.available) {
@@ -724,8 +861,39 @@ class Scheduler extends EventEmitter {
               time: new Date().toISOString(),
             });
           }
+
+          // Persist gate state + emit decision SSE for think-tank
+          if (tradeResult.gateResults) {
+            try {
+              const fs = require('fs');
+              const path = require('path');
+              const DATA_DIR = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+              const gateStatePath = path.join(DATA_DIR, 'last_gate_state.json');
+              const gateState = {
+                ...tradeResult.gateResults,
+                timestamp: new Date().toISOString(),
+                scanType: 'mid',
+                executed: (tradeResult.executed || []).map(t => ({ action: t.action, code: t.code, name: t.name, price: t.price, shares: t.shares, reason: t.reason })),
+                nearMisses: tradeResult.nearMisses || [],
+                decisions: (tradeResult.decisions || []).length,
+              };
+              fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
+            } catch (_) {}
+            this.emit('think_decision', {
+              type: 'decision_update',
+              scanType: 'mid',
+              gateResults: tradeResult.gateResults,
+              executed: (tradeResult.executed || []).map(t => ({ action: t.action, code: t.code, name: t.name, price: t.price, shares: t.shares, reason: t.reason })),
+              nearMisses: tradeResult.nearMisses || [],
+              decisions: (tradeResult.decisions || []).length,
+              time: new Date().toISOString(),
+            });
+          }
         } catch (tradeErr) {
-          this._logEvent('trade_error', { error: tradeErr.message });
+          this._logEvent('trade_error', {
+            error: tradeErr.message,
+            stack: tradeErr.stack ? tradeErr.stack.split('\n').slice(1, 3).map(function(s){return s.trim();}).join(' -> ') : '(no stack)',
+          });
         }
       }
     } catch (err) {
@@ -1086,6 +1254,48 @@ class Scheduler extends EventEmitter {
         this._logEvent('knowledge_save_error', { error: e.message });
       }
 
+      // P3: Run trade attribution for completed sells (Loop 5 — trade→parameter feedback)
+      try {
+        const tradeAttribution = require('./predict/trade_attribution');
+        const sellTrades = todayTrades.filter(t => t.action === 'sell' && t.pnlPct != null);
+        for (const sellTrade of sellTrades) {
+          // Find matching buy trade
+          const buyTrade = todayTrades.find(t => t.action === 'buy' && t.code === sellTrade.code)
+            || pf.tradeHistory.find(t => t.action === 'buy' && t.code === sellTrade.code && t.date === sellTrade.date);
+          if (buyTrade || sellTrades.length <= 3) {
+            try {
+              tradeAttribution.analyzeAttribution(sellTrade, buyTrade, pf, {
+                indices, marketNarrative: (analysisData && analysisData.marketNarrative) || null,
+              });
+            } catch (_) {}
+          }
+        }
+        if (sellTrades.length > 0) {
+          this._logEvent('trade_attribution', { sellCount: sellTrades.length, date: dateStr });
+        }
+      } catch (_) {}
+
+      // P3: Update dynamic weights (Loop 6 — OLS regression learning)
+      try {
+        const dynamicWeights = require('./predict/dynamic_weights');
+        const dwResult = dynamicWeights.updateDynamicWeights();
+        this._logEvent('dynamic_weights_updated', { updated: dwResult.updated, r2: dwResult.r2, sampleCount: dwResult.sampleCount || 0 });
+      } catch (_) {}
+
+      // P3: Update cycle×factor matrix (Loop 5 — market cycle tracking)
+      try {
+        const cycleFactorMatrix = require('./predict/cycle_factor_matrix');
+        const marketCycle = require('./analysis/market_cycle');
+        const cycleHistory = marketCycle.loadCycleHistory ? (marketCycle.loadCycleHistory() || []) : [];
+        cycleFactorMatrix.updateCycleFactorMatrix(cycleHistory);
+      } catch (_) {}
+
+      // P4: Verify expected return predictions (v2.8 — Loop 6 closing feedback)
+      try {
+        const er = require('./predict/expected_return');
+        er.verifyExpectedReturns(dateStr);
+      } catch (_) {}
+
       this._logEvent('daily_summary_complete', {
         totalValue: snap.totalValue,
         tradeCount: todayTrades.length,
@@ -1258,6 +1468,48 @@ class Scheduler extends EventEmitter {
         }
       }
 
+      // Compute expected returns for top candidates (v2.8: feedback loop 6+7)
+      var expectedReturns = [];
+      try {
+        var er = require('./predict/expected_return');
+        var context = {};
+        // Load stock factor performance if available
+        try {
+          var spfPath = path.join(dir, 'stock_factor_performance.json');
+          if (fs.existsSync(spfPath)) {
+            context.stockFactorPerf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
+          }
+        } catch (_) {}
+        // Load market cycle if available
+        try {
+          var mc = require('./analysis/market_cycle');
+          context.marketCycle = mc.getCurrentCycle ? mc.getCurrentCycle() : null;
+        } catch (_) {}
+        // Load north-bound perf if available
+        try {
+          var fp = require('./analysis/factor_performance');
+          context.nbPerf = fp.getNBPerformance ? fp.getNBPerformance() : null;
+        } catch (_) {}
+        // Load weekend context if available (for stock similarity)
+        try {
+          var wcPath = path.join(dir, 'weekend_context.json');
+          if (fs.existsSync(wcPath)) {
+            context.weekendContext = JSON.parse(fs.readFileSync(wcPath, 'utf8'));
+          }
+        } catch (_) {}
+        var ranked = er.rankByExpectedReturn(allResults, context);
+        expectedReturns = ranked.slice(0, 10).map(function(r) {
+          return {
+            code: r.code, name: r.name,
+            compositeScore: r.compositeScore,
+            rating: r.rating,
+            expectedReturn: r.prediction ? r.prediction.expectedReturn : null,
+            confidence: r.prediction ? r.prediction.confidence : null,
+            label: r.prediction ? r.prediction.label : null,
+          };
+        });
+      } catch (_) {}
+
       const summary = {
         type: type || 'full',
         date: this._todayDate,
@@ -1268,6 +1520,7 @@ class Scheduler extends EventEmitter {
         duration: result.duration || 0,
         top5: (result.top5 || []).map(s => ({
           code: s.code, name: s.name, score: s.compositeScore, rating: s.rating,
+          signals: s.signals || (s.hiddenSignals || []).map(h => ({ id: h.id, name: h.name, level: h.level })),
         })),
         scoreDistribution: dist,
         signalCounts: signalCounts,
@@ -1277,6 +1530,7 @@ class Scheduler extends EventEmitter {
         maxScore: allResults.length > 0
           ? Math.max(...allResults.map(r => r.compositeScore || 0))
           : 0,
+        expectedReturns: expectedReturns,
       };
 
       const filePath = path.join(dir, 'last_pipeline_result.json');

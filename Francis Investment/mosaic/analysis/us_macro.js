@@ -62,28 +62,28 @@ function summarizeMacro(macroItems) {
   var vixLevel = 'normal';
   var vixInterpretation = '';
   if (vxx) {
-    if (vxx.price >= 40) { vixLevel = 'crisis'; vixInterpretation = '⚠️ 恐慌级别 — 全球避险模式'; }
-    else if (vxx.price >= 30) { vixLevel = 'elevated'; vixInterpretation = '⚡ 警戒 — 市场焦虑上升'; }
-    else if (vxx.price >= 25) { vixLevel = 'caution'; vixInterpretation = '📊 正常偏高 — 保持关注'; }
-    else { vixLevel = 'normal'; vixInterpretation = '✅ 低波动 — 风险偏好积极'; }
+    if (vxx.price >= 40) { vixLevel = 'crisis'; vixInterpretation = '[PANIC] 恐慌级别 — 全球避险模式'; }
+    else if (vxx.price >= 30) { vixLevel = 'elevated'; vixInterpretation = '[ALERT] 警戒 — 市场焦虑上升'; }
+    else if (vxx.price >= 25) { vixLevel = 'caution'; vixInterpretation = '[--] 正常偏高 — 保持关注'; }
+    else { vixLevel = 'normal'; vixInterpretation = '[OK] 低波动 — 风险偏好积极'; }
   }
 
   // UUP interpretation (USD ETF proxy: higher = stronger dollar)
   var uupInterpretation = '';
   if (uup) {
-    if (uup.changePercent >= 0.5) uupInterpretation = '📈 美元走强 — 人民币承压，北向资金倾向流出';
-    else if (uup.changePercent <= -0.5) uupInterpretation = '📉 美元走弱 — 利好人民币资产，外资倾向流入';
-    else uupInterpretation = '📊 美元稳定';
+    if (uup.changePercent >= 0.5) uupInterpretation = '[UP] 美元走强 — 人民币承压，北向资金倾向流出';
+    else if (uup.changePercent <= -0.5) uupInterpretation = '[DN] 美元走弱 — 利好人民币资产，外资倾向流入';
+    else uupInterpretation = '[--] 美元稳定';
   }
 
   // TLT interpretation (20yr Treasury ETF: price drops = yields rise)
   var tltInterpretation = '';
   if (tlt) {
-    if (tlt.changePercent <= -1) tltInterpretation = '⚠️ 美债收益率急升 — 利空全球成长股/A股科技';
-    else if (tlt.changePercent <= -0.5) tltInterpretation = '📈 收益率上升 — 成长股承压';
-    else if (tlt.changePercent >= 1) tltInterpretation = '✅ 收益率下降 — 利好成长股估值';
-    else if (tlt.changePercent >= 0.5) tltInterpretation = '📉 收益率下行 — 偏向宽松';
-    else tltInterpretation = '📊 收益率平稳';
+    if (tlt.changePercent <= -1) tltInterpretation = '[PANIC] 美债收益率急升 — 利空全球成长股/A股科技';
+    else if (tlt.changePercent <= -0.5) tltInterpretation = '[UP] 收益率上升 — 成长股承压';
+    else if (tlt.changePercent >= 1) tltInterpretation = '[OK] 收益率下降 — 利好成长股估值';
+    else if (tlt.changePercent >= 0.5) tltInterpretation = '[DN] 收益率下行 — 偏向宽松';
+    else tltInterpretation = '[--] 收益率平稳';
   }
 
   return {

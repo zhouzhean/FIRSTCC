@@ -84,10 +84,11 @@ function analyzeAttribution(sellTrade, buyTrade, pf, context) {
   // ---- 4. 触发参数反馈 ----
   const adjustments = {};
 
-  // If expectedReturn was > 2% but actual loss > 5%, flag model issue
-  if (attribution.expectedReturn > 2 && actualReturn < -5) {
+  // If expectedReturn was positive but actual loss > 3%, flag model issue
+  // v2.9.1: lowered threshold from >2% expected + < -5% actual → >0% expected + < -3% actual
+  if (attribution.expectedReturn != null && attribution.expectedReturn > 0 && actualReturn < -3) {
     adjustments.factorWeightReduce = {
-      reason: '期望收益>' + attribution.expectedReturn + '%但实际亏损' + Math.abs(actualReturn).toFixed(1) + '%',
+      reason: '期望收益+' + attribution.expectedReturn + '%但实际亏损' + Math.abs(actualReturn).toFixed(1) + '%',
       action: '降低期望收益模型中因子组合权重10%',
     };
   }
@@ -100,12 +101,19 @@ function analyzeAttribution(sellTrade, buyTrade, pf, context) {
     }));
   }
 
-  // If stop-loss triggered by -8%, check if sector is toxic
-  if (sellTrade.reason && sellTrade.reason.includes('硬止损') && sector !== '其他') {
+  // If loss > 5%, flag sector as toxic for avoidance
+  // v2.9.1: Expanded from hard-stop-loss only to ANY significant loss (>=5%)
+  // Includes hard stop-loss (-8%), soft stop-loss, and trailing-stop losses
+  if (actualReturn < -5 && sector !== '其他') {
+    const lossType = sellTrade.reason && sellTrade.reason.includes('硬止损') ? '硬止损' :
+                     sellTrade.reason && sellTrade.reason.includes('软止损') ? '软止损' :
+                     sellTrade.reason && sellTrade.reason.includes('移动止盈') ? '移动止盈反转' : '亏损卖出';
+    const avoidDays = actualReturn < -8 ? 5 : 3; // deeper loss = longer avoidance
     adjustments.sectorAvoid = {
       sector: sector,
-      reason: '该板块触发硬止损，建议3天内避让',
-      expiresAt: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
+      reason: '该板块' + lossType + '(亏损' + Math.abs(actualReturn).toFixed(1) + '%)，建议' + avoidDays + '天内避让',
+      expiresAt: new Date(Date.now() + avoidDays * 86400000).toISOString().slice(0, 10),
+      lossSeverity: actualReturn,
     };
   }
 

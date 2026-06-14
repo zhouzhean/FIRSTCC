@@ -147,6 +147,63 @@ function getNextScanTime() {
  * Synthesizes market state + factor health + portfolio P&L + risk regime
  * into one sentence of guidance the user can actually act on.
  */
+function _buildLoopImpact(data) {
+  const loopImpact = [];
+  try {
+    if (data.predictionHealth && data.predictionHealth.loops) {
+      const loops = data.predictionHealth.loops;
+      // Loop 1: weekend verify
+      if (loops['1_weekendVerify'] && loops['1_weekendVerify'].status === 'active') {
+        const l1 = loops['1_weekendVerify'];
+        if (l1.process && l1.process.crossMarketRisk) {
+          loopImpact.push({ loop: 1, name: '周末验证', effect: '跨市场防御激活' });
+        }
+        if (l1.process && l1.process.sectorPreference) {
+          loopImpact.push({ loop: 1, name: '周末验证', effect: '板块偏好注入' });
+        }
+      }
+      // Loop 2: NB weight
+      if (loops['2_nbWeight'] && loops['2_nbWeight'].status) {
+        const l2 = loops['2_nbWeight'];
+        const nbStatus = l2.status;
+        if (nbStatus === 'active') {
+          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向信号活跃，权重正常' });
+        } else if (nbStatus === 'degraded') {
+          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向偏冷，触发评分降权' });
+        }
+      }
+      // Loop 3: knowledge base
+      if (loops['3_knowledgeBase'] && loops['3_knowledgeBase'].status === 'active') {
+        const kb = loops['3_knowledgeBase'];
+        const activeF = (kb.process && kb.process.activeFactors) || 0;
+        loopImpact.push({ loop: 3, name: '知识库', effect: activeF + '个因子追踪中' });
+      }
+      // Loop 4: think-tank defense
+      if (loops['4_thinkTankDefense'] && loops['4_thinkTankDefense'].process) {
+        const p4 = loops['4_thinkTankDefense'].process;
+        if (p4.blocked) {
+          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御触发(' + p4.totalScore + '分)，拦截买入' });
+        } else if (p4.totalScore > 0) {
+          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御正常(' + p4.totalScore + '/' + (p4.threshold||2) + ')' });
+        }
+      }
+      // Loop 5: trade attribution
+      if (loops['5_tradeAttribution'] && loops['5_tradeAttribution'].status === 'active') {
+        const a5 = loops['5_tradeAttribution'];
+        const adjCount = (a5.process && a5.process.adjustmentsTriggered) || 0;
+        const tr = a5.input && a5.input.totalAttributions || 0;
+        loopImpact.push({ loop: 5, name: '归因反馈', effect: tr + '条记录，' + adjCount + '次调整' });
+      }
+      // Loop 6: dynamic weights
+      if (loops['6_dynamicWeights'] && loops['6_dynamicWeights'].status === 'active') {
+        const a6 = loops['6_dynamicWeights'];
+        loopImpact.push({ loop: 6, name: '动态权重', effect: 'R²=' + ((a6.process.r2||0)*100).toFixed(0) + '%，OLS学习生效' });
+      }
+    }
+  } catch (_) {}
+  return loopImpact;
+}
+
 function generateTodaysVerdict(data) {
   const parts = [];
   let action = 'normal';
@@ -163,8 +220,10 @@ function generateTodaysVerdict(data) {
     return {
       summary: '当前' + stateLabel + '，等待开盘',
       action: 'wait',
+      actionLabel: stateLabel,
       color: '#4a5568',
       details: [],
+      loopImpact: _buildLoopImpact(data),
     };
   }
 
@@ -254,6 +313,7 @@ function generateTodaysVerdict(data) {
     actionLabel: actionLabel,
     color: actionColor,
     details: [],
+    loopImpact: _buildLoopImpact(data),
   };
 }
 
@@ -310,7 +370,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '2.2.0',
+    version: '2.9.1',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -975,13 +1035,11 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
-  // Knowledge Base — factor combos pattern extraction
+  // Knowledge Base — factor combos (REDIRECTED to history engine in v2.9)
   if (pathname === '/api/knowledge/factor-combos') {
     try {
-      const kb = require('./mosaic/analysis/knowledge_base');
-      const combos = kb.extractFactorCombos(10);
-      const sectorPatterns = kb.extractSectorFlowPatterns();
-      return jsonResponse(res, { ok: true, combos, sectorPatterns });
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, historyReview.getPatterns());
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -1163,6 +1221,38 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
+  // Expected Returns — latest pipeline predictions with E[R5d]
+  if (pathname === '/api/predict/expected-returns') {
+    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    if (fs.existsSync(p)) {
+      try {
+        const lr = JSON.parse(fs.readFileSync(p, 'utf8'));
+        return jsonResponse(res, {
+          ok: true,
+          date: lr.date,
+          time: lr.time,
+          expectedReturns: lr.expectedReturns || [],
+        });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: e.message });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '尚无扫描结果' });
+  }
+
+  // Expected Return Verification — historical prediction vs actual accuracy
+  if (pathname === '/api/predict/expected-return-verification') {
+    const p = path.join(DATA_DIR, 'simfolio', 'expected_return_verification.json');
+    if (fs.existsSync(p)) {
+      try {
+        return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(p, 'utf8')) });
+      } catch (e) {
+        return jsonResponse(res, { ok: false, message: e.message });
+      }
+    }
+    return jsonResponse(res, { ok: false, message: '尚无验证数据（需累计5天以上扫描记录）' });
+  }
+
   // Cross-Market Analysis — risk state + correlation matrix
   if (pathname === '/api/cross-market/analysis') {
     try {
@@ -1220,11 +1310,103 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
-  // ===== 周末深度分析 API =====
+  // ===== 历史复盘引擎 API (v2.9) =====
+  if (pathname === '/api/history/status') {
+    try {
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, { ok: true, ...historyReview.getStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/report') {
+    var mode = url.searchParams.get('mode') || 'full';
+    try {
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, historyReview.getReport(mode));
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/context') {
+    try {
+      var ctxPath = path.join(DATA_DIR, 'simfolio', 'history_context.json');
+      if (fs.existsSync(ctxPath)) {
+        var ctx = JSON.parse(fs.readFileSync(ctxPath, 'utf8'));
+        // Check validity
+        if (ctx.validUntil >= new Date().toISOString().slice(0, 10)) {
+          return jsonResponse(res, { ok: true, ...ctx });
+        }
+      }
+      // Fallback to old weekend_context
+      var oldCtxPath = path.join(DATA_DIR, 'simfolio', 'weekend_context.json');
+      if (fs.existsSync(oldCtxPath)) {
+        var oldCtx = JSON.parse(fs.readFileSync(oldCtxPath, 'utf8'));
+        if (oldCtx.validUntil >= new Date().toISOString().slice(0, 10)) {
+          return jsonResponse(res, { ok: true, ...oldCtx, _deprecated: true });
+        }
+      }
+      return jsonResponse(res, { ok: false, message: '暂无历史复盘上下文' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/verification') {
+    var weekP = url.searchParams.get('week');
+    try {
+      var verifier = require('./mosaic/analysis/history_verifier');
+      if (weekP) {
+        var vr = verifier.getVerificationReport(weekP);
+        return jsonResponse(res, vr);
+      }
+      var latest2 = verifier.getVerificationHistory();
+      if (latest2.ok && latest2.history.length > 0) {
+        var lastWeekend = latest2.history[0].weekend;
+        return jsonResponse(res, verifier.getVerificationReport(lastWeekend));
+      }
+      return jsonResponse(res, { ok: false, message: '尚无验证报告' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/verification-history') {
+    try {
+      var verifier2 = require('./mosaic/analysis/history_verifier');
+      return jsonResponse(res, verifier2.getVerificationHistory());
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/patterns') {
+    try {
+      var historyReview2 = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, historyReview2.getPatterns());
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/history/discoveries') {
+    var limit = parseInt(url.searchParams.get('limit') || '20');
+    try {
+      var historyReview3 = require('./mosaic/analysis/history_review');
+      var st = historyReview3.getStatus();
+      return jsonResponse(res, { ok: true, discoveries: (st.discoveries || []).slice(0, limit), tickHistory: st.tickHistory });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // ===== 周末深度分析 API (DEPRECATED v2.9 — 透传到 history engine) =====
   if (pathname === '/api/weekend-analysis/status') {
     try {
-      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
-      return jsonResponse(res, { ok: true, ...weekendAnalyzer.getStatus() });
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, { ok: true, ...historyReview.getStatus(), _deprecated: true });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -1232,8 +1414,8 @@ const server = http.createServer(async function(req, res) {
 
   if (pathname === '/api/weekend-analysis/report') {
     try {
-      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
-      return jsonResponse(res, { ok: true, ...weekendAnalyzer.getReport() });
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, historyReview.getReport('deep'));
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -1241,12 +1423,14 @@ const server = http.createServer(async function(req, res) {
 
   if (pathname === '/api/weekend-analysis/context') {
     try {
-      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
-      const ctx = weekendAnalyzer.getEnhancedContext();
-      if (ctx) {
-        return jsonResponse(res, { ok: true, ...ctx });
+      var ctxPath2 = path.join(DATA_DIR, 'simfolio', 'history_context.json');
+      if (fs.existsSync(ctxPath2)) {
+        var ctx2 = JSON.parse(fs.readFileSync(ctxPath2, 'utf8'));
+        if (ctx2.validUntil >= new Date().toISOString().slice(0, 10)) {
+          return jsonResponse(res, { ok: true, ...ctx2 });
+        }
       }
-      return jsonResponse(res, { ok: false, message: '暂无周末分析上下文' });
+      return jsonResponse(res, { ok: false, message: '暂无历史复盘上下文' });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -1254,28 +1438,27 @@ const server = http.createServer(async function(req, res) {
 
   if (pathname === '/api/weekend-analysis/history') {
     try {
-      const weekendAnalyzer = require('./mosaic/analysis/weekend_analyzer');
-      const report = weekendAnalyzer.getReport();
-      return jsonResponse(res, { ok: true, similarity: report.similarity || [] });
+      const historyReview = require('./mosaic/analysis/history_review');
+      var deepReport = historyReview.getReport('deep');
+      return jsonResponse(res, { ok: true, similarity: deepReport.similarity || [] });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
   }
 
-  // ===== 周末分析验证 API =====
+  // ===== 周末分析验证 API (DEPRECATED v2.9 — 透传) =====
   if (pathname === '/api/weekend-analysis/verification') {
-    const weekParam = url.searchParams.get('week');
+    var weekP2 = url.searchParams.get('week');
     try {
-      const verifier = require('./mosaic/analysis/weekend_verifier');
-      if (weekParam) {
-        const vReport = verifier.getVerificationReport(weekParam);
-        if (vReport) return jsonResponse(res, { ok: true, ...vReport });
-        return jsonResponse(res, { ok: false, message: '该周末的验证报告不存在' }, 404);
+      var verifierOld = require('./mosaic/analysis/history_verifier');
+      if (weekP2) {
+        return jsonResponse(res, verifierOld.getVerificationReport(weekP2));
       }
-      // No week specified: return latest
-      const latest = verifier.getLatestVerification();
-      if (latest) return jsonResponse(res, { ok: true, ...latest });
-      return jsonResponse(res, { ok: false, message: '尚无验证报告' }, 404);
+      var latestOld = verifierOld.getVerificationHistory();
+      if (latestOld.ok && latestOld.history.length > 0) {
+        return jsonResponse(res, verifierOld.getVerificationReport(latestOld.history[0].weekend));
+      }
+      return jsonResponse(res, { ok: false, message: '尚无验证报告' });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -1283,13 +1466,178 @@ const server = http.createServer(async function(req, res) {
 
   if (pathname === '/api/weekend-analysis/verification-history') {
     try {
-      const verifier = require('./mosaic/analysis/weekend_verifier');
-      const history = verifier.getVerificationHistory();
-      return jsonResponse(res, { ok: true, history });
+      var verifierOld2 = require('./mosaic/analysis/history_verifier');
+      return jsonResponse(res, verifierOld2.getVerificationHistory());
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
   }
+
+  // === 24/7 自主学习进化引擎 API ===
+
+  // 进化任务状态
+  if (pathname === '/api/evolution/status') {
+    try {
+      const evolutionScheduler = require('./mosaic/evolution/evolution_scheduler');
+      return jsonResponse(res, { ok: true, ...evolutionScheduler.getStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 最近夜间回测结果
+  if (pathname === '/api/evolution/night-backtest/latest') {
+    try {
+      const nightBacktest = require('./mosaic/evolution/night_backtest');
+      const result = nightBacktest.loadBacktestResult();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 最近自我质疑报告
+  if (pathname === '/api/evolution/self-reflection/latest') {
+    try {
+      const selfReflection = require('./mosaic/evolution/self_reflection');
+      const result = selfReflection.loadReflectionResult();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 今日美股→A股预测
+  if (pathname === '/api/evolution/us-predict/today') {
+    try {
+      const usAsPredict = require('./mosaic/evolution/us_as_predict');
+      const today = new Date().toISOString().slice(0, 10);
+      const prediction = usAsPredict.loadPrediction(today);
+      return jsonResponse(res, { ok: true, prediction });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 美股→A股预测历史准确率
+  if (pathname === '/api/evolution/us-predict/accuracy') {
+    try {
+      const usAsPredict = require('./mosaic/evolution/us_as_predict');
+      const url = new URL(req.url, 'http://localhost');
+      const days = parseInt(url.searchParams.get('days') || '20', 10);
+      const accuracy = usAsPredict.getPredictionAccuracy(days);
+      return jsonResponse(res, { ok: true, accuracy });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发夜间回测（调试用）
+  if (pathname === '/api/evolution/run-night-backtest' && req.method === 'POST') {
+    try {
+      const nightBacktest = require('./mosaic/evolution/night_backtest');
+      const result = nightBacktest.runNightlyBacktest({ maxStocks: 200, lookbackDays: 60 });
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+  // 网格搜索结果
+  if (pathname === "/api/evolution/grid-search/latest") {
+    try {
+      const gridSearch = require("./mosaic/evolution/weight_grid_search");
+      const result = gridSearch.loadGridResult();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 因子组合挖掘结果
+  if (pathname === "/api/evolution/factor-mining/latest") {
+    try {
+      const factorMining = require("./mosaic/evolution/weekend_factor_mining");
+      const result = factorMining.loadMiningResult();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发全部进化任务（调试用）
+  if (pathname === "/api/evolution/run-all" && req.method === "POST") {
+    try {
+      const evolutionScheduler = require("./mosaic/evolution/evolution_scheduler");
+      evolutionScheduler.runAllNow();
+      return jsonResponse(res, { ok: true, message: "已触发全部进化任务" });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发权重网格搜索
+  if (pathname === "/api/evolution/run-grid-search" && req.method === "POST") {
+    try {
+      const gridSearch = require("./mosaic/evolution/weight_grid_search");
+      const result = gridSearch.runGridSearch();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发自我质疑
+  if (pathname === "/api/evolution/run-self-reflection" && req.method === "POST") {
+    try {
+      const selfReflection = require("./mosaic/evolution/self_reflection");
+      let pf = { positions: [], tradeHistory: [] };
+      try {
+        const simfolio = require("./mosaic/simfolio");
+        pf = simfolio.loadPortfolio();
+      } catch (_) {}
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const result = selfReflection.runSelfReflection(pf, dateStr);
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发因子组合挖掘
+  if (pathname === "/api/evolution/run-factor-mining" && req.method === "POST") {
+    try {
+      const factorMining = require("./mosaic/evolution/weekend_factor_mining");
+      const result = factorMining.runWeekendMining();
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 手动触发美股预测生成
+  if (pathname === "/api/evolution/run-us-predict" && req.method === "POST") {
+    try {
+      const usAsPredict = require("./mosaic/evolution/us_as_predict");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const result = usAsPredict.generateOvernightPrediction(dateStr);
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // 美股预测验证（手动）
+  if (pathname === "/api/evolution/run-us-verify" && req.method === "POST") {
+    try {
+      const usAsPredict = require("./mosaic/evolution/us_as_predict");
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const result = usAsPredict.verifyPrediction(dateStr);
+      return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
 
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
@@ -1399,6 +1747,458 @@ const server = http.createServer(async function(req, res) {
     return jsonResponse(res, data);
   }
 
+  // Think-Tank Decision Status (new — unified decision audit data)
+  if (pathname === '/api/think-tank/decision-status') {
+    const data = { ok: true, timestamp: new Date().toISOString() };
+
+    // 1. Market state
+    if (scheduler) {
+      const s = scheduler.getStatus();
+      data.marketState = {
+        state: s.state,
+        isTradingDay: s.isTradingDay,
+        nextTickMs: s.nextTickMs,
+        opsRunning: s.opsRunning,
+      };
+      // Also set scheduler for generateTodaysVerdict compatibility
+      data.scheduler = { state: s.state };
+    }
+
+    // 2. Decision gates (from last persisted gate state)
+    try {
+      const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
+      if (fs.existsSync(gateStatePath)) {
+        const gs = JSON.parse(fs.readFileSync(gateStatePath, 'utf8'));
+        data.decisionGates = {
+          drawdown: gs.drawdown,
+          marketDirection: gs.marketDirection,
+          circuitBreaker: gs.circuitBreaker,
+          thinkTankDefense: gs.thinkTankDefense,
+          attributionAvoid: gs.attributionAvoid,
+        };
+        data.lastDecision = {
+          timestamp: gs.timestamp,
+          scanType: gs.scanType,
+          executed: gs.executed || [],
+          nearMisses: gs.nearMisses || [],
+          decisions: gs.decisions || 0,
+        };
+      }
+    } catch (_) {}
+
+    // 3. Last scan summary (with pre-fetched K-lines for speed)
+    try {
+      const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+      if (fs.existsSync(lastResultPath)) {
+        const lr = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+        data.lastScan = {
+          time: lr.time,
+          type: lr.type,
+          totalStocks: lr.totalStocks,
+          candidates: lr.candidates,
+          analyzed: lr.analyzed,
+          topScore: lr.maxScore,
+          avgScore: lr.avgScore,
+          top5: (lr.top5 || []).map(s => ({
+            code: s.code, name: s.name, score: s.score || s.compositeScore,
+            rating: s.rating, signals: s.signals || [],
+          })),
+        };
+        // Pre-fetch candidate K-lines inline (fast path, 3s timeout)
+        const top5Codes = (data.lastScan.top5 || []).map(s => s.code);
+        if (top5Codes.length > 0) {
+          try {
+            const marketData = require('./mosaic/collectors/market_data');
+            const klineFetches = top5Codes.map(code => (async () => {
+              try {
+                const rawKlines = await marketData.fetchKline(code, 5);
+                if (rawKlines && rawKlines.length >= 3) {
+                  const closes = rawKlines.map(k => k.close);
+                  const priceMin = Math.min(...rawKlines.map(k => k.low));
+                  const priceMax = Math.max(...rawKlines.map(k => k.high));
+                  const ma5Values = [];
+                  for (let i = 0; i < closes.length; i++) {
+                    const slice = closes.slice(0, i + 1);
+                    ma5Values.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+                  }
+                  return [code, {
+                    candles: rawKlines.map(k => ({
+                      date: k.date, open: k.open, close: k.close,
+                      high: k.high, low: k.low, volumeMoney: k.turnover || k.volume,
+                    })),
+                    ma5Values, priceMin, priceMax,
+                  }];
+                }
+              } catch (_) {}
+              return [code, null];
+            })());
+            const results = await Promise.race([
+              Promise.all(klineFetches),
+              new Promise(resolve => setTimeout(() => resolve([]), 4000)),
+            ]);
+            const klines = {};
+            for (const [code, kl] of results) {
+              if (kl) klines[code] = kl;
+            }
+            if (Object.keys(klines).length > 0) {
+              data.lastScan.klines = klines;
+            }
+          } catch (_) {}
+        }
+        // Include expected returns if available (v2.8)
+        if (lr.expectedReturns && lr.expectedReturns.length > 0) {
+          data.lastScan.expectedReturns = lr.expectedReturns;
+        }
+      }
+    } catch (_) {}
+
+    // 4. Positions
+    try {
+      const pf = simfolio.loadPortfolio();
+      const snap = simfolio.getSnapshot(pf);
+      data.positions = {
+        cash: snap.cash,
+        totalValue: snap.totalValue,
+        totalReturn: snap.totalReturn,
+        positions: snap.positions.map(p => ({
+          code: p.code, name: p.name, shares: p.shares,
+          avgCost: p.avgCost, currentPrice: p.currentPrice,
+          pnl: p.pnl, pnlPct: p.pnlPct,
+        })),
+      };
+    } catch (_) {}
+
+    // 5. Factor performance (include NB performance for Loop 2)
+    try {
+      const factorPerf = require('./mosaic/analysis/factor_performance');
+      const perf = factorPerf.computeFactorPerformance({ days: 20 });
+      const nbPerf = factorPerf.getNBPerformance();
+      data.factorPerformance = { ...perf, nbPerformance: nbPerf };
+    } catch (_) {}
+
+    // 6. Dynamic weights
+    try {
+      const weightsPath = path.join(DATA_DIR, 'simfolio', 'dynamic_weights.json');
+      if (fs.existsSync(weightsPath)) {
+        const dw = JSON.parse(fs.readFileSync(weightsPath, 'utf8'));
+        data.dynamicWeights = {
+          weights: dw.weights || {},
+          r2: dw.r2,
+          samples: dw.sampleCount,
+          updatedAt: dw.updatedAt,
+          message: dw.message,
+        };
+      }
+    } catch (_) {}
+
+    // 7. Prediction health — 6 Learning Loops with 3-layer data (Input → Process → Output)
+    try {
+      const sfPath = path.join(DATA_DIR, 'simfolio', 'stock_factor_performance.json');
+      const taPath = path.join(DATA_DIR, 'simfolio', 'trade_attribution.json');
+      const adjPath = path.join(DATA_DIR, 'simfolio', 'attribution_adjustments.json');
+      const weekendPath = path.join(DATA_DIR, 'simfolio', 'weekend_context.json');
+
+      // --- Loop 1: Weekend Verify → Analysis ---
+      let loop1 = { status: 'off', detail: '无周末验证数据' };
+      try {
+        if (fs.existsSync(weekendPath)) {
+          const wc = JSON.parse(fs.readFileSync(weekendPath, 'utf8'));
+          const now = new Date();
+          const validUntil = wc.validUntil ? new Date(wc.validUntil) : null;
+          const expired = validUntil && now > validUntil;
+          const insightTypes = (wc.insights || []).map(i => i.type);
+          loop1 = {
+            status: expired ? 'degraded' : 'active',
+            input: {
+              label: '周末分析报告',
+              generatedAt: wc.generatedAt,
+              validUntil: wc.validUntil,
+              insightCount: (wc.insights || []).length,
+            },
+            process: {
+              label: '识别关键信号',
+              signals: insightTypes,
+              crossMarketRisk: insightTypes.includes('cross_market'),
+              sectorPreference: insightTypes.includes('sector_preference'),
+            },
+            output: expired
+              ? '已过期(有效期至'+wc.validUntil+')，等待新的周末分析'
+              : '周末分析已注入：历史平行匹配+板块偏好+跨市场风险评估',
+            detail: expired
+              ? '周末验证数据已过期('+wc.validUntil+')，分析结果不再注入决策流程'
+              : '周末验证报告反馈到因子分析引擎，调整板块权重与跨市场防御门',
+          };
+        }
+      } catch (_) {}
+
+      // --- Loop 2: NorthBound → Score Weight ---
+      let loop2 = { status: 'off', detail: '无北向资金数据' };
+      try {
+        if (data.factorPerformance && data.factorPerformance.nbPerformance) {
+          const nb = data.factorPerformance.nbPerformance;
+          loop2 = {
+            status: nb.status === 'hot' ? 'active' : nb.status === 'cold' ? 'degraded' : 'active',
+            input: {
+              label: '北向资金情绪',
+              signalDays: nb.signalDays || 0,
+              totalDays: nb.totalDays || 0,
+              available: nb.available,
+            },
+            process: {
+              label: '计算方向命中率',
+              hitRate: nb.hitRate,
+              status: nb.status,
+            },
+            output: nb.status === 'hot'
+              ? '命中率高('+(nb.hitRate*100).toFixed(0)+'%)，北向信号权重上调'
+              : nb.status === 'cold'
+                ? '命中率低('+(nb.hitRate*100).toFixed(0)+'%)，触发北向评分降权'
+                : '命中率中性('+(nb.hitRate*100).toFixed(0)+'%)，维持默认权重',
+            detail: '北向资金情绪HOT/COLD计算命中率，动态调整composite评分中的北向权重(±3~±5分)',
+          };
+        }
+      } catch (_) {}
+
+      // --- Loop 3: Knowledge Base → Decision ---
+      let loop3 = { status: 'active', detail: '知识库持续追踪' };
+      try {
+        const kbDir = path.join(DATA_DIR, 'knowledge_base');
+        const factorTrackerPath = path.join(kbDir, 'factor_tracker.json');
+        const kbIndexPath = path.join(kbDir, 'index.json');
+
+        let kbDays = 0, activeFactors = 0, topFactorIds = [];
+        if (fs.existsSync(factorTrackerPath)) {
+          const ft = JSON.parse(fs.readFileSync(factorTrackerPath, 'utf8'));
+          kbDays = ft.totalDays || 0;
+          const factors = ft.factors || {};
+          const entries = Object.entries(factors);
+          activeFactors = entries.filter(([_, f]) => f.triggerCount > 0).length;
+          topFactorIds = entries
+            .filter(([_, f]) => f.triggerCount > 0)
+            .sort((a, b) => b[1].triggerCount - a[1].triggerCount)
+            .slice(0, 3)
+            .map(([id]) => id);
+        }
+        // Check if KB actually influenced gate decisions
+        let triggeredGate = false;
+        try {
+          const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
+          if (fs.existsSync(gateStatePath)) {
+            const gs = JSON.parse(fs.readFileSync(gateStatePath, 'utf8'));
+            if (gs.thinkTankDefense && gs.thinkTankDefense.breakdown) {
+              const kb = gs.thinkTankDefense.breakdown.knowledgeBase;
+              if (kb && kb.score > 0) triggeredGate = true;
+            }
+          }
+        } catch (_) {}
+
+        loop3 = {
+          status: kbDays >= 1 ? 'active' : 'degraded',
+          input: {
+            label: '历史日分析存档',
+            kbDays,
+            factorTrackerDays: kbDays,
+          },
+          process: {
+            label: '追踪高效因子',
+            activeFactors,
+            totalFactors: 9,
+            topFactors: topFactorIds,
+          },
+          output: triggeredGate
+            ? '已触发！知识库检测到历史高效因子当前偏冷，对防御门贡献分数'
+            : '持续追踪中，当前'+(triggeredGate?'已':'未')+'触发防御门影响',
+          detail: '累计'+kbDays+'天知识库，追踪'+activeFactors+'/9个因子有历史触发记录。冷因子检测→防御门knowledgeBase维度',
+        };
+      } catch (_) {}
+
+      // --- Loop 4: Think-Tank Defense → Gate ---
+      let loop4 = { status: 'active', detail: '思维舱防御门运行中' };
+      try {
+        const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
+        let gateDefenseData = null;
+        if (fs.existsSync(gateStatePath)) {
+          const gs = JSON.parse(fs.readFileSync(gateStatePath, 'utf8'));
+          if (gs.thinkTankDefense) {
+            gateDefenseData = gs.thinkTankDefense;
+          }
+        }
+        if (gateDefenseData) {
+          const bd = gateDefenseData.breakdown || {};
+          const dimScores = {};
+          let totalScore = 0;
+          let dimCount = 0;
+          const dimNames = ['factorHealth', 'portfolioStress', 'consecutiveLoss', 'crossMarketRisk', 'signalDivergence', 'knowledgeBase'];
+          for (const dn of dimNames) {
+            if (bd[dn]) {
+              dimScores[dn] = bd[dn].score || 0;
+              totalScore += bd[dn].score || 0;
+              dimCount++;
+            }
+          }
+          loop4 = {
+            status: gateDefenseData.status === 'block' ? 'active' : 'active',
+            input: {
+              label: '6维风控维度',
+              dimensions: dimNames.length,
+              gateTimestamp: gateDefenseData.timestamp || new Date().toISOString(),
+            },
+            process: {
+              label: '综合防御评分',
+              totalScore,
+              threshold: gateDefenseData.threshold || 2,
+              blocked: gateDefenseData.status === 'block',
+              dimScores,
+            },
+            output: gateDefenseData.status === 'block'
+              ? '防御触发！总分'+totalScore+'/'+dimCount+'≥阈值'+gateDefenseData.threshold+'，拦截买入'
+              : '防御正常，总分'+totalScore+'/'+dimCount+'<阈值'+gateDefenseData.threshold+'，放行交易',
+            detail: gateDefenseData.description || '6维综合评分：因子健康/持仓压力/连续回撤/跨市场风险/信号背离/知识库',
+          };
+        }
+      } catch (_) {}
+
+      // --- Loop 5: Trade Attribution → Parameters ---
+      let loop5 = { status: 'off', detail: '暂无交易归因记录' };
+      try {
+        if (fs.existsSync(taPath)) {
+          const ta = JSON.parse(fs.readFileSync(taPath, 'utf8'));
+          const records = ta.records || [];
+          const recentRecords = records.slice(-5);
+          const winCount = recentRecords.filter(r => r.isWin).length;
+          const totalRecords = recentRecords.length;
+          const adjustmentsMade = recentRecords.filter(r => r.adjustments && Object.keys(r.adjustments).length > 0).length;
+
+          let adjDetail = '暂无活跃参数调整';
+          if (fs.existsSync(adjPath)) {
+            const adj = JSON.parse(fs.readFileSync(adjPath, 'utf8'));
+            const activeAdj = [];
+            if (adj.factorWeightOffsets && adj.factorWeightOffsets.reduced) activeAdj.push('因子权重下调');
+            if (adj.sectorAvoidList && adj.sectorAvoidList.length > 0) activeAdj.push(adj.sectorAvoidList.length+'个板块避让');
+            if (activeAdj.length > 0) adjDetail = '活跃调整: '+activeAdj.join(', ');
+          }
+
+          loop5 = {
+            status: records.length > 0 ? 'active' : 'degraded',
+            input: {
+              label: '已完成交易记录',
+              totalAttributions: records.length,
+              recentCount: totalRecords,
+              lastUpdated: ta.updatedAt,
+            },
+            process: {
+              label: '归因分析',
+              recentWinRate: totalRecords > 0 ? (winCount/totalRecords*100).toFixed(0)+'%' : 'N/A',
+              adjustmentsTriggered: adjustmentsMade,
+            },
+            output: adjustmentsMade > 0 ? '反馈生效：'+adjDetail : '归因正常，未触发参数调整阈值',
+            detail: '每笔卖出后归因：因子命中/板块表现/预期vs实际→调整因子信任度+板块避让列表。共'+records.length+'条归因记录',
+          };
+        }
+      } catch (_) {}
+
+      // --- Loop 6: Dynamic Weights → Score ---
+      let loop6 = { status: 'off', detail: '无动态权重数据' };
+      try {
+        if (data.dynamicWeights) {
+          const dw = data.dynamicWeights;
+          const r2 = dw.r2 || 0;
+          const samples = dw.samples || 0;
+          const weights = dw.weights || {};
+          const weightEntries = Object.entries(weights);
+          const activeDims = weightEntries.filter(([_, v]) => v > 0.05).length;
+
+          loop6 = {
+            status: r2 >= 0.05 ? 'active' : (samples > 0 ? 'degraded' : 'degraded'),
+            input: {
+              label: 'OLS训练数据',
+              sampleCount: samples,
+              minSamples: 30,
+              lookbackDays: 20,
+            },
+            process: {
+              label: 'OLS回归学习',
+              r2: r2,
+              threshold: 0.05,
+              activeDimensions: activeDims,
+              totalDimensions: 5,
+            },
+            output: r2 >= 0.05
+              ? '学习生效！R²='+(r2*100).toFixed(0)+'%≥5%，自动调整'+activeDims+'维权重'
+              : samples < 30
+                ? '样本不足('+samples+'<30)，继续积累数据'
+                : 'R²='+(r2*100).toFixed(0)+'%<5%，回退默认权重',
+            detail: '每日盘后OLS回归，自动调整5维评分权重(限5%-50%)。需≥30条样本，R²≥5%生效',
+          };
+        }
+      } catch (_) {}
+
+      data.predictionHealth = {
+        loops: {
+          '1_weekendVerify': loop1,
+          '2_nbWeight': loop2,
+          '3_knowledgeBase': loop3,
+          '4_thinkTankDefense': loop4,
+          '5_tradeAttribution': loop5,
+          '6_dynamicWeights': loop6,
+        },
+        stockPredictor: fs.existsSync(sfPath) ? { available: true } : { available: false },
+        tradeAttribution: fs.existsSync(taPath) ? { available: true, recordCount: (function() {
+          try { const ta = JSON.parse(fs.readFileSync(taPath, 'utf8')); return (ta.records || []).length; } catch (_) { return 0; }
+        })() } : { available: false },
+      };
+    } catch (_) {}
+
+    // 8. Verdict
+    data.verdict = generateTodaysVerdict(data);
+
+    return jsonResponse(res, data);
+  }
+
+  // Think-Tank Candidate K-line (batch fetch for candidate stock cards)
+  if (pathname === '/api/think-tank/candidate-kline') {
+    const codesParam = url.searchParams.get('codes') || '';
+    const codes = codesParam.split(',').filter(Boolean).slice(0, 6);
+    if (codes.length === 0) return jsonResponse(res, { ok: false, message: '需要codes参数' });
+
+    try {
+      const marketData = require('./mosaic/collectors/market_data');
+      const klines = {};
+      const fetchPromises = codes.map(code => (async () => {
+        try {
+          const rawKlines = await marketData.fetchKline(code, 5);
+          if (rawKlines && rawKlines.length >= 3) {
+            const closes = rawKlines.map(k => k.close);
+            const priceMin = Math.min(...rawKlines.map(k => k.low));
+            const priceMax = Math.max(...rawKlines.map(k => k.high));
+            const ma5Values = [];
+            for (let i = 0; i < closes.length; i++) {
+              const slice = closes.slice(0, i + 1);
+              ma5Values.push(slice.reduce((a, b) => a + b, 0) / slice.length);
+            }
+            klines[code] = {
+              candles: rawKlines.map(k => ({
+                date: k.date, open: k.open, close: k.close,
+                high: k.high, low: k.low, volumeMoney: k.turnover || k.volume,
+              })),
+              ma5Values,
+              priceMin,
+              priceMax,
+            };
+          }
+        } catch (_) { /* skip individual stock errors */ }
+      })());
+      // 5s total timeout — with cache, most reads are <10ms
+      await Promise.race([
+        Promise.all(fetchPromises),
+        new Promise(resolve => setTimeout(resolve, 5000)),
+      ]);
+      return jsonResponse(res, { ok: true, klines });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // Think Tank SSE stream
   if (pathname === '/api/think-tank/stream') {
     res.writeHead(200, {
@@ -1503,7 +2303,8 @@ server.listen(PORT, '0.0.0.0', function() {
 
   // Wire scheduler think-tank events to SSE broadcast
   const thinkEvents = ['think_progress', 'think_enrichment', 'think_stock', 'think_stats',
-    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_usmarket', 'think_factor_perf', 'think_weekend'];
+    'think_scan', 'think_trade', 'think_position', 'think_state', 'think_alert', 'think_status',
+    'think_usmarket', 'think_factor_perf', 'think_weekend', 'think_decision'];
   for (const evt of thinkEvents) {
     scheduler.on(evt, (data) => {
       if (sseClients.size > 0) {

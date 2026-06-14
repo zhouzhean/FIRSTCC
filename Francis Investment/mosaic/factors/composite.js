@@ -5,8 +5,14 @@
  *   TotalScore = fundamental(25%) + technical(20%) + hidden(35%) + capital_flow(20%)
  *
  * 输出与现有 recommendation-history.json 兼容的评分结构。
+ *
+ * [v2.7.0] 增强：
+ *   - 读取因子组合挖掘结果 (factor_combinations.json)，对协同因子对加成、冲突因子对降权
+ *   - 读取美股预测准确率反馈 (us_as_verification_history.json)，动态调整跨市场信号权重
  */
 const config = require('../config');
+const fs = require('fs');
+const path = require('path');
 
 // ---- Individual dimension scorers (each returns 0-100) ----
 
@@ -231,13 +237,13 @@ function getSectorFlowRank(stock, sectorFlowMap) {
 // ---- 6-dimension star ratings (compatible with existing format) ----
 
 function starsFromScore(score) {
-  if (score >= 90) return { stars: '★★★★★', rating: 5.0, cls: 'up' };
-  if (score >= 80) return { stars: '★★★★☆', rating: 4.0, cls: 'up' };
-  if (score >= 70) return { stars: '★★★☆', rating: 3.5, cls: 'up' };
-  if (score >= 60) return { stars: '★★★', rating: 3.0, cls: 'flat' };
-  if (score >= 50) return { stars: '★★☆', rating: 2.5, cls: 'flat' };
-  if (score >= 40) return { stars: '★★', rating: 2.0, cls: 'down' };
-  /* <40 */  return { stars: '★☆', rating: 1.5, cls: 'down' };
+  if (score >= 90) return { stars: '[S]', rating: 5.0, cls: 'up' };
+  if (score >= 80) return { stars: '[A+]', rating: 4.0, cls: 'up' };
+  if (score >= 70) return { stars: '[A]', rating: 3.5, cls: 'up' };
+  if (score >= 60) return { stars: '[B]', rating: 3.0, cls: 'flat' };
+  if (score >= 50) return { stars: '[C]', rating: 2.5, cls: 'flat' };
+  if (score >= 40) return { stars: '[D]', rating: 2.0, cls: 'down' };
+  /* <40 */  return { stars: '[E]', rating: 1.5, cls: 'down' };
 }
 
 // ---- Main composite score ----
@@ -288,6 +294,34 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
     }
   } catch (_) { /* factor_performance not available */ }
 
+  // === P0: Factor combination synergy/conflict bonus ===
+  // Read weekend factor mining results and apply signal weighting
+  let factorComboBonus = 0;
+  let factorComboPenalty = 0;
+  try {
+    const factorCombos = loadFactorCombinations();
+    if (factorCombos && hiddenResult && hiddenResult.signals && hiddenResult.signals.length >= 2) {
+      const triggeredIds = hiddenResult.signals.map(function(s) { return s.id; });
+      if (factorCombos.synergistic) {
+        for (var si = 0; si < factorCombos.synergistic.length; si++) {
+          var pair = factorCombos.synergistic[si];
+          if (triggeredIds.indexOf(pair.factor1) >= 0 && triggeredIds.indexOf(pair.factor2) >= 0) {
+            factorComboBonus += Math.round(pair.lift * 10);
+          }
+        }
+      }
+      if (factorCombos.conflicting) {
+        for (var ci = 0; ci < factorCombos.conflicting.length; ci++) {
+          var cpair = factorCombos.conflicting[ci];
+          if (triggeredIds.indexOf(cpair.factor1) >= 0 && triggeredIds.indexOf(cpair.factor2) >= 0) {
+            factorComboPenalty += Math.round(Math.abs(cpair.lift) * 10);
+          }
+        }
+      }
+    }
+  } catch (_) { /* factor_combinations not yet available */ }
+
+
   // Adaptive weights
   let weights;
   if (!hasDetail) {
@@ -322,6 +356,69 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
   // P1-4: Apply cold factor penalty to final score
   if (coldFactorPenalty > 0) {
     total = Math.max(0, total - coldFactorPenalty);
+  }
+
+  // P0: Apply factor combination synergy/conflict adjustment
+  if (factorComboBonus > 0) {
+    total = Math.min(100, total + factorComboBonus);
+  }
+  if (factorComboPenalty > 0) {
+    total = Math.max(0, total - factorComboPenalty);
+  }
+
+  // === P1-5: Cycle-aware factor preference adjustment (v2.8 — Loop 7) ===
+  // Read cycle_factor_matrix.json and apply bonuses/penalties for the current market cycle.
+  // Preferred factors in this cycle get a bonus; avoid factors get a penalty.
+  let cycleAdjustment = 0;
+  let cycleAdjustmentLabel = '';
+  try {
+    const cyclePrefs = loadCycleFactorPreferences();
+    if (cyclePrefs && cyclePrefs.available && hiddenResult && hiddenResult.signals) {
+      const preferredSet = new Set(cyclePrefs.preferredFactors || []);
+      const avoidSet = new Set(cyclePrefs.avoidFactors || []);
+      for (const sig of hiddenResult.signals) {
+        if (preferredSet.has(sig.id)) {
+          cycleAdjustment += 3;
+          cycleAdjustmentLabel = (cycleAdjustmentLabel ? cycleAdjustmentLabel + ',' : '') + sig.id + '+';
+        }
+        if (avoidSet.has(sig.id)) {
+          cycleAdjustment -= 5;
+          cycleAdjustmentLabel = (cycleAdjustmentLabel ? cycleAdjustmentLabel + ',' : '') + sig.id + '-';
+        }
+      }
+    }
+  } catch (_) {}
+  if (cycleAdjustment !== 0) {
+    total = Math.max(0, Math.min(100, total + cycleAdjustment));
+  }
+
+  // === P1-6: False signal pattern penalty (v2.8 — Loop 5) ===
+  // Read self_reflection false_signal_patterns and penalize stocks whose triggered
+  // signal combinations match known high-loss-rate patterns.
+  let falsePatternPenalty = 0;
+  let falsePatternLabel = '';
+  try {
+    const falsePatterns = loadFalseSignalPatterns();
+    if (falsePatterns && falsePatterns.length > 0 && hiddenResult && hiddenResult.signals && hiddenResult.signals.length > 0) {
+      const triggeredIds = hiddenResult.signals.map(function(s) { return s.id; }).sort();
+      for (var fpi = 0; fpi < falsePatterns.length; fpi++) {
+        var fp = falsePatterns[fpi];
+        var patternIds = (fp.factors || []).slice().sort();
+        // Check if triggered signals contain all factors in the false pattern
+        var allMatch = patternIds.length > 0;
+        for (var pj = 0; pj < patternIds.length; pj++) {
+          if (triggeredIds.indexOf(patternIds[pj]) < 0) { allMatch = false; break; }
+        }
+        if (allMatch && fp.lossRate != null && fp.lossRate >= 0.5) {
+          var penalty = Math.round(fp.lossRate * 10); // 50% loss rate = 5 pt penalty
+          falsePatternPenalty = Math.max(falsePatternPenalty, penalty);
+          falsePatternLabel = patternIds.join('+') + '(lossRate=' + Math.round(fp.lossRate * 100) + '%)';
+        }
+      }
+    }
+  } catch (_) {}
+  if (falsePatternPenalty > 0) {
+    total = Math.max(0, total - falsePatternPenalty);
   }
 
   // Thin data cap: stocks without ROE/debt/revenue data cannot exceed 65.
@@ -507,4 +604,102 @@ function getSectorFlowPercentile(stock, sectorFlowMap) {
   return null;
 }
 
-module.exports = { computeCompositeScore, starsFromScore, scoreFundamental, scoreTechnical, scoreCapitalFlow, getSectorFlowPercentile };
+/**
+ * Load cycle×factor preferences from evolution engine (v2.8 — Loop 7).
+ * Reads cycle_factor_matrix.json and returns preferred/avoid factors for current cycle.
+ */
+function loadCycleFactorPreferences() {
+  const cfmPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio', 'cycle_factor_matrix.json');
+  if (!fs.existsSync(cfmPath)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(cfmPath, 'utf8'));
+    if (!data.preferences) return null;
+    return {
+      available: true,
+      cycle: data.preferences.cycle,
+      preferredFactors: data.preferences.preferredFactors || [],
+      avoidFactors: data.preferences.avoidFactors || [],
+    };
+  } catch (_) { return null; }
+}
+
+/**
+ * Load false_signal_patterns from self_reflection engine (v2.8 — Loop 5).
+ * Returns array of { factors: [...], lossRate, samples } or null if not available.
+ */
+function loadFalseSignalPatterns() {
+  var srPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio', 'self_reflection_result.json');
+  if (!fs.existsSync(srPath)) {
+    // Try the dedicated false_signal_patterns file
+    srPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio', 'false_signal_patterns.json');
+    if (!fs.existsSync(srPath)) return null;
+  }
+  try {
+    var data = JSON.parse(fs.readFileSync(srPath, 'utf8'));
+    // self_reflection_result.json wraps patterns in a different structure
+    if (data.falseSignalPatterns && data.falseSignalPatterns.patterns) {
+      return data.falseSignalPatterns.patterns;
+    }
+    // Direct false_signal_patterns.json format
+    if (data.patterns && Array.isArray(data.patterns)) {
+      return data.patterns;
+    }
+    return null;
+  } catch (_) { return null; }
+}
+
+/**
+ * Load factor_combinations.json from evolution engine.
+ * Returns { synergistic: [...], conflicting: [...] } or null if not available.
+ */
+function loadFactorCombinations() {
+  const comboPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio', 'factor_combinations.json');
+  if (!fs.existsSync(comboPath)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(comboPath, 'utf8'));
+    return data.factorCombinations || null;
+  } catch (_) { return null; }
+}
+
+/**
+ * Load US→A prediction accuracy for dynamic cross-market weight adjustment.
+ * If hitRate is reliably high (>65%), cross-market signal gets full weight.
+ * If unreliable (<50%), cross-market weight is reduced.
+ */
+function getUSPredictionAccuracy() {
+  const verifyPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio', 'us_as_verification_history.json');
+  if (!fs.existsSync(verifyPath)) return null;
+  try {
+    const history = JSON.parse(fs.readFileSync(verifyPath, 'utf8'));
+    if (!history.entries || history.entries.length === 0) return null;
+    // Compute rolling 20-day hit rate
+    const recent = history.entries.slice(-20);
+    var totalDecisive = 0, totalCorrect = 0;
+    for (var i = 0; i < recent.length; i++) {
+      var e = recent[i];
+      if (e.decisivePredictions > 0) {
+        totalDecisive += e.decisivePredictions;
+        totalCorrect += e.correctCount;
+      }
+    }
+    if (totalDecisive === 0) return null;
+    return {
+      overallHitRate: +(totalCorrect / totalDecisive).toFixed(2),
+      totalDecisive: totalDecisive,
+      totalCorrect: totalCorrect,
+    };
+  } catch (_) { return null; }
+}
+
+module.exports = {
+  computeCompositeScore,
+  starsFromScore,
+  scoreFundamental,
+  scoreTechnical,
+  scoreCapitalFlow,
+  getSectorFlowPercentile,
+  loadFactorCombinations,
+  loadCycleFactorPreferences,
+  loadFalseSignalPatterns,
+  getUSPredictionAccuracy,
+};
