@@ -175,82 +175,110 @@ function renderRiskGauge(rs) {
 
   var html = '';
 
-  // Regime label
-  html += '<div style="text-align:center;padding:16px 16px 0;">';
-  html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:3px;color:#94a3b8;margin-bottom:6px;">Risk Regime</div>';
-  html += '<div style="font-size:22px;font-weight:700;color:#1e293b;">' + escHtml(rs.regimeLabel) + '</div>';
-  html += '<div style="font-size:13px;color:' + rs.riskColor + ';font-weight:600;">Score: ' + (score >= 0 ? '+' : '') + score + '</div>';
+  // Unique IDs for toggle
+  var infoId = 'cm-info-' + id;
+
+  // Score display above gauge (HTML text, no Canvas font rendering issues)
+  html += '<div style="text-align:center;padding:14px 16px 0;">';
+  html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:3px;color:#94a3b8;margin-bottom:4px;">Risk Regime' +
+    ' <span id="' + infoId + '-btn" style="cursor:pointer;display:inline-block;width:16px;height:16px;line-height:16px;border-radius:50%;background:#e2e8f0;color:#64748b;font-size:10px;font-weight:700;text-align:center;letter-spacing:0;vertical-align:1px;" ' +
+    'onclick="var p=document.getElementById(\'' + infoId + '\');var b=document.getElementById(\'' + infoId + '-btn\');if(p.style.display===\'none\'){p.style.display=\'block\';b.textContent=\'x\';b.style.background=\'#b8942c\';b.style.color=\'#fff\';}else{p.style.display=\'none\';b.textContent=\'?\';b.style.background=\'#e2e8f0\';b.style.color=\'#64748b\';}">?</span>' +
+    '</div>';
+  html += '<div style="font-size:36px;font-weight:800;color:' + rs.riskColor + ';line-height:1.2;">' + (score >= 0 ? '+' : '') + score + '</div>';
+  html += '<div style="font-size:13px;color:#475569;font-weight:500;">' + escHtml(rs.regimeLabel) + '</div>';
+
+  // Expandable explanation panel
+  html += '<div id="' + infoId + '" style="display:none;text-align:left;margin:8px 16px 0;padding:12px 14px;background:rgba(184,148,44,0.04);border:1px solid rgba(184,148,44,0.12);border-radius:8px;font-size:11px;color:#475569;line-height:1.7;">';
+  html += '<div style="font-weight:700;color:#1e293b;margin-bottom:6px;">Risk Score = VIX x 40% + USD x 30% + TLT x 30%</div>';
+  html += '<div style="margin-bottom:8px;">范围 -65 (恐慌) ~ +65 (风险偏好)</div>';
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:10px;">';
+  html += '<span style="color:#ef4444;">-65 ~ -40</span><span>Panic 恐慌</span>';
+  html += '<span style="color:#f59e0b;">-40 ~ -15</span><span>Defense 防御</span>';
+  html += '<span style="color:#94a3b8;">-15 ~ +15</span><span>Neutral 中性</span>';
+  html += '<span style="color:#34d399;">+15 ~ +40</span><span>Bullish 看多</span>';
+  html += '<span style="color:#10b981;">+40 ~ +65</span><span>Risk-On 激进</span>';
+  html += '</div>';
+  html += '<div style="margin-top:8px;font-size:10px;color:#94a3b8;border-top:1px solid #f1f5f9;padding-top:6px;">';
+  html += 'VIX↓=risk-on(+) · USD↓=risk-on(+) · TLT↑=risk-off(-)';
+  html += '</div>';
   html += '</div>';
 
-  // Canvas gauge (responsive DPI)
-  html += '<canvas id="' + id + '" width="640" height="340" style="width:100%;max-width:320px;display:block;margin:0 auto;"></canvas>';
+  html += '</div>';
 
-  // Inject canvas drawing script
+  // Canvas gauge — arc only, no text, no needle
+  html += '<canvas id="' + id + '" width="640" height="200" style="width:100%;max-width:320px;display:block;margin:0 auto;"></canvas>';
+
+  // Inject canvas drawing script — glowing arc sweep only
   html += '<script>(function(){';
   html += 'var c=document.getElementById("' + id + '");';
   html += 'if(!c)return;';
   html += 'var dpr=window.devicePixelRatio||1;';
-  html += 'var displayW=320,displayH=170;';
+  html += 'var displayW=320,displayH=100;';
   html += 'c.width=displayW*dpr;c.height=displayH*dpr;c.style.width=displayW+"px";c.style.height=displayH+"px";';
   html += 'var ctx=c.getContext("2d");ctx.scale(dpr,dpr);';
   html += 'var w=displayW,h=displayH;';
-  html += 'var cx=w/2,cy=h-10,r=130;';
+  html += 'var cx=w/2,cy=h+30,r=120;';
   html += 'var startAngle=Math.PI,endAngle=0;';
+  html += 'var targetNorm=' + normalized.toFixed(4) + ';';
+  html += 'var riskColor="' + rs.riskColor + '";';
 
-  // Background arc (glass track)
-  html += 'ctx.beginPath();ctx.arc(cx,cy,r,startAngle,endAngle);';
-  html += 'ctx.lineWidth=18;ctx.strokeStyle="rgba(0,0,0,0.05)";ctx.lineCap="round";ctx.stroke();';
-
-  // Gradient arc segments
+  // Color segments (background track)
   html += 'var segs=[';
-  // Red zone (panic: -65 to -35)
   html += '{start:0,end:0.23,color:"#ef4444"},';
-  // Orange zone (risk_off: -35 to -10)
   html += '{start:0.23,end:0.42,color:"#f59e0b"},';
-  // Yellow zone (neutral: -10 to +10)
   html += '{start:0.42,end:0.58,color:"#94a3b8"},';
-  // Green zone (bullish: +10 to +35)
   html += '{start:0.58,end:0.77,color:"#34d399"},';
-  // Bright green zone (risk_on: +35 to +65)
   html += '{start:0.77,end:1,color:"#10b981"}';
   html += '];';
 
-  // Draw each segment
+  // Draw static background once
+  html += 'function drawStatic(){';
+  // Background track (subtle ring)
+  html += 'ctx.beginPath();ctx.arc(cx,cy,r,startAngle,endAngle);';
+  html += 'ctx.lineWidth=16;ctx.strokeStyle="rgba(0,0,0,0.05)";ctx.lineCap="round";ctx.stroke();';
+  // Color segments
   html += 'for(var i=0;i<segs.length;i++){';
-  html += 'var seg=segs[i];';
-  html += 'ctx.beginPath();';
+  html += 'var seg=segs[i];ctx.beginPath();';
   html += 'ctx.arc(cx,cy,r,startAngle+seg.start*Math.PI,startAngle+seg.end*Math.PI);';
-  html += 'ctx.lineWidth=6;ctx.strokeStyle=seg.color;ctx.lineCap="butt";';
-  html += 'ctx.globalAlpha=0.5;ctx.stroke();';
+  html += 'ctx.lineWidth=7;ctx.strokeStyle=seg.color;ctx.lineCap="butt";';
+  html += 'ctx.globalAlpha=0.3;ctx.stroke();';
+  html += '}ctx.globalAlpha=1;';
+  // Tiny endpoint ticks
+  html += 'ctx.fillStyle="#94a3b8";ctx.font="9px system-ui";ctx.textAlign="center";';
+  html += 'ctx.fillText("-65",cx-r-10,cy+14);ctx.fillText("+65",cx+r+10,cy+14);';
   html += '}';
-  html += 'ctx.globalAlpha=1;';
+  html += 'drawStatic();';
 
-  // Active needle
-  html += 'var needleAngle=startAngle+' + normalized.toFixed(4) + '*Math.PI;';
-  html += 'var nx=cx+Math.cos(needleAngle)*r,ny=cy+Math.sin(needleAngle)*r;';
-
-  // Needle shadow
-  html += 'ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(nx,ny);';
-  html += 'ctx.lineWidth=3;ctx.strokeStyle="rgba(0,0,0,0.5)";ctx.stroke();';
-
-  // Needle
-  html += 'ctx.beginPath();ctx.moveTo(cx,cy);ctx.lineTo(nx,ny);';
-  html += 'ctx.lineWidth=2.5;ctx.strokeStyle="' + rs.riskColor + '";ctx.lineCap="round";ctx.stroke();';
-
-  // Center dot
-  html += 'ctx.beginPath();ctx.arc(cx,cy,5,0,2*Math.PI);';
-  html += 'ctx.fillStyle="#1e293b";ctx.fill();';
-  html += 'ctx.beginPath();ctx.arc(cx,cy,3,0,2*Math.PI);';
-  html += 'ctx.fillStyle="' + rs.riskColor + '";ctx.fill();';
-
-  // Labels
-  html += 'ctx.fillStyle="#6b7280";ctx.font="9px system-ui";ctx.textAlign="center";';
-  html += 'ctx.fillText("-65",cx-r-8,cy+14);ctx.fillText("+65",cx+r+8,cy+14);';
+  // Animate glowing progress arc
+  html += 'function easeOutCubic(t){return 1-Math.pow(1-t,3);}';
+  html += 'var startTime=null;var duration=800;';
+  html += 'function animateProgress(ts){';
+  html += 'if(!startTime)startTime=ts;';
+  html += 'var progress=Math.min((ts-startTime)/duration,1);';
+  html += 'var eased=easeOutCubic(progress);';
+  html += 'var currentAngle=startAngle+eased*targetNorm*Math.PI;';
+  // Redraw static bg, then glowing arc on top
+  html += 'ctx.clearRect(0,0,w,h);';
+  html += 'drawStatic();';
+  // Outer glow arc
+  html += 'ctx.save();';
+  html += 'ctx.shadowColor=riskColor;ctx.shadowBlur=12;';
+  html += 'ctx.beginPath();ctx.arc(cx,cy,r,startAngle,currentAngle);';
+  html += 'ctx.lineWidth=8;ctx.strokeStyle=riskColor;ctx.lineCap="round";';
+  html += 'ctx.globalAlpha=0.85;ctx.stroke();';
+  html += 'ctx.restore();';
+  // Inner bright arc
+  html += 'ctx.beginPath();ctx.arc(cx,cy,r,startAngle,currentAngle);';
+  html += 'ctx.lineWidth=3;ctx.strokeStyle=riskColor;ctx.lineCap="round";';
+  html += 'ctx.globalAlpha=1;ctx.stroke();';
+  html += 'if(progress<1){requestAnimationFrame(animateProgress);}';
+  html += '}';
+  html += 'requestAnimationFrame(animateProgress);';
 
   html += '})();</script>';
 
   // Legend
-  html += '<div style="display:flex;justify-content:space-between;padding:0 24px 16px;font-size:9px;color:#94a3b8;">';
+  html += '<div style="display:flex;justify-content:space-between;padding:0 24px 8px;font-size:9px;color:#94a3b8;">';
   html += '<span style="color:#ef4444;">Panic</span>';
   html += '<span style="color:#f59e0b;">Defense</span>';
   html += '<span style="color:#94a3b8;">Neutral</span>';
@@ -297,46 +325,81 @@ function renderRiskTimeline(riskTrend, currentScore) {
   html += 'var min=Math.min.apply(null,scores),max=Math.max.apply(null,scores);';
   html += 'var range=max-min||10;min-=range*0.2;max+=range*0.2;range=max-min;';
 
-  // Draw grid lines
+  // Helper functions
+  html += 'function easeOutQuad(t){return 1-(1-t)*(1-t);}';
+
+  // Draw grid lines (static, drawn immediately)
   html += 'ctx.strokeStyle="rgba(0,0,0,0.06)";ctx.lineWidth=1;';
   html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
   html += 'ctx.beginPath();ctx.moveTo(pad,gy);ctx.lineTo(W-pad,gy);ctx.stroke();}';
 
-  // Draw line
+  // Score labels on y-axis (static)
+  html += 'ctx.textAlign="right";ctx.font="8px system-ui";';
+  html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
+  html += 'var val=max-(max-min)*g/2;';
+  html += 'ctx.fillStyle=val>=0?"#34d399":"#f87171";';
+  html += 'ctx.fillText((val>=0?"+":"")+val.toFixed(0),pad-4,gy+3);}';
+
+  // Date labels (static)
+  html += 'ctx.fillStyle="#94a3b8";ctx.font="8px system-ui";ctx.textAlign="center";';
+  html += 'for(var i=0;i<dates.length;i++){';
+  html += 'var sx=pad+(i/(scores.length-1))*plotW;';
+  html += 'ctx.fillText(dates[i],sx,topPad+plotH+13);';
+  html += '}';
+
+  // Animate line draw-in from left to right
+  html += 'var animStart=null;var animDur=600;';
+  html += 'function animateLine(ts){';
+  html += 'if(!animStart)animStart=ts;';
+  html += 'var p=Math.min((ts-animStart)/animDur,1);';
+  html += 'var easedP=easeOutQuad(p);';
+  html += 'var drawEnd=Math.max(1,Math.floor(easedP*scores.length));';
+
+  // Clear the plot area (not the grid/labels)
+  html += 'ctx.clearRect(pad,topPad-2,W-2*pad,plotH+4+botPad+2);';
+
+  // Redraw grid
+  html += 'ctx.strokeStyle="rgba(0,0,0,0.06)";ctx.lineWidth=1;';
+  html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
+  html += 'ctx.beginPath();ctx.moveTo(pad,gy);ctx.lineTo(W-pad,gy);ctx.stroke();}';
+
+  // Draw line segment
   html += 'ctx.beginPath();ctx.strokeStyle="#b8942c";ctx.lineWidth=2.5;ctx.lineJoin="round";';
-  html += 'for(var i=0;i<scores.length;i++){';
+  html += 'for(var i=0;i<drawEnd;i++){';
   html += 'var sx=pad+(i/(scores.length-1))*plotW;';
   html += 'var sy=topPad+plotH-(scores[i]-min)/range*plotH;';
   html += 'if(i===0)ctx.moveTo(sx,sy);else ctx.lineTo(sx,sy);';
   html += '}';
   html += 'ctx.stroke();';
 
-  // Fill area under line
-  html += 'ctx.lineTo(W-pad,topPad+plotH);ctx.lineTo(pad,topPad+plotH);ctx.closePath();';
+  // Fill (clipped to same progressive area)
+  html += 'if(drawEnd>=2){';
+  html += 'ctx.lineTo(pad+(drawEnd-1)/(scores.length-1)*plotW,topPad+plotH);ctx.lineTo(pad,topPad+plotH);ctx.closePath();';
   html += 'var grad=ctx.createLinearGradient(0,topPad,0,topPad+plotH);';
   html += 'grad.addColorStop(0,"rgba(184,148,44,0.2)");grad.addColorStop(1,"rgba(184,148,44,0.02)");';
   html += 'ctx.fillStyle=grad;ctx.fill();';
+  html += '}';
 
-  // Draw dots for each point
-  html += 'for(var i=0;i<scores.length;i++){';
+  // Draw dots
+  html += 'for(var i=0;i<drawEnd;i++){';
   html += 'var sx=pad+(i/(scores.length-1))*plotW;';
   html += 'var sy=topPad+plotH-(scores[i]-min)/range*plotH;';
   html += 'var isCurrent=i===scores.length-1;';
   html += 'ctx.beginPath();ctx.arc(sx,sy,isCurrent?4:2.5,0,Math.PI*2);';
   html += 'ctx.fillStyle=isCurrent?"#b8942c":(scores[i]>=0?"#34d399":"#f87171");';
   html += 'ctx.fill();ctx.strokeStyle="#fff";ctx.lineWidth=1.5;ctx.stroke();';
+  html += '}';
 
-  // Date labels
+  // Redraw date labels
   html += 'ctx.fillStyle="#94a3b8";ctx.font="8px system-ui";ctx.textAlign="center";';
+  html += 'for(var i=0;i<dates.length;i++){';
+  html += 'var sx=pad+(i/(scores.length-1))*plotW;';
   html += 'ctx.fillText(dates[i],sx,topPad+plotH+13);';
   html += '}';
 
-  // Score labels on y-axis
-  html += 'ctx.textAlign="right";ctx.font="8px system-ui";';
-  html += 'for(var g=0;g<3;g++){var gy=topPad+plotH*g/2;';
-  html += 'var val=max-(max-min)*g/2;';
-  html += 'ctx.fillStyle=val>=0?"#34d399":"#f87171";';
-  html += 'ctx.fillText((val>=0?"+":"")+val.toFixed(0),pad-4,gy+3);}';
+  html += 'if(p<1){requestAnimationFrame(animateLine);}';
+  html += '}';
+  html += 'requestAnimationFrame(animateLine);';
 
   html += '})();</script>';
 
@@ -402,7 +465,7 @@ function renderCorrelationRow(row) {
 
   // Bar
   html += '<div style="flex:1;min-width:50px;height:6px;border-radius:3px;background:rgba(0,0,0,0.05);overflow:hidden;">';
-  html += '<div style="height:100%;width:' + barWidth + '%;border-radius:3px;background:' + (rVal > 0 ? '#10b981' : '#ef4444') + ';transition:width 0.6s ease;"></div>';
+  html += '<div data-bar-width="' + barWidth + '" style="height:100%;width:0%;border-radius:3px;background:' + (rVal > 0 ? '#10b981' : '#ef4444') + ';transition:width 0.6s ease;"></div>';
   html += '</div>';
 
   // Latest US change (most actionable info)
@@ -563,7 +626,7 @@ function renderMarketCycleDashboard(cycle) {
   html += '<div style="flex:1;background:rgba(255,255,255,0.6);border-radius:8px;padding:10px 14px;">';
   html += '<div style="font-size:10px;color:#94a3b8;margin-bottom:3px;">周期置信度</div>';
   html += '<div style="height:6px;border-radius:3px;background:rgba(0,0,0,0.06);overflow:hidden;margin-bottom:4px;">';
-  html += '<div style="height:100%;width:' + confPct + '%;border-radius:3px;background:' + style.text + ';transition:width 0.6s;"></div>';
+  html += '<div data-bar-width="' + confPct + '" style="height:100%;width:0%;border-radius:3px;background:' + style.text + ';transition:width 0.6s;"></div>';
   html += '</div>';
   html += '<div style="font-size:11px;font-weight:600;color:' + style.text + ';">' + confPct + '/100</div>';
   html += '</div>';

@@ -23,6 +23,9 @@ function renderPredictionDashboard(data, mode) {
 
   var html = '<div class="predict-dashboard">';
 
+  // Market cycle status bar (top)
+  html += renderCycleStatusBar(data.marketCycle);
+
   // Always render all 5 panels — sub-renderers handle their own empty states
   html += renderExpectedReturnRanking(data.ranking);
   html += renderFactorPredictionMatrix(data.factorPerf);
@@ -30,6 +33,39 @@ function renderPredictionDashboard(data, mode) {
   html += renderSectorLeadLagPanel(data.sectorLeadLag);
   html += renderCycleFactorHeatmap(data.cycleFactorMatrix);
 
+  html += '</div>';
+  return html;
+}
+
+function renderCycleStatusBar(mc) {
+  if (!mc) return '';
+  var cycle = mc.cycle || 'sideways';
+  var label = mc.label || '震荡';
+  var conf = mc.confidence || 50;
+  var colors = {
+    bullish: '#10b981', slightly_bullish: '#34d399',
+    sideways: '#94a3b8',
+    slightly_bearish: '#f59e0b', bearish: '#ef4444'
+  };
+  var bgColors = {
+    bullish: 'rgba(16,185,129,0.08)', slightly_bullish: 'rgba(52,211,153,0.06)',
+    sideways: 'rgba(148,163,184,0.06)',
+    slightly_bearish: 'rgba(245,158,11,0.08)', bearish: 'rgba(239,68,68,0.08)'
+  };
+  var c = colors[cycle] || '#94a3b8';
+  var bg = bgColors[cycle] || 'rgba(148,163,184,0.06)';
+
+  var html = '<div class="predict-cycle-bar" style="background:' + bg + ';border:1px solid ' + c + '26;border-radius:10px;padding:10px 16px;margin-bottom:12px;display:flex;align-items:center;gap:12px;">';
+  html += '<span style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#64748b;">市场周期</span>';
+  html += '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:' + c + ';box-shadow:0 0 6px ' + c + '80;"></span>';
+  html += '<span style="font-weight:700;color:' + c + ';font-size:15px;">' + label + '</span>';
+  html += '<span style="font-size:11px;color:#94a3b8;">置信度 ' + Math.round(conf) + '%</span>';
+  if (mc.suggestedMaxPositions) {
+    html += '<span style="font-size:11px;color:#64748b;">建议持仓 ≤' + mc.suggestedMaxPositions + '只</span>';
+  }
+  if (mc.dataAvailable === false) {
+    html += '<span style="font-size:10px;color:#f59e0b;margin-left:auto;">数据积累中</span>';
+  }
   html += '</div>';
   return html;
 }
@@ -49,7 +85,9 @@ function renderExpectedReturnRanking(ranking) {
       var ratingColor = rating === 'S' ? '#b8942c' : rating === 'A' ? '#10b981' : rating === 'B' ? '#6366f1' : rating === 'C' ? '#f59e0b' : '#94a3b8';
       var er = r.prediction ? r.prediction.expectedReturn : 0;
       var erClass = er > 2 ? 'er-strong' : er > 0 ? 'er-positive' : 'er-negative';
-      html += '<div class="predict-rank-item">';
+      var confidence = r.prediction ? Math.round(r.prediction.confidence * 100) : 0;
+      var confColor = confidence >= 67 ? '#10b981' : confidence >= 33 ? '#f59e0b' : '#94a3b8';
+      html += '<div class="predict-rank-item entrance-item" style="animation-delay:' + (i * 60) + 'ms;">';
       html += '<span class="predict-rank-num">#' + (i + 1) + '</span>';
       html += '<span class="predict-rank-name">' + (r.name || r.code) + '</span>';
       html += '<span class="predict-rank-rating" style="font-weight:700;color:' + ratingColor + ';">[' + rating + ']</span>';
@@ -68,15 +106,31 @@ function renderExpectedReturnRanking(ranking) {
         html += '</span>';
       }
 
+      // Dimension breakdown — compact inline dots with hover tooltip
       if (r.prediction && r.prediction.breakdown) {
-        html += '<span class="predict-rank-breakdown">';
         var bd = r.prediction.breakdown;
-        if (bd.factorCombo && bd.factorCombo.available) html += '因子' + (bd.factorCombo.value > 0 ? '+' : '') + bd.factorCombo.value.toFixed(1) + '% ';
-        if (bd.sectorFlow && bd.sectorFlow.available) html += '板块' + (bd.sectorFlow.value > 0 ? '+' : '') + bd.sectorFlow.value.toFixed(1) + '% ';
-        if (bd.marketCycle && bd.marketCycle.available) html += '周期' + (bd.marketCycle.value > 0 ? '+' : '') + bd.marketCycle.value.toFixed(1) + '%';
+        var dimNames = {
+          factorCombo: '因子组合',
+          sectorFlow: '板块资金',
+          marketCycle: '市场周期',
+          nbSentiment: '北向情绪',
+          stockSimilarity: '历史相似',
+          scorePercentile: '评分百分位'
+        };
+        html += '<span class="predict-rank-dims" style="display:inline-flex;gap:2px;align-items:center;margin:0 6px;">';
+        var dimKeys = ['factorCombo', 'sectorFlow', 'marketCycle', 'nbSentiment', 'stockSimilarity', 'scorePercentile'];
+        for (var dk = 0; dk < dimKeys.length; dk++) {
+          var key = dimKeys[dk];
+          var dimData = bd[key];
+          var active = dimData && dimData.available !== false;
+          var dimVal = active ? dimData.value : 0;
+          var dimColor = active ? (dimVal > 0 ? '#10b981' : dimVal < 0 ? '#ef4444' : '#94a3b8') : '#d1d5db';
+          var tooltip = (dimNames[key] || key) + ': ' + (active ? (dimVal > 0 ? '+' : '') + dimVal.toFixed(2) + '%' : '无数据');
+          html += '<span class="predict-dim-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:' + dimColor + ';cursor:default;" title="' + tooltip + '"></span>';
+        }
         html += '</span>';
       }
-      html += '<span class="predict-rank-confidence">置信度' + Math.round((r.prediction ? r.prediction.confidence : 0) * 100) + '%</span>';
+      html += '<span class="predict-rank-confidence" style="color:' + confColor + ';">置信度' + confidence + '%</span>';
       html += '</div>';
     }
     html += '</div>';
@@ -169,7 +223,7 @@ function renderWeightBars(dw) {
     var barWidth = Math.max(5, w);
     html += '<div class="weight-item">';
     html += '<span class="weight-label">' + d.name + '</span>';
-    html += '<div class="weight-bar-bg"><div class="weight-bar-fill" style="width:' + barWidth + '%"></div></div>';
+    html += '<div class="weight-bar-bg"><div class="weight-bar-fill" data-bar-width="' + barWidth + '" style="width:0%"></div></div>';
     html += '<span class="weight-value">' + w + '%</span>';
     html += '</div>';
   }

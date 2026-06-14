@@ -26,7 +26,7 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simf
  * @param {object} context.stockFactorPerf - 个股因子绩效数据
  * @param {object} context.marketCycle - 市场周期结果
  * @param {object} context.nbPerf - 北向绩效
- * @param {object} context.sectorFlowRank - 板块资金流排名
+ * @param {number|object} context.sectorFlowRank - 板块资金流排名（数字或sectorFlowMap）
  * @param {number} context.maxScore - Pipeline 最高分（用于百分位计算）
  * @param {number} context.minScore - Pipeline 最低分（用于百分位计算）
  * @returns {object} { expectedReturn, breakdown, confidence }
@@ -92,7 +92,7 @@ function computeFactorComboReturn(stock, stockFactorPerf) {
 
   for (const sig of signals) {
     const factorPerf = stockFactorPerf.factors.find(f => f.id === sig.id);
-    if (factorPerf && factorPerf.avgReturn != null && factorPerf.totalSamples >= 5) {
+    if (factorPerf && factorPerf.avgReturn != null && factorPerf.totalSamples >= 3) {
       const w = sig.level === 'strong' ? 3 : sig.level === 'medium' ? 2 : 1;
       totalReturn += factorPerf.avgReturn * w;
       totalWeight += w;
@@ -117,24 +117,85 @@ function computeFactorComboReturn(stock, stockFactorPerf) {
 /**
  * 维度 2: 板块资金流动量
  * 该股票所在板块近期资金流排名 → 预期收益偏移
+ * sectorFlowRank 可以是数字（0=top, 1=bottom）或 sectorFlowMap（从 map 中查找）
  */
 function computeSectorFlowBias(stock, sectorFlowRank) {
   if (sectorFlowRank == null) {
     return { value: 0, available: false, label: '无板块资金流数据', weight: 1.0 };
   }
 
+  var rank = null;
+
+  // If sectorFlowRank is a Map/object with sector flow data, look up this stock
+  if (typeof sectorFlowRank === 'object' && !Array.isArray(sectorFlowRank)) {
+    try {
+      var entries = [];
+      // Support both Map and plain object
+      if (sectorFlowRank instanceof Map || (sectorFlowRank.entries && typeof sectorFlowRank.entries === 'function')) {
+        entries = Array.from(sectorFlowRank.entries()).map(function(e) {
+          return { code: e[0], name: e[1].name, majorNetFlow: e[1].majorNetFlow };
+        });
+      } else if (Array.isArray(sectorFlowRank.entries)) {
+        entries = sectorFlowRank.entries;
+      }
+      if (entries.length > 0) {
+        // Sort by majorNetFlow descending
+        entries.sort(function(a, b) { return (b.majorNetFlow || 0) - (a.majorNetFlow || 0); });
+        // Match stock name to sector
+        var SECTOR_PATTERNS = [
+          { sector: '半导体/AI算力', keys: ['半导体', '芯片', '电子', '光电', '封测', '晶圆', '硅', '算力', '存储'] },
+          { sector: '机器人/具身智能', keys: ['机器人', '智能', '减速器', '电机', '伺服', '传感', '运动控制', '自动化'] },
+          { sector: '创新药/AI医疗', keys: ['药', '医疗', '医', '生物', '基因', '细胞', '疫苗', '诊断', '试剂'] },
+          { sector: '商业航天', keys: ['航天', '卫星', '航空', '火箭', '军工电子', '雷达', '导航'] },
+          { sector: '固态电池/储能', keys: ['电池', '储能', '锂', '电解', '正极', '负极', '新能源', '光伏', '风电'] },
+          { sector: '新型电力基建', keys: ['电力', '电网', '特高压', '电缆', '电气', '充电桩', '配电'] },
+          { sector: '军工', keys: ['军工', '弹药', '装备', '船舶', '电磁', '武器', '防务'] },
+          { sector: '有色金属/稀土', keys: ['有色', '稀土', '矿', '铝', '铜', '钢', '金属', '材料', '磁'] },
+        ];
+        var stockSector = '其他';
+        var stockName = stock.name || '';
+        for (var pi = 0; pi < SECTOR_PATTERNS.length; pi++) {
+          var pat = SECTOR_PATTERNS[pi];
+          if (pat.keys.some(function(kw) { return stockName.indexOf(kw) !== -1; })) {
+            stockSector = pat.sector;
+            break;
+          }
+        }
+        // Find rank
+        for (var i = 0; i < entries.length; i++) {
+          var sec = entries[i];
+          if (!sec.name) continue;
+          for (var pj = 0; pj < SECTOR_PATTERNS.length; pj++) {
+            var pat2 = SECTOR_PATTERNS[pj];
+            if (pat2.sector === stockSector && pat2.keys.some(function(kw) { return (sec.name || '').indexOf(kw) !== -1; })) {
+              rank = i / entries.length;
+              break;
+            }
+          }
+          if (rank !== null) break;
+        }
+      }
+    } catch (_) {}
+  } else if (typeof sectorFlowRank === 'number') {
+    rank = sectorFlowRank;
+  }
+
+  if (rank === null || rank === undefined) {
+    return { value: 0, available: false, label: '板块排名未匹配', weight: 1.0 };
+  }
+
   // sectorFlowRank: 0 = top sector, 1 = bottom sector
-  let bias;
-  if (sectorFlowRank <= 0.10) bias = 2.0;
-  else if (sectorFlowRank <= 0.25) bias = 1.0;
-  else if (sectorFlowRank <= 0.50) bias = 0.3;
-  else if (sectorFlowRank <= 0.75) bias = -0.5;
+  var bias;
+  if (rank <= 0.10) bias = 2.0;
+  else if (rank <= 0.25) bias = 1.0;
+  else if (rank <= 0.50) bias = 0.3;
+  else if (rank <= 0.75) bias = -0.5;
   else bias = -1.5;
 
   return {
     value: bias,
     available: true,
-    label: '板块排名Top' + Math.round(sectorFlowRank * 100) + '%',
+    label: '板块排名Top' + Math.round(rank * 100) + '%',
     weight: 1.0,
   };
 }

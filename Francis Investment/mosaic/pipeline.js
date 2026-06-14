@@ -372,6 +372,14 @@ class Pipeline extends EventEmitter {
       // === Step 9: Build output ===
       this._setProgress(95, '正在生成报告数据...');
 
+      // Serialize sectorFlowMap for prediction engine (Map → array of objects)
+      var sectorFlowSerialized = [];
+      if (sectorFlowMap && sectorFlowMap.size > 0) {
+        sectorFlowSerialized = Array.from(sectorFlowMap.entries()).map(function(e) {
+          return { code: e[0], name: e[1].name, majorNetFlow: e[1].majorNetFlow };
+        });
+      }
+
       const reportDate = new Date().toISOString().slice(0, 10);
       const result = {
         date: reportDate,
@@ -384,6 +392,7 @@ class Pipeline extends EventEmitter {
         top5: top5,
         allResults: results,
         nbSentiment: nbSentiment,        // 北向情绪（供因子绩效追踪使用）
+        sectorFlowMap: sectorFlowSerialized,  // 板块资金流（供预测引擎 sectorFlow 维度）
         duration: Math.round((Date.now() - this.startTime) / 1000),
       };
 

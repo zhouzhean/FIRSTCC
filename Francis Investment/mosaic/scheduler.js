@@ -1483,12 +1483,18 @@ class Scheduler extends EventEmitter {
         // Load market cycle if available
         try {
           var mc = require('./analysis/market_cycle');
-          context.marketCycle = mc.getCurrentCycle ? mc.getCurrentCycle() : null;
+          context.marketCycle = mc.getMarketCycle ? mc.getMarketCycle() : null;
         } catch (_) {}
         // Load north-bound perf if available
         try {
           var fp = require('./analysis/factor_performance');
           context.nbPerf = fp.getNBPerformance ? fp.getNBPerformance() : null;
+        } catch (_) {}
+        // Load sector flow map from pipeline result (for sectorFlow dimension)
+        try {
+          if (result.sectorFlowMap && Array.isArray(result.sectorFlowMap)) {
+            context.sectorFlowRank = { entries: result.sectorFlowMap };
+          }
         } catch (_) {}
         // Load weekend context if available (for stock similarity)
         try {
@@ -1499,6 +1505,23 @@ class Scheduler extends EventEmitter {
         } catch (_) {}
         var ranked = er.rankByExpectedReturn(allResults, context);
         expectedReturns = ranked.slice(0, 10).map(function(r) {
+          // Extract breakdown summary for UI display
+          var breakdownSummary = null;
+          if (r.prediction && r.prediction.breakdown) {
+            breakdownSummary = {};
+            var bd = r.prediction.breakdown;
+            var dimKeys = ['factorCombo', 'sectorFlow', 'marketCycle', 'nbSentiment', 'stockSimilarity', 'scorePercentile'];
+            for (var dk = 0; dk < dimKeys.length; dk++) {
+              var key = dimKeys[dk];
+              if (bd[key] && bd[key].available) {
+                breakdownSummary[key] = {
+                  value: bd[key].value,
+                  label: bd[key].label,
+                  weight: bd[key].weight,
+                };
+              }
+            }
+          }
           return {
             code: r.code, name: r.name,
             compositeScore: r.compositeScore,
@@ -1506,6 +1529,7 @@ class Scheduler extends EventEmitter {
             expectedReturn: r.prediction ? r.prediction.expectedReturn : null,
             confidence: r.prediction ? r.prediction.confidence : null,
             label: r.prediction ? r.prediction.label : null,
+            breakdown: breakdownSummary,
           };
         });
       } catch (_) {}

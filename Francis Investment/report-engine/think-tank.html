@@ -1328,11 +1328,25 @@ function renderWeights(weightData) {
     var w = (weightData.weights[d.key] != null) ? Math.round(weightData.weights[d.key]*100) : 0;
     html += '<div class="weight-item">' +
       '<span class="weight-label">'+d.label+'</span>' +
-      '<div class="weight-bar-bg"><div class="weight-bar-fill" style="width:'+Math.max(3,w)+'%;background:'+d.color+';"></div></div>' +
+      '<div class="weight-bar-bg"><div class="weight-bar-fill" data-bar-width="'+Math.max(3,w)+'" style="width:0%;background:'+d.color+';"></div></div>' +
       '<span class="weight-value">'+w+'%</span>' +
       '</div>';
   }
   el.innerHTML = html;
+
+  // Trigger bar transitions for weight bars
+  requestAnimationFrame(function() {
+    var bars = el.querySelectorAll('[data-bar-width]');
+    for (var bi = 0; bi < bars.length; bi++) {
+      var bar = bars[bi];
+      var target = parseFloat(bar.getAttribute('data-bar-width'));
+      if (!isNaN(target)) {
+        bar.style.width = '0%';
+        bar.offsetHeight;
+        bar.style.width = target + '%';
+      }
+    }
+  });
 
   var info = document.getElementById('weightInfo');
   if (info) {

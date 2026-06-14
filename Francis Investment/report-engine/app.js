@@ -33,6 +33,124 @@ var cal = {
   activeDate: new Date().toISOString().slice(0, 10),
 };
 
+// ===== Animation Utility Module (v2.9.2 UI Liveliness) =====
+
+function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+// Number counting animation — tweens from prev value or 0 to target
+function animateNumber(el, target, options) {
+  if (!el) return;
+  options = options || {};
+  var duration = options.duration || 800;
+  var decimals = options.decimals != null ? options.decimals : 2;
+  var prefix = options.prefix || '';
+  var suffix = options.suffix || '';
+  var format = options.format || 'money'; // 'money'|'pct'|'int'
+
+  // Cancel any pending animation on this element
+  if (el._animId) { cancelAnimationFrame(el._animId); el._animId = null; }
+
+  var startVal = parseFloat(el.getAttribute('data-prev-value')) || 0;
+  var targetVal = target;
+  if (typeof targetVal !== 'number' || isNaN(targetVal)) return;
+
+  var startTime = null;
+  function step(ts) {
+    if (!startTime) startTime = ts;
+    var progress = Math.min((ts - startTime) / duration, 1);
+    var eased = easeOutCubic(progress);
+    var current = startVal + (targetVal - startVal) * eased;
+
+    if (format === 'money') {
+      el.textContent = prefix + formatMoneyCN(current) + suffix;
+    } else if (format === 'pct') {
+      el.textContent = prefix + current.toFixed(decimals) + '%' + suffix;
+    } else {
+      el.textContent = prefix + Math.round(current).toString() + suffix;
+    }
+
+    if (progress < 1) {
+      el._animId = requestAnimationFrame(step);
+    } else {
+      el.setAttribute('data-prev-value', targetVal.toFixed(decimals));
+      el._animId = null;
+    }
+  }
+  el._animId = requestAnimationFrame(step);
+}
+
+// Trigger CSS width transitions for bars that were rendered at final width
+function triggerBarTransitions(container) {
+  if (!container) return;
+  requestAnimationFrame(function() {
+    var bars = container.querySelectorAll('[data-bar-width]');
+    for (var i = 0; i < bars.length; i++) {
+      var el = bars[i];
+      var target = parseFloat(el.getAttribute('data-bar-width'));
+      if (!isNaN(target)) {
+        el.style.width = '0%';
+        el.offsetHeight; // force reflow
+        el.style.width = target + '%';
+      }
+    }
+  });
+}
+
+// Apply staggered entrance animation to matching children
+function applyStaggeredEntrance(container, itemSelector, staggerMs) {
+  if (!container) return;
+  staggerMs = staggerMs || 50;
+  var items = container.querySelectorAll(itemSelector);
+  for (var i = 0; i < items.length; i++) {
+    var item = items[i];
+    if (!item.classList.contains('entrance-item')) {
+      item.classList.add('entrance-item');
+    }
+    item.style.animationDelay = (i * staggerMs) + 'ms';
+    item.classList.add('entrance-visible');
+  }
+}
+
+// Generate shimmer skeleton HTML placeholder
+function renderShimmerSkeleton(width, height, borderRadius) {
+  var w = width || '100%';
+  var h = height || '20px';
+  var r = borderRadius || '8px';
+  return '<div class="shimmer-skeleton" style="width:' + w + ';height:' + h + ';border-radius:' + r + ';"></div>';
+}
+
+// Crossfade transition for inline value changes (sentiment indicators etc.)
+function transitionValue(el, newHTML, options) {
+  if (!el) return;
+  options = options || {};
+  var duration = options.duration || 300;
+
+  // Only transition if content actually changed
+  if (el.innerHTML === newHTML) return;
+
+  var wrapper = document.createElement('span');
+  wrapper.style.cssText = 'position:relative;display:inline-block;';
+  wrapper.innerHTML = '<span style="opacity:1;transition:opacity ' + (duration/1000) + 's ease;">' + el.innerHTML + '</span>';
+
+  var newSpan = document.createElement('span');
+  newSpan.style.cssText = 'position:absolute;left:0;top:0;opacity:0;transition:opacity ' + (duration/1000) + 's ease;';
+  newSpan.innerHTML = newHTML;
+
+  wrapper.appendChild(newSpan);
+  el.innerHTML = '';
+  el.appendChild(wrapper);
+
+  requestAnimationFrame(function() {
+    wrapper.firstChild.style.opacity = '0';
+    newSpan.style.opacity = '1';
+    setTimeout(function() {
+      el.innerHTML = newHTML;
+    }, duration + 50);
+  });
+}
+
+// ===== End Animation Utility Module =====
+
 // Section definitions — v2.2: simfolio first, merged report, holdings greyed
 // v2.4: time-aware sections — show status based on market hours
 function getMarketTimeState() {
@@ -74,9 +192,13 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
   } else if (timeState === 'ready') {
     // Try to load daily summary
     html += '<div id="daily-summary-container" style="max-width:960px;margin:0 auto;padding:20px 24px;">';
-    html += '<div style="text-align:center;padding:40px;color:#64748b;">';
-    html += '<div style="font-size:32px;margin-bottom:12px;"></div>';
-    html += '<div style="font-size:16px;font-weight:600;">正在加载今日总结...</div>';
+    html += '<div style="text-align:center;padding:40px;">';
+    html += renderShimmerSkeleton('100%', '24px', '6px');
+    html += '<div style="height:12px;"></div>';
+    html += renderShimmerSkeleton('60%', '16px', '4px');
+    html += '<div style="height:24px;"></div>';
+    html += renderShimmerSkeleton('100%', '120px', '8px');
+    html += '<div style="margin-top:20px;font-size:13px;color:#94a3b8;text-align:center;">正在加载今日总结...</div>';
     html += '</div></div>';
     // Async load
     setTimeout(function() { loadDailySummaryIntoDOM(); }, 100);
@@ -1261,9 +1383,13 @@ function renderHistoryReviewUnified() {
 
   var contentDiv = document.createElement('div');
   contentDiv.id = 'history-review-unified';
-  contentDiv.innerHTML = '<div style="text-align:center;padding:60px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;">--</div>' +
-    '<div style="font-size:15px;">正在加载历史复盘数据...</div>' +
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px;">' +
+    renderShimmerSkeleton('80%', '20px', '6px') +
+    '<div style="height:16px;"></div>' +
+    renderShimmerSkeleton('60%', '16px', '4px') +
+    '<div style="height:24px;"></div>' +
+    renderShimmerSkeleton('100%', '200px', '8px') +
+    '<div style="margin-top:20px;font-size:13px;color:#94a3b8;text-align:center;">正在加载历史复盘数据...</div>' +
     '</div>';
   container.appendChild(contentDiv);
   $contentArea.appendChild(container);
@@ -1314,6 +1440,10 @@ function loadHistoryReviewUnified() {
         if (typeof drawHistoryReviewCanvases === 'function') {
           drawHistoryReviewCanvases();
         }
+        // Trigger bar transitions for crisis dimension bars
+        requestAnimationFrame(function() {
+          triggerBarTransitions(container);
+        });
       }, 150);
     } else {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">模板未加载 — 请刷新页面</div>';
@@ -1359,9 +1489,13 @@ function renderUSMarketDirect() {
   var contentDiv = document.createElement('div');
   contentDiv.className = 'report-preview';
   contentDiv.id = 'us-market-content';
-  contentDiv.innerHTML = '<div style="text-align:center;padding:40px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;"></div>' +
-    '<div style="font-size:16px;font-weight:600;">正在加载海外市场数据...</div>' +
+  contentDiv.innerHTML = '<div style="text-align:center;padding:40px;">' +
+    renderShimmerSkeleton('80%', '24px', '6px') +
+    '<div style="height:16px;"></div>' +
+    renderShimmerSkeleton('50%', '16px', '4px') +
+    '<div style="height:24px;"></div>' +
+    renderShimmerSkeleton('100%', '160px', '8px') +
+    '<div style="margin-top:20px;font-size:13px;color:#94a3b8;text-align:center;">正在加载海外市场数据...</div>' +
     '</div>';
   container.appendChild(contentDiv);
   $contentArea.appendChild(container);
@@ -1416,9 +1550,13 @@ function renderPredictDashboard() {
   var contentDiv = document.createElement('div');
   contentDiv.className = 'predict-dashboard-container';
   contentDiv.id = 'predict-content';
-  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#64748b;">' +
-    '<div style="font-size:32px;margin-bottom:12px;"></div>' +
-    '<div style="font-size:16px;font-weight:600;">正在加载预测引擎数据...</div>' +
+  contentDiv.innerHTML = '<div style="text-align:center;padding:60px 20px;">' +
+    renderShimmerSkeleton('80%', '24px', '6px') +
+    '<div style="height:16px;"></div>' +
+    renderShimmerSkeleton('50%', '16px', '4px') +
+    '<div style="height:24px;"></div>' +
+    renderShimmerSkeleton('100%', '200px', '8px') +
+    '<div style="margin-top:20px;font-size:13px;color:#94a3b8;text-align:center;">正在加载预测引擎数据...</div>' +
     '</div>';
   container.appendChild(contentDiv);
   $contentArea.appendChild(container);
@@ -1430,19 +1568,21 @@ function loadPredictIntoDOM() {
   var container = document.getElementById('predict-content');
   if (!container) return;
 
-  // Fetch all 5 prediction APIs in parallel (including pipeline last-result for ranking)
+  // Fetch all 5 prediction APIs + market cycle in parallel
   Promise.all([
     fetch('/api/predict/factor-performance').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/dynamic-weights').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/sector-leadlag').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/predict/cycle-factor-matrix').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/pipeline/last-result').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/market/cycle').then(function(r) { return r.json(); }).catch(function() { return null; }),
   ]).then(function(results) {
     var factorPerfRaw = results[0];
     var dynamicWeightsRaw = results[1];
     var sectorLeadLagRaw = results[2];
     var cycleFactorMatrixRaw = results[3];
     var lastResultRaw = results[4];
+    var marketCycleRaw = results[5];
 
     // Build fallback objects so sub-renderers always receive structured data
     var factorPerf = (factorPerfRaw && factorPerfRaw.ok) ? factorPerfRaw : { ok: false, available: false, factors: [], summary: {} };
@@ -1484,6 +1624,7 @@ function loadPredictIntoDOM() {
             expectedReturn: erData.expectedReturn,
             confidence: erData.confidence,
             label: erData.label,
+            breakdown: erData.breakdown || null,
           } : null,
         });
       }
@@ -1495,9 +1636,16 @@ function loadPredictIntoDOM() {
       dynamicWeights: dynamicWeights,
       sectorLeadLag: sectorLeadLag,
       cycleFactorMatrix: cycleFactorMatrix,
+      marketCycle: (marketCycleRaw && marketCycleRaw.ok) ? marketCycleRaw : null,
     };
 
     container.innerHTML = renderPredictionDashboard.render(data);
+
+    // Activate staggered entrance + bar transitions
+    requestAnimationFrame(function() {
+      applyStaggeredEntrance(container, '.predict-rank-item', 60);
+      triggerBarTransitions(container);
+    });
   }).catch(function(err) {
     container.innerHTML = '<div style="text-align:center;padding:60px;color:#ef4444;">加载失败: ' + err.message + '</div>';
   });
@@ -1545,6 +1693,10 @@ function loadCrossMarketIntoDOM() {
       container.innerHTML = html;
       // Execute inline scripts (Canvas gauges won't render via innerHTML alone)
       execInlineScripts(container);
+      // Trigger bar transitions for correlation/confidence bars
+      requestAnimationFrame(function() {
+        triggerBarTransitions(container);
+      });
     } else {
       var cycleHTML = '';
       if (cycleData && cycleData.ok) {
@@ -1782,7 +1934,10 @@ function loadMarketSentimentIndicators() {
       if (margin && margin.ok && margin.available) {
         var mgLabel = { bullish: '看多', bearish: '看空', neutral: '中性' }[margin.sentiment] || '--';
         var mgColor = margin.sentiment === 'bullish' ? '#dc2626' : (margin.sentiment === 'bearish' ? '#16a34a' : '#64748b');
-        elMargin.innerHTML = '<span style="color:' + mgColor + ';">' + mgLabel + '</span>';
+        var mgNewHTML = '<span style="color:' + mgColor + ';">' + mgLabel + '</span>';
+        if (elMargin.innerHTML !== mgNewHTML) {
+          transitionValue(elMargin, mgNewHTML, { duration: 300 });
+        }
         elMargin.style.fontSize = '16px';
         elMargin.style.fontWeight = '700';
         elMargin.style.color = mgColor;
@@ -1795,7 +1950,10 @@ function loadMarketSentimentIndicators() {
       var nbLabel = { bullish: '强力流入', slightly_bullish: '温和流入', neutral: '中性', bearish: '持续流出' }[nb.sentiment] || '--';
       var nbColor = nb.sentiment === 'bullish' ? '#dc2626' : (nb.sentiment === 'slightly_bullish' ? '#ea580c' : (nb.sentiment === 'bearish' ? '#16a34a' : '#64748b'));
       var flowStr = nb.lastDayFlow != null ? (nb.lastDayFlow >= 0 ? '+' : '') + nb.lastDayFlow.toFixed(1) + '亿' : '';
-      elNb.innerHTML = '<span style="color:' + nbColor + ';">' + nbLabel + '</span>' + (flowStr ? '<br><span style="font-size:10px;color:#94a3b8;">' + flowStr + ' 连续' + (nb.consecutiveInflow || 0) + '日</span>' : '');
+      var nbNewHTML = '<span style="color:' + nbColor + ';">' + nbLabel + '</span>' + (flowStr ? '<br><span style="font-size:10px;color:#94a3b8;">' + flowStr + ' 连续' + (nb.consecutiveInflow || 0) + '日</span>' : '');
+      if (elNb.innerHTML !== nbNewHTML) {
+        transitionValue(elNb, nbNewHTML, { duration: 300 });
+      }
       elNb.style.fontSize = '14px';
       elNb.style.fontWeight = '700';
       elNb.style.color = nbColor;
@@ -1807,7 +1965,10 @@ function loadMarketSentimentIndicators() {
       var smLabel = { strong_buy: '强力吸筹', buy: '偏多', neutral: '中性', sell: '偏空', strong_sell: '强力出货', no_data: '无数据' }[cf.smartMoneySignal] || '--';
       var smColor = cf.smartMoneySignal === 'strong_buy' ? '#dc2626' : (cf.smartMoneySignal === 'buy' ? '#ea580c' : (cf.smartMoneySignal === 'strong_sell' || cf.smartMoneySignal === 'sell' ? '#16a34a' : '#64748b'));
       var smValue = cf.smartMoneyDivergence != null ? (cf.smartMoneyDivergence >= 0 ? '+' : '') + cf.smartMoneyDivergence.toFixed(1) + '亿' : '';
-      elSm.innerHTML = '<span style="color:' + smColor + ';">' + smLabel + '</span>' + (smValue ? '<br><span style="font-size:10px;color:#94a3b8;">' + smValue + '</span>' : '');
+      var smNewHTML = '<span style="color:' + smColor + ';">' + smLabel + '</span>' + (smValue ? '<br><span style="font-size:10px;color:#94a3b8;">' + smValue + '</span>' : '');
+      if (elSm.innerHTML !== smNewHTML) {
+        transitionValue(elSm, smNewHTML, { duration: 300 });
+      }
       elSm.style.fontSize = '14px';
       elSm.style.fontWeight = '700';
       elSm.style.color = smColor;
@@ -2021,18 +2182,27 @@ function updateSimfolioDOM(sfData) {
   var container = $contentArea.querySelector('.report-preview');
   if (!container) return;
 
-  // Find and update card values
+  // Find and update card values with number counting animation
   var cards = container.querySelectorAll('.sf-card-value');
   var snap = sfData.snapshot;
   if (snap && cards.length >= 4) {
-    cards[0].textContent = '¥' + formatMoneyCN(snap.totalValue);
-    cards[1].textContent = '¥' + formatMoneyCN(snap.cash);
-    // Card 2: 今日盈亏 — daily P&L amount (not alpha %)
+    // Card 0: Total value — animate count-up
+    animateNumber(cards[0], snap.totalValue, { format: 'money', prefix: '¥' });
+    // Card 1: Cash
+    animateNumber(cards[1], snap.cash, { format: 'money', prefix: '¥' });
+    // Card 2: Daily P&L
     if (snap.prevDayValue != null && snap.prevDayValue > 0) {
       var dailyPnL = snap.totalValue - snap.prevDayValue;
-      cards[2].textContent = (dailyPnL >= 0 ? '+' : '-') + '¥' + formatMoneyCN(Math.abs(dailyPnL));
+      var absPnL = Math.abs(dailyPnL);
+      var pnLPrefix = (dailyPnL >= 0 ? '+' : '-') + '¥';
+      animateNumber(cards[2], absPnL, { format: 'money', prefix: pnLPrefix });
     } else {
       cards[2].textContent = '--';
+    }
+    // Flash animation on each card to draw attention to the update
+    for (var ci = 0; ci < cards.length; ci++) {
+      cards[ci].classList.add('flash');
+      setTimeout((function(el) { return function() { el.classList.remove('flash'); }; })(cards[ci]), 400);
     }
   }
 
@@ -2333,6 +2503,9 @@ function renderTimeAwareSectionDirect(sectionId) {
     container.appendChild(contentDiv);
 
     $contentArea.appendChild(container);
+
+    // Trigger bar transition animations for newly rendered content
+    triggerBarTransitions(container);
   } catch (e) {
     $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#e74c3c;">渲染出错: ' + escHtml(e.message) + '</p></div>';
   }
@@ -2378,7 +2551,8 @@ function renderSimfolioDirectDOM() {
 
   $contentArea.appendChild(container);
 
-
+  // Trigger bar transition animations for newly rendered content
+  triggerBarTransitions(container);
 
   // Refresh simfolio data in background (only for today, not historical)
   if (!sfData || !sfData.isHistorical) {

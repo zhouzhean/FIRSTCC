@@ -326,7 +326,7 @@ function _renderCrisisGauge(crisis) {
     var dColor = d.score >= 70 ? '#dc2626' : d.score >= 55 ? '#f59e0b' : d.score >= 35 ? '#94a3b8' : '#22c55e';
     html += '<div class="hr-crisis-dim">';
     html += '<div class="hr-crisis-dim-name">' + d.name + ' (' + ((d.weight || 0) * 100).toFixed(0) + '%)</div>';
-    html += '<div class="hr-crisis-dim-bar"><div class="hr-crisis-dim-fill" style="width:' + d.score + '%;background:' + dColor + ';"></div></div>';
+    html += '<div class="hr-crisis-dim-bar"><div class="hr-crisis-dim-fill" data-bar-width="' + d.score + '" style="width:0%;background:' + dColor + ';"></div></div>';
     html += '<div class="hr-crisis-dim-score">' + d.score.toFixed(0) + ' <span style="font-size:9px;color:#94a3b8;">' + (d.detail || '') + '</span></div>';
     html += '</div>';
   }
@@ -547,18 +547,9 @@ function _drawGauge(canvas) {
 
   var cx = w / 2, cy = h / 2;
   var r = Math.min(w, h) / 2 - 10;
-  ctx.clearRect(0, 0, w, h);
+  var targetAngle = Math.PI + (score / 100) * Math.PI;
 
-  // Background arc
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI, 0);
-  ctx.lineWidth = 12;
-  ctx.strokeStyle = '#e5e7eb';
-  ctx.stroke();
-
-  // Color arc (green -> yellow -> red)
-  // Green: 0-40, Yellow: 40-60, Red: 60-100
-  var angle = Math.PI + (score / 100) * Math.PI;
+  // Pre-compute gradient
   var grad = ctx.createLinearGradient(0, cy + r, 0, cy - r);
   grad.addColorStop(0, '#22c55e');
   grad.addColorStop(0.4, '#22c55e');
@@ -566,25 +557,51 @@ function _drawGauge(canvas) {
   grad.addColorStop(0.8, '#dc2626');
   grad.addColorStop(1, '#dc2626');
 
-  ctx.beginPath();
-  ctx.arc(cx, cy, r, Math.PI, angle);
-  ctx.lineWidth = 14;
-  ctx.strokeStyle = grad;
-  ctx.stroke();
+  // Animate from angle=PI (0 score) to targetAngle
+  var startTime = null;
+  var duration = 700;
+  function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+  function animateFrame(ts) {
+    if (!startTime) startTime = ts;
+    var progress = Math.min((ts - startTime) / duration, 1);
+    var eased = easeOutCubic(progress);
+    var currentAngle = Math.PI + (targetAngle - Math.PI) * eased;
 
-  // Needle
-  var nx = cx + Math.cos(angle) * (r - 18);
-  var ny = cy + Math.sin(angle) * (r - 18);
-  ctx.beginPath();
-  ctx.moveTo(cx, cy);
-  ctx.lineTo(nx, ny);
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = '#1e293b';
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-  ctx.fillStyle = '#1e293b';
-  ctx.fill();
+    ctx.clearRect(0, 0, w, h);
+
+    // Background arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, Math.PI, 0);
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.stroke();
+
+    // Color arc
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, Math.PI, currentAngle);
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = grad;
+    ctx.stroke();
+
+    // Needle
+    var nx = cx + Math.cos(currentAngle) * (r - 18);
+    var ny = cy + Math.sin(currentAngle) * (r - 18);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(nx, ny);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#1e293b';
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.fillStyle = '#1e293b';
+    ctx.fill();
+
+    if (progress < 1) {
+      requestAnimationFrame(animateFrame);
+    }
+  }
+  requestAnimationFrame(animateFrame);
 }
 
 function _drawRadarPlaceholder(canvas) {
