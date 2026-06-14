@@ -25,6 +25,8 @@ package.json
 Francis Investment/report-engine/data/market_history/
 Francis Investment/report-engine/data/simfolio/
 Francis Investment/report-engine/data/us_market/
+Francis Investment/report-engine/data/klines/
+Francis Investment/report-engine/data/weekend_archive/
 
 # Temp / debug files
 *.docx
