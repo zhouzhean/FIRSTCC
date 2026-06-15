@@ -36,7 +36,7 @@
     <div class="toolbar-right">
       <div id="ai-status-badge" style="display:flex;align-items:center;gap:8px;padding:5px 14px;border-radius:20px;font-size:12px;font-weight:600;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;white-space:nowrap;">
         <span id="ai-status-dot" style="width:8px;height:8px;border-radius:50%;background:#16a34a;animation:pulse-dot 2s infinite;"></span>
-        <span id="ai-status-label">量化交易 · 就绪</span>
+        <span id="ai-status-label">策略运行中</span>
       </div>
       <a id="btn-think-tank" class="btn btn-outline" href="/think-tank.html" target="_blank" title="打开AI思考舱 — 实时监盘与量化分析可视化" style="color:#00d4ff;border-color:#00d4ff;font-weight:bold;text-decoration:none;">&#9678; AI 思考舱</a>
     </div>
@@ -73,6 +73,10 @@
             <span class="section-nav-dot"></span>
             <span class="section-nav-label">模拟交易</span>
             <span id="nav-simfolio-badge" style="margin-left:auto;font-size:10px;padding:2px 8px;border-radius:10px;background:#fef3c7;color:#92400e;display:none;">LIVE</span>
+          </div>
+          <div class="section-nav-item" data-section="strategyHealth">
+            <span class="section-nav-dot" style="background:linear-gradient(135deg,#b8942c,#eab308);"></span>
+            <span class="section-nav-label">策略体检</span>
           </div>
           <div class="section-nav-item" data-section="newsPolicy">
             <span class="section-nav-dot"></span>
@@ -142,6 +146,7 @@
 <script src="templates/cross-market.js"></script>
 <script src="templates/history-review.js"></script>
 <!-- weekend-verification.js removed in v2.9 -->
+<script src="templates/strategy-health.js"></script>
 <script src="templates/predict.js"></script>
 <script src="templates/disclaimer-footer.js"></script>
 <script src="data/reports-index.js"></script>

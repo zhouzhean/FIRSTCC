@@ -212,6 +212,7 @@ function renderSectionByTime(data, mode, reportRenderer, sectionLabel) {
 
 var SECTIONS = [
   { id: 'simfolio',        label: '模拟交易',         icon: '', render: function(d,m) { return renderSimfolioLive(d,m); } },
+  { id: 'strategyHealth',  label: '策略体检',         icon: '', render: function(d,m) { renderStrategyHealthDirect(); return ''; } },
   { id: 'newsPolicy',      label: '时政要点',         icon: '', render: function(d,m) { return renderNewsPolicySection(d,m); } },
   { id: 'tradingReport',   label: '交易分析与报告',   icon: '', render: function(d,m) { return renderTradeAnalysisSection(d,m); } },
   { id: 'holdingsAnalysis',label: '持仓分析',         icon: '', disabled: true, render: function(d,m) { return renderSectionByTime(d, m, renderHoldingsUnavailable, '持仓分析'); } },
@@ -2416,6 +2417,12 @@ function renderCurrentSection() {
   }
   if (!sec) return;
 
+  // Strategy Health: render directly (no iframe, async fetch)
+  if (sectionId === 'strategyHealth') {
+    renderStrategyHealthDirect();
+    return;
+  }
+
   // Simfolio: always render directly (no iframe, works without report data)
   if (sectionId === 'simfolio') {
     renderSimfolioDirect();
@@ -2509,6 +2516,228 @@ function renderTimeAwareSectionDirect(sectionId) {
   } catch (e) {
     $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#e74c3c;">渲染出错: ' + escHtml(e.message) + '</p></div>';
   }
+}
+
+// Direct render strategy health into content area (no iframe, async DOM)
+function renderStrategyHealthDirect() {
+  $contentTitle.textContent = '策略体检';
+  var url = '/api/strategy/health';
+  if (cal.activeDate !== new Date().toISOString().slice(0, 10)) {
+    url += '?date=' + cal.activeDate;
+  }
+
+  // Show shimmer skeleton while loading
+  $contentArea.innerHTML = '<div class="sh-loading-wrap" style="padding:24px;">' +
+    renderShimmerSkeleton(900, 60, 12) +
+    '<div style="margin-top:16px;">' + renderShimmerSkeleton(450, 100, 8) + '</div>' +
+    '<div style="margin-top:16px;display:flex;gap:16px;">' +
+    renderShimmerSkeleton(300, 180, 8) + renderShimmerSkeleton(300, 180, 8) +
+    '</div></div>';
+
+  // Fetch health data
+  fetch(url).then(function(r) { return r.json(); }).then(function(data) {
+    if (!data.ok && data.error) {
+      $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#dc2626;">策略体检数据加载失败：' + (data.error || '未知错误') + '</p></div>';
+      return;
+    }
+
+    // Render main content
+    var html = '';
+
+    // Start with master control bar
+    html += renderMCBar(data.masterControl);
+
+    // Section header
+    html += '<div class="sh-header" style="margin-bottom:20px;">';
+    html += '<div class="sh-header-left" style="display:flex;align-items:baseline;gap:12px;">';
+    html += '<span class="sh-main-title">策略体检</span>';
+    html += '<span class="sh-main-subtitle">组合综合绩效分析 ' + (data.date || '') + '</span>';
+    html += '</div>';
+    html += '<span class="sh-date-label" style="color:#94a3b8;font-size:11px;">生成时间：' + (data.generatedAt || '').replace('T',' ').slice(0,19) + '</span>';
+    html += '</div>';
+
+    // Risk metric cards (4 up)
+    html += '<div class="sh-cards-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">';
+    html += _shCard(data.riskMetrics.sharpeRatio !== null ? data.riskMetrics.sharpeRatio : '--', 'Sharpe 比率', '≥1.0 良好', _shSharpeColor(data.riskMetrics.sharpeRatio));
+    html += _shCard(data.riskMetrics.sortinoRatio !== null ? data.riskMetrics.sortinoRatio : '--', 'Sortino 比率', '下行风险调整', _shSharpeColor(data.riskMetrics.sortinoRatio));
+    html += _shCard(data.riskMetrics.calmarRatio !== null ? data.riskMetrics.calmarRatio : '--', 'Calmar 比率', '收益÷最大回撤', _shSharpeColor(data.riskMetrics.calmarRatio));
+    html += _shCard(data.riskMetrics.annualizedVolatility !== null ? (data.riskMetrics.annualizedVolatility + '%') : '--', '年化波动率', '越低越稳定', data.riskMetrics.annualizedVolatility > 30 ? '#ef4444' : '#64748b');
+    html += '</div>';
+
+    // Second row: more metrics
+    html += '<div class="sh-cards-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">';
+    html += _shCard(data.riskMetrics.totalReturn !== null ? (data.riskMetrics.totalReturn >= 0 ? '+' : '') + data.riskMetrics.totalReturn + '%' : '--', '总收益', '累计', data.riskMetrics.totalReturn >= 0 ? '#dc2626' : '#16a34a');
+    html += _shCard(data.riskMetrics.maxDrawdown !== null ? (data.riskMetrics.maxDrawdown + '%') : '--', '最大回撤', '峰值到谷底', '#ef4444');
+    html += _shCard(data.riskMetrics.maxDrawdownDuration !== null ? (data.riskMetrics.maxDrawdownDuration + '天') : '--', '最长回撤持续', '', '#64748b');
+    html += _shCard(data.tradeStats.winRate !== null ? (data.tradeStats.winRate + '%') : '--', '胜率', '', data.tradeStats.winRate >= 50 ? '#dc2626' : '#16a34a');
+    html += '</div>';
+
+    // Charts row: NAV + Drawdown
+    html += '<div class="sh-chart-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">组合净值曲线 vs 上证基准</div><canvas id="sh-nav-chart" width="560" height="260"></canvas></div>';
+    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">回撤曲线</div><canvas id="sh-dd-chart" width="560" height="260"></canvas></div>';
+    html += '</div>';
+
+    // Monthly heatmap
+    html += '<div class="sh-chart-card" style="margin-bottom:18px;">';
+    html += '<div class="sh-chart-title-sm">月度收益热力图</div>';
+    html += '<canvas id="sh-heatmap" width="900" height="240"></canvas>';
+    html += '</div>';
+
+    // Detail row: Trade stats + Attribution
+    html += '<div class="sh-detail-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-chart-card">';
+    html += '<div class="sh-chart-title-sm">交易统计</div>';
+    html += _shTradeStatsTable(data.tradeStats);
+    html += '</div>';
+    html += '<div class="sh-chart-card">';
+    html += '<div class="sh-chart-title-sm">退出原因分布 & 板块表现</div>';
+    html += _shAttribBox(data.attributionSummary || {});
+    html += '</div>';
+    html += '</div>';
+
+    // Verdict detail row
+    html += '<div class="sh-detail-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-chart-card">';
+    html += '<div class="sh-chart-title-sm">当前风险因素</div>';
+    html += '<ul class="sh-list" style="margin:0;padding-left:20px;">';
+    var reasons = (data.masterControl && data.masterControl.reasons) ? data.masterControl.reasons : ['各项指标正常'];
+    for (var ri = 0; ri < reasons.length; ri++) { html += '<li style="color:#64748b;font-size:13px;margin-bottom:6px;">' + reasons[ri] + '</li>'; }
+    html += '</ul></div>';
+    html += '<div class="sh-chart-card">';
+    html += '<div class="sh-chart-title-sm">恢复条件</div>';
+    html += '<ul class="sh-list" style="margin:0;padding-left:20px;">';
+    var recs = (data.masterControl && data.masterControl.recoveryConditions) ? data.masterControl.recoveryConditions : [];
+    if (recs.length === 0) recs = ['无恢复条件 — 系统运行正常'];
+    for (var rci = 0; rci < recs.length; rci++) { html += '<li style="color:#64748b;font-size:13px;margin-bottom:6px;">' + recs[rci] + '</li>'; }
+    html += '</ul></div>';
+    html += '</div>';
+
+    var css = renderSoftwareCSS();
+
+    $contentArea.innerHTML = '';
+    var container = document.createElement('div');
+    container.style.cssText = 'height:100%;overflow-y:auto;background:#f5f6fa;';
+
+    var styleEl = document.createElement('style');
+    styleEl.textContent = css;
+    container.appendChild(styleEl);
+
+    var contentDiv = document.createElement('div');
+    contentDiv.className = 'report-preview';
+    contentDiv.innerHTML = html;
+    container.appendChild(contentDiv);
+
+    $contentArea.appendChild(container);
+
+    // Draw Canvas charts
+    setTimeout(function() {
+      if (typeof drawShNavChart === 'function') drawShNavChart(data);
+      if (typeof drawShDDChart === 'function') drawShDDChart(data);
+      if (typeof drawShHeatmap === 'function') drawShHeatmap(data);
+    }, 100);
+
+    // Staggered entrance
+    applyStaggeredEntrance(container, '.sh-chart-card, .sh-metric-card', 60);
+  }).catch(function(e) {
+    $contentArea.innerHTML = '<div class="content-placeholder"><p style="color:#dc2626;">策略体检加载异常：' + (e.message || '网络错误') + '</p></div>';
+  });
+}
+
+// ---- Strategy Health helpers (inline for app.js scope) ----
+
+function renderMCBar(mc) {
+  if (!mc) {
+    return '<div style="padding:16px 20px;background:#f1f5f9;border-radius:10px;margin-bottom:16px;color:#64748b;font-size:14px;text-align:center;">策略体检数据加载中...</div>';
+  }
+  var vcMap = {
+    'ALLOW':    { bg: '#f0fdf4', border: '#16a34a', text: '#166534' },
+    'CAUTIOUS': { bg: '#fefce8', border: '#eab308', text: '#854d0e' },
+    'REDUCE':   { bg: '#fff7ed', border: '#ea580c', text: '#9a3412' },
+    'BLOCK':    { bg: '#fef2f2', border: '#dc2626', text: '#991b1b' },
+  };
+  var vc = vcMap[mc.verdict] || vcMap['ALLOW'];
+  var dotColors = { 'ALLOW': '#16a34a', 'CAUTIOUS': '#eab308', 'REDUCE': '#f97316', 'BLOCK': '#ef4444' };
+
+  var html = '';
+  html += '<div style="background:' + vc.bg + ';border:2px solid ' + vc.border + ';border-radius:12px;padding:16px 22px;margin-bottom:18px;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;">';
+  html += '<div style="display:flex;align-items:center;gap:12px;">';
+  html += '<span style="width:12px;height:12px;border-radius:50%;background:' + (dotColors[mc.verdict] || dotColors['ALLOW']) + ';box-shadow:0 0 6px ' + (dotColors[mc.verdict] || dotColors['ALLOW']) + ';display:inline-block;"></span>';
+  html += '<span style="color:' + vc.text + ';font-size:20px;font-weight:700;">' + (mc.verdictLabel || mc.verdict) + '</span>';
+  html += '<span style="color:' + vc.text + ';font-size:13px;opacity:0.75;margin-left:8px;">置信度 ' + (mc.confidence || '--') + '%</span>';
+  html += '</div>';
+  html += '<span style="color:' + vc.text + ';font-size:13px;opacity:0.7;">' + (mc.marketStateHint || '') + '</span>';
+  html += '</div>';
+  if (mc.reasons && mc.reasons.length > 0) {
+    html += '<div style="margin-top:10px;color:' + vc.text + ';font-size:12px;opacity:0.85;">' + mc.reasons.join('；') + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function _shCard(value, label, subtitle, color) {
+  color = color || '#1e293b';
+  return '<div class="sh-metric-card" style="padding:16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;text-align:center;">' +
+    '<div style="font-size:28px;font-weight:700;color:' + color + ';line-height:1.2;">' + value + '</div>' +
+    '<div style="font-size:13px;font-weight:600;color:#1e293b;margin-top:4px;">' + label + '</div>' +
+    '<div style="font-size:11px;color:#94a3b8;margin-top:2px;">' + subtitle + '</div>' +
+    '</div>';
+}
+
+function _shSharpeColor(v) {
+  if (v === null || v === undefined) return '#94a3b8';
+  if (v >= 1) return '#16a34a';
+  if (v >= 0.5) return '#b8942c';
+  if (v >= 0) return '#64748b';
+  return '#ef4444';
+}
+
+function _shTradeStatsTable(ts) {
+  if (!ts) return '<p style="color:#94a3b8;font-size:13px;">暂无交易统计数据</p>';
+  var rows = '';
+  function row(a, b) { return '<tr><td style="padding:5px 12px;color:#64748b;font-size:12px;">' + a + '</td><td style="padding:5px 12px;font-weight:600;font-size:13px;text-align:right;">' + b + '</td></tr>'; }
+  rows += row('总交易笔数', ts.totalTrades || 0);
+  rows += row('胜率', ts.winRate !== null ? ts.winRate + '%' : '--');
+  rows += row('盈亏比', ts.profitFactor !== null ? ts.profitFactor : '--');
+  rows += row('平均盈利', '¥' + ((ts.avgWin || 0)).toFixed(0));
+  rows += row('平均亏损', '¥' + ((ts.avgLoss || 0)).toFixed(0));
+  rows += row('盈/亏金额比', ts.avgWinLossRatio !== null ? ts.avgWinLossRatio : '--');
+  rows += row('换手率', ts.turnoverRate !== null ? (ts.turnoverRate * 100).toFixed(1) + '%' : '--');
+  rows += row('总交易成本', '¥' + (ts.totalCosts || 0).toFixed(2));
+  rows += row('最佳单笔', ts.bestTrade ? ts.bestTrade.name + ' +¥' + (ts.bestTrade.pnl||0).toFixed(0) : '--');
+  rows += row('最差单笔', ts.worstTrade ? ts.worstTrade.name + ' ¥' + (ts.worstTrade.pnl||0).toFixed(0) : '--');
+  return '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>';
+}
+
+function _shAttribBox(attr) {
+  var html = '';
+  var rb = attr.reasonBreakdown || {};
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">';
+  html += '<span style="padding:3px 10px;border-radius:12px;font-size:11px;background:#fef2f2;color:#991b1b;">硬止损 ' + (rb.stopLoss || 0) + '</span>';
+  html += '<span style="padding:3px 10px;border-radius:12px;font-size:11px;background:#fefce8;color:#854d0e;">移动止盈 ' + (rb.trailingStop || 0) + '</span>';
+  html += '<span style="padding:3px 10px;border-radius:12px;font-size:11px;background:#f0fdf4;color:#166534;">止盈 ' + (rb.takeProfit || 0) + '</span>';
+  html += '<span style="padding:3px 10px;border-radius:12px;font-size:11px;background:#f1f5f9;color:#64748b;">其他 ' + ((rb.softStop||0) + (rb.other||0)) + '</span>';
+  html += '</div>';
+  html += '<div style="font-size:12px;color:#64748b;margin-bottom:10px;">连续亏损：<b>' + (attr.consecutiveLosses || 0) + '</b> 笔（最长 ' + (attr.maxConsecutiveLosses || 0) + ' 笔）</div>';
+
+  var sp = attr.sectorPerformance;
+  if (sp && sp.length > 0) {
+    html += '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
+    html += '<thead style="color:#64748b;"><tr><th style="text-align:left;padding:4px;">板块</th><th>笔</th><th style="color:#dc2626;">胜</th><th style="color:#16a34a;">负</th><th>净盈亏</th></tr></thead><tbody>';
+    for (var i = 0; i < Math.min(sp.length, 6); i++) {
+      var s = sp[i];
+      html += '<tr>';
+      html += '<td style="padding:4px;">' + s.sector + '</td>';
+      html += '<td style="text-align:center;padding:4px;">' + s.count + '</td>';
+      html += '<td style="text-align:center;padding:4px;color:#dc2626;">' + s.wins + '</td>';
+      html += '<td style="text-align:center;padding:4px;color:#16a34a;">' + s.losses + '</td>';
+      html += '<td style="text-align:right;padding:4px;color:' + (s.netPnl >= 0 ? '#dc2626' : '#16a34a') + ';">' + (s.netPnl >= 0 ? '+' : '') + s.netPnl.toFixed(0) + '</td>';
+      html += '</tr>';
+    }
+    html += '</tbody></table>';
+  }
+  return html;
 }
 
 // Direct render simfolio into content area (no iframe, allows live DOM updates)

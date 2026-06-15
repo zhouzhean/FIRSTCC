@@ -1556,3 +1556,61 @@ body {
     padding: 5px 6px;
   }
 }
+
+/* ===== Strategy Health Dashboard (v3.0) ===== */
+
+.sh-chart-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 16px;
+  overflow: hidden;
+}
+
+.sh-chart-title-sm {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #f1f5f9;
+}
+
+.sh-canvas {
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+}
+
+.sh-metric-card {
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.sh-metric-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+}
+
+.sh-list li {
+  line-height: 1.5;
+}
+
+.sh-loading-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* Mobile adaptation for strategy health */
+@media (max-width: 720px) {
+  .sh-cards-row {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .sh-chart-row,
+  .sh-detail-row {
+    grid-template-columns: 1fr !important;
+  }
+  .sh-metric-card {
+    padding: 12px 10px !important;
+  }
+}

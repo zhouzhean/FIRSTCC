@@ -1200,6 +1200,32 @@ function checkBuySignal(stockData, pf, isStrong, combinedMultiplier) {
     return null; // silently skip, don't log per stock
   }
 
+  // v3.0: Risk budget override — use volatility/Kelly/correlation-aware sizing
+  const useRiskBudget = config.RISK_BUDGET && config.RISK_BUDGET.useVolatilityAdjustment;
+  if (useRiskBudget) {
+    try {
+      const riskBudget = require('./analysis/risk_budget');
+      const marketCtx = { riskRegime: macroContext && macroContext.riskRegime ? macroContext.riskRegime : 'neutral' };
+      const budget = riskBudget.computeRiskBudgetPosition(
+        { code: stockData.code, name: stockData.name, price: stockData.price, compositeScore: stockData.compositeScore, expectedReturn: stockData.expectedReturn },
+        pf,
+        marketCtx
+      );
+      if (budget.blockers && budget.blockers.length > 0) {
+        return null; // Blocked by risk budget (liquidity, circuit breaker)
+      }
+      if (budget.finalShares >= 100) {
+        return {
+          shares: budget.finalShares,
+          allocation: budget.finalShares * stockData.price,
+          reason: (isStrong ? '强买入' : '买入') + ' [风险预算' + Math.round(budget.finalWeight) + '%]',
+          sizingMethod: 'risk_budget',
+          riskBudgetDetails: budget,
+        };
+      }
+    } catch (_) { /* fall through to legacy sizing */ }
+  }
+
   // Tiered position sizing based on composite score and signal diversity
   const sizing = config.SIMFOLIO.positionSizing || {};
   const score = stockData.compositeScore || 0;
@@ -1342,10 +1368,16 @@ function executeSell(pf, decision, date) {
   pf.tradeHistory.push(trade);
 
   // P3 Loop 5: Attribution analysis after each sell (parameter feedback loop)
+  // v3.0: Enhanced with market context, timing quality, and sizing analysis
   try {
     const tradeAttr = require('./predict/trade_attribution');
     const buyTrade = pf.tradeHistory.filter(t => t.code === decision.code && t.action === 'buy').slice(-1)[0];
-    const ctx = { stockFactorPerf: null };
+    const ctx = {
+      stockFactorPerf: null,
+      marketReturn: pf._benchmarkChange || 0,
+      indices: pf._lastIndices || null,
+      decisionTime: new Date().toISOString(),
+    };
     try {
       const stockPredictor = require('./predict/stock_predictor');
       ctx.stockFactorPerf = stockPredictor.computeStockFactorPerformance(3);
@@ -1372,6 +1404,13 @@ function updateBenchmark(pf, indices, date) {
   }
   pf._benchmarkPrice = shIdx.price;
   pf._benchmarkChange = shIdx.changePercent || 0;
+  // Save latest indices for attribution context (v3.0)
+  pf._lastIndices = {};
+  for (const idx of indices) {
+    if (idx.code && idx.price != null) {
+      pf._lastIndices[idx.code] = { price: idx.price, changePercent: idx.changePercent };
+    }
+  }
 }
 
 function recordDailyNAV(pf, date) {

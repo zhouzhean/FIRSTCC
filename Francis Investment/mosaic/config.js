@@ -351,6 +351,21 @@ module.exports = {
   },
 
   // ---- 24/7 自主学习进化引擎 ----
+  // v3.0: Risk budget model — overrides fixed-percentage position sizing
+  RISK_BUDGET: {
+    useVolatilityAdjustment: true,
+    useCorrelationPenalty: true,
+    useLiquidityLimit: true,
+    useKellySizing: true,
+    kellyFraction: 0.5,              // Half-Kelly (conservative)
+    dailyMaxLossPctNav: 0.02,       // 2% of NAV daily loss cap
+    consecutiveLossCap: 5,          // Block new buys after 5 consecutive losses
+    maxPositionVolatility: 0.35,    // Max acceptable annualized vol per position
+    correlationThreshold: 0.6,      // Above this correlation, reduce size
+    liquidityLimitPct: 0.05,        // Max 5% of daily volume
+    minRiskBudgetPerTrade: 0.002,   // Minimum 0.2% of NAV risk per trade
+  },
+
   EVOLUTION: {
     enabled: true,                                   // 总开关
     nightBacktest: {                                 // 夜间历史回测

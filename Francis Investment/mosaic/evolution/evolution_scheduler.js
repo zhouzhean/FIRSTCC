@@ -74,6 +74,14 @@ function checkAndRun(now, dateStr) {
   var m = now.getMinutes();
   var day = now.getDay(); // 0=Sun, 6=Sat
 
+  // --- [v3.0]: Full Multi-Regime Backtest (Sunday 02:00-02:45) ---
+  if (day === 0 && h === 2 && m >= 0 && m < 45) {
+    tryRunTask('full_backtest', dateStr, function() {
+      var fb = require('./full_backtest');
+      return fb.runWeeklyBacktest();
+    });
+  }
+
   // --- Task: Night Backtest (02:00-02:30, widened from 5min for reboot resilience) ---
   if (h === 2 && m >= 0 && m < 30) {
     tryRunTask('night_backtest', dateStr, function() {

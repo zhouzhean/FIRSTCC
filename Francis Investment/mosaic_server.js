@@ -666,7 +666,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v2.2.0       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v2.9.2       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -772,6 +772,79 @@ const server = http.createServer(async function(req, res) {
       return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(summaryPath, 'utf8')) });
     }
     return jsonResponse(res, { ok: false, message: '该日期的总结不存在' });
+  }
+
+  // Strategy Health API — comprehensive portfolio health dashboard
+  if (pathname === '/api/strategy/health') {
+    try {
+      const strategyHealth = require('./mosaic/analysis/strategy_health');
+      const lookback = parseInt(url.searchParams.get('lookback') || '60');
+      const dateParam = url.searchParams.get('date');
+      const health = strategyHealth.computeStrategyHealth({ lookbackDays: lookback });
+      // If a specific date is requested, filter relevant data
+      if (dateParam) {
+        health.requestedDate = dateParam;
+      }
+      return jsonResponse(res, { ok: true, ...health });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message, stack: e.stack });
+    }
+  }
+  if (pathname === '/api/strategy/health/summary') {
+    try {
+      const strategyHealth = require('./mosaic/analysis/strategy_health');
+      const summary = strategyHealth.computeHealthSummary();
+      return jsonResponse(res, { ok: true, ...summary });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
+  }
+
+  // Full Backtest API — multi-regime historical backtest
+  if (pathname === '/api/backtest/latest') {
+    try {
+      const fb = require('./mosaic/evolution/full_backtest');
+      return jsonResponse(res, { ok: true, ...fb.getLatestResult() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
+  }
+  if (pathname === '/api/backtest/status') {
+    try {
+      const fb = require('./mosaic/evolution/full_backtest');
+      return jsonResponse(res, { ok: true, ...fb.getStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
+  }
+  if (pathname === '/api/backtest/run' && method === 'POST') {
+    try {
+      const fb = require('./mosaic/evolution/full_backtest');
+      const result = fb.runFullBacktest({ startYear: 2020, endYear: 2026, batchSize: 30 });
+      return jsonResponse(res, { ok: true, ...result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
+  }
+
+  // Data Quality API — monitor health of each data source
+  if (pathname === '/api/data-quality/status') {
+    try {
+      const dq = require('./mosaic/analysis/data_quality');
+      const report = dq.checkAllDataSources();
+      return jsonResponse(res, { ok: true, ...report });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
+  }
+  if (pathname === '/api/data-quality/summary') {
+    try {
+      const dq = require('./mosaic/analysis/data_quality');
+      const report = dq.checkAllDataSources();
+      return jsonResponse(res, { ok: true, overallScore: report.overallScore, unknownStatus: report.unknownStatus, confidenceImpact: report.confidenceImpact });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, error: e.message });
+    }
   }
 
   // News API — daily financial news feed
