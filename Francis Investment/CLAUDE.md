@@ -1,6 +1,6 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 v3.0.1 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.0.2 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
 ## v3.0.1 (2026-06-15) — 策略体检+风险预算+完整回测+数据质量+增强归因+交易约束闭环
 
@@ -40,6 +40,13 @@ A股量化交易系统 v3.0.1 + 报告引擎 + **24/7 自主学习进化引擎**
 | 风险预算regime映射 | `macroContext.riskRegime` 永远 undefined | 改为 `macroContext.riskState.regime`；panic 直接 blocker 不 clamp |
 | 数据质量→信号降权 | 数据异常不影响评分 | `computeConfidencePenalty()` 0-10分惩罚接入评分管线 + gateResults 暴露 |
 | 回测接入真实因子 | `estimateSignalsForDate()` 空壳 | 接入 hidden_signals+composite，加止损/止盈/仓位/交易成本模拟 |
+
+### v3.0.2 反馈修复
+| 修复 | 原因 | 改动 |
+|------|------|------|
+| 连续亏损传入总控 | `attributionSummary` 已算出但未传入 `computeMasterControlJudgment()` | 补传参数字段，consecLosses severity 从 0→2 |
+| 数据质量面板同步 | 面板 `confidenceReduction` 仅统计 DOWN/STALE，WARN/PROXY 被无视 | `checkAllDataSources()` 改用 `computeConfidencePenalty()` 逻辑填充 `confidenceImpact` |
+| 回测跑出首次结果 | 框架已有但从未执行，K线缓存仅近期数据 | `discoverAvailableDates()` 从缓存提取实际日期；修复 compositeScore NaN 解读（composite.js 返回对象）；fallback 信号数评分
 
 ---
 
@@ -379,5 +386,8 @@ Francis Investment/
 - **v3.0.1 regime 字段路径**：`getCachedRiskState()` 返回 `{regime, totalScore, ...}`，不是 `{riskRegime}`。读取时用 `riskState.regime`
 - **v3.0.1 数据质量惩罚**：`computeConfidencePenalty()` 在每次 pipeline 运行时读取磁盘文件检查数据源年龄，会产生少量 I/O。惩罚已接入 gateResults.dataQuality
 - **v3.0.1 回测真实因子限制**：`full_backtest.js` 模拟的 stock 对象缺少 PE/ROE/负债率字段，H4/H5/H6 基本面因子无法触发，仅 H1/H2/H3/H7/H8/H9 生效。完整验证需要历史财务数据
+- **v3.0.2 回测数据源**：`discoverAvailableDates()` 从 K 线缓存取实际日期范围。云端当前 ~16 天（2026-05-25 ~ 2026-06-15），全部判为"震荡市"。要获得有意义的多年回测结果，需要历史 K 线数据（通过 Eastmoney/Tencent API 批量拉取或第三方数据源）
+- **v3.0.2 compositeScore 返回值类型**：`composite.js` 的 `computeCompositeScore()` 返回对象 `{compositeScore, rating, ...}` 而非数字。使用时需提取 `.compositeScore` 属性并检查 NaN
+- **v3.0.2 总控 attributionSummary 依赖**：`computeMasterControlJudgment()` 需要 context.attributionSummary 才能计算 consecutiveLosses 维度。必须传入，否则 severity 始终为 0
 - **策略体检 tradingDays < 20**：年化收益率/Sharpe/Sortino/Calmar 全部返回 null，前端显示 "数据不足"
 - **`.gitignore` 运行时数据**：新增运行时数据目录时务必同步更新 .gitignore
