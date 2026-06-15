@@ -165,7 +165,7 @@ function simulateRegime(regime, dates, batchSize) {
       totalReturn: 0,
       dailyHitRate: 0,      // % days where signal had positive E[R5d]
       avgSignalCount: 0,    // average signals per day
-      signalQuality: 0,     // % signals that were profitable
+      signalQuality: 0,     // % of buy candidates that were profitable (forward-5d return > 0)
       volatility: 0,        // return volatility (std of daily returns)
       sharpeApprox: null,   // approximate Sharpe from daily returns
       maxDrawdown: 0,       // max drawdown during simulation
@@ -192,8 +192,10 @@ function simulateRegime(regime, dates, batchSize) {
 
   // Simulation: walk through each day, compute real signals, simulate trades
   var dailyReturns = [];
-  var totalSignalHits = 0;
-  var totalSignals = 0;
+  var totalSignalHits = 0;   // count of per-factor signals that were directionally correct
+  var totalSignals = 0;      // count of all per-factor signals fired
+  var totalCandidates = 0;   // count of buy candidates (stock-score combos >= BUY_MIN_SCORE)
+  var totalCandidateHits = 0;// count of buy candidates where fwd-5d return > 0
   var simulatedCash = 100000;
   var simulatedPositions = []; // [{ code, shares, entryPrice, entryDate }]
   var navSeries = [100000];
@@ -207,6 +209,10 @@ function simulateRegime(regime, dates, batchSize) {
   var MAX_POSITIONS = 5;
   var COMMISSION = 0.00025;
   var STAMP_TAX = 0.001;
+  var STOP_LOSS_COOLDOWN_DAYS = 4; // Prevent re-buying same stock for 4 trading days after stop-loss
+
+  // Track stop-loss cooldowns: { code: date_of_stop_loss }
+  var stopLossCooldowns = {};
 
   for (var d = 0; d < dates.length; d++) {
     var date = dates[d];
@@ -234,6 +240,8 @@ function simulateRegime(regime, dates, batchSize) {
         var sellAmount = pos.shares * currentPrice;
         var sellCost = sellAmount * (COMMISSION + STAMP_TAX);
         simulatedCash += sellAmount - sellCost;
+        // Record stop-loss cooldown — prevent re-buying same stock too soon
+        stopLossCooldowns[pos.code] = date;
         result.tradeLog.push({
           date: date, code: pos.code, action: 'sell',
           reason: 'stop_loss', entryPrice: pos.entryPrice,
@@ -324,6 +332,7 @@ function simulateRegime(regime, dates, batchSize) {
           compositeScore: compositeScore,
           signals: signals,
         });
+        totalCandidates++; // Track total candidates for signalQuality denominator
       }
     }
 
@@ -341,6 +350,17 @@ function simulateRegime(regime, dates, batchSize) {
         if (simulatedPositions[ph].code === c.code) { alreadyHolding = true; break; }
       }
       if (alreadyHolding) continue;
+
+      // Skip if in stop-loss cooldown period
+      if (stopLossCooldowns[c.code]) {
+        var cooldownDate = stopLossCooldowns[c.code];
+        if (dateDiffTradingDays(cooldownDate, date) < STOP_LOSS_COOLDOWN_DAYS) {
+          continue;
+        } else {
+          // Cooldown expired, clear it
+          delete stopLossCooldowns[c.code];
+        }
+      }
 
       // Position limit
       if (simulatedPositions.length >= MAX_POSITIONS) break;
@@ -383,9 +403,13 @@ function simulateRegime(regime, dates, batchSize) {
               var sid = c.signals[ss].id;
               if (signalHits[sid]) {
                 if (fwdRet > 0) signalHits[sid].hits++;
+                // Per-factor hit tracking: each signal's outcome
+                totalSignalHits += (fwdRet > 0 ? 1 : 0);
+                totalSignals += 1;
               }
             }
-            if (fwdRet > 0) totalSignalHits++;
+            // Candidate-level hit tracking: was this buy recommendation profitable?
+            if (fwdRet > 0) totalCandidateHits++;
             break;
           }
         }
@@ -420,7 +444,10 @@ function simulateRegime(regime, dates, batchSize) {
 
   // Compute final metrics
   result.metrics.totalSignals = totalSignals;
-  result.metrics.signalQuality = totalSignals > 0 ? Math.round(totalSignalHits / totalSignals * 100) : 0;
+  result.metrics.boughtCandidates = totalCandidates;
+  result.metrics.signalQuality = totalCandidates > 0 ? Math.round(totalCandidateHits / totalCandidates * 100) : 0;
+  // Per-factor aggregate hit rate (all signals across all factors, each signal's outcome)
+  result.metrics.factorHitRate = totalSignals > 0 ? Math.round(totalSignalHits / totalSignals * 100) : 0;
   result.metrics.totalReturn = navSeries.length > 1
     ? Math.round((navSeries[navSeries.length - 1] / navSeries[0] - 1) * 10000) / 100
     : 0;
@@ -632,6 +659,25 @@ function klineIdx(klineSnapshot, code) {
     if (klineSnapshot[i].code === code) return i;
   }
   return -1;
+}
+
+/**
+ * Count trading days between two date strings (inclusive of start, exclusive of end).
+ * Used for stop-loss cooldown logic.
+ */
+function dateDiffTradingDays(fromDate, toDate) {
+  var d = new Date(fromDate + 'T12:00:00+08:00');
+  d.setDate(d.getDate() + 1); // Start counting from next day
+  var count = 0;
+  var end = new Date(toDate + 'T12:00:00+08:00');
+  while (d <= end) {
+    var dow = d.getDay();
+    if (dow !== 0 && dow !== 6 && !isHoliday(d.toISOString().slice(0, 10))) {
+      count++;
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return count;
 }
 
 function getForwardTradingDay(date, n) {

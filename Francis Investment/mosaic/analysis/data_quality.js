@@ -68,9 +68,11 @@ function checkAllDataSources() {
       if (src.note) missingData.push(src.note);
     }
     if (src.status === 'WARN') {
+      affectedModules.push(src.label || key);
       uncertainSignals.push(src.label + ': ' + (src.note || '数据质量下降'));
     }
     if (src.status === 'PROXY') {
+      affectedModules.push(src.label || key);
       lowConfModules.push(src.label + ': ' + (src.note || '使用代理数据'));
     }
   }

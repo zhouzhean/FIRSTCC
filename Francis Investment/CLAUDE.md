@@ -1,6 +1,15 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 v3.0.2 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.0.3 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+
+## v3.0.3 (2026-06-15) — 数据质量面板修复 + 回测止损冷却期 + 指标统一
+
+### 修复
+| # | 问题 | 文件 | 修改 |
+|---|------|------|------|
+| 1 | `affectedModules` 只含 DOWN/STALE，WARN/PROXY 不显示 | `data_quality.js:66-76` | WARN/PROXY 现在也推入 `affectedModules` |
+| 2 | 回测止损后可当日重新买入同一只股票（违反交易纪律） | `full_backtest.js:208-210,+659-672` | 新增 4 天止损冷却期 + `dateDiffTradingDays()` 辅助函数 |
+| 3 | `signalQuality` 与 `signalDetail` 统计口径不一致（candidate-level vs factor-level） | `full_backtest.js:168-172,389-394,422-427` | 拆分为 `signalQuality`（候选股命中率%）+ `factorHitRate`（因子级命中率%），均以百分比显示 |
 
 ## v3.0.1 (2026-06-15) — 策略体检+风险预算+完整回测+数据质量+增强归因+交易约束闭环
 
@@ -389,5 +398,7 @@ Francis Investment/
 - **v3.0.2 回测数据源**：`discoverAvailableDates()` 从 K 线缓存取实际日期范围。云端当前 ~16 天（2026-05-25 ~ 2026-06-15），全部判为"震荡市"。要获得有意义的多年回测结果，需要历史 K 线数据（通过 Eastmoney/Tencent API 批量拉取或第三方数据源）
 - **v3.0.2 compositeScore 返回值类型**：`composite.js` 的 `computeCompositeScore()` 返回对象 `{compositeScore, rating, ...}` 而非数字。使用时需提取 `.compositeScore` 属性并检查 NaN
 - **v3.0.2 总控 attributionSummary 依赖**：`computeMasterControlJudgment()` 需要 context.attributionSummary 才能计算 consecutiveLosses 维度。必须传入，否则 severity 始终为 0
+- **v3.0.3 止损冷却期**：回测 `STOP_LOSS_COOLDOWN_DAYS = 4`，止损后 4 个交易日内不会重新买入同一只股票。冷却期按自然日计算后扣减非交易日
+- **v3.0.3 signalQuality 拆分**：`signalQuality` 现在是候选股命中率（候选股数/正向收益数 %），`factorHitRate` 是因子级信号命中率（信号数/正确信号数 %）。注意 `aggregateRegimes()` 的 `avgSignalQuality` 取的是 `signalQuality` 的均值
 - **策略体检 tradingDays < 20**：年化收益率/Sharpe/Sortino/Calmar 全部返回 null，前端显示 "数据不足"
 - **`.gitignore` 运行时数据**：新增运行时数据目录时务必同步更新 .gitignore
