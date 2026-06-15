@@ -484,6 +484,22 @@ function buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors
         ? '归因避让板块：' + avoidSectors.join('、') + '（触发硬止损后避让）'
         : '无归因避让板块',
     },
+    dataQuality: (function() {
+      try {
+        const dq = require('./analysis/data_quality');
+        const dqr = dq.computeConfidencePenalty();
+        return {
+          penalty: dqr.penalty || 0,
+          reasons: dqr.reasons || [],
+          overallScore: dqr.overallScore || 0,
+          description: (dqr.penalty > 0)
+            ? '数据质量惩罚-' + dqr.penalty + '分：' + (dqr.reasons || []).join('；')
+            : '数据质量正常，无惩罚',
+        };
+      } catch (_) {
+        return { penalty: 0, reasons: [], overallScore: 0, description: '数据质量检查不可用' };
+      }
+    })(),
   };
 }
 
@@ -689,6 +705,29 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       if (r.compositeScore != null) {
         r.compositeScore = Math.max(0, r.compositeScore - macroPenalty);
       }
+    }
+  }
+
+  // ---- Step 4.2: Data quality confidence penalty ----
+  // When key data sources are DOWN/STALE/WARN, reduce all scores proportionally.
+  // This prevents trading on stale or incomplete data.
+  var dataQualityPenalty = 0;
+  var dqReasons = [];
+  try {
+    const dq = require('./analysis/data_quality');
+    const dqResult = dq.computeConfidencePenalty();
+    dataQualityPenalty = dqResult.penalty || 0;
+    dqReasons = dqResult.reasons || [];
+  } catch (_) { /* data_quality not available */ }
+  if (dataQualityPenalty > 0) {
+    for (const r of pipelineResults) {
+      if (r.compositeScore != null) {
+        r.compositeScore = Math.max(0, r.compositeScore - dataQualityPenalty);
+      }
+    }
+    // Log once per pipeline run
+    if (dqReasons.length > 0) {
+      console.log('  [Simfolio] 数据质量惩罚: -' + dataQualityPenalty + '分 (' + dqReasons.join('; ') + ')');
     }
   }
 
@@ -1205,7 +1244,11 @@ function checkBuySignal(stockData, pf, isStrong, combinedMultiplier) {
   if (useRiskBudget) {
     try {
       const riskBudget = require('./analysis/risk_budget');
-      const marketCtx = { riskRegime: macroContext && macroContext.riskRegime ? macroContext.riskRegime : 'neutral' };
+      // macroContext = { riskState: { regime, totalScore, ... } } from cross_market.getCachedRiskState()
+      const marketCtx = {
+        riskRegime: (macroContext && macroContext.riskState && macroContext.riskState.regime) || 'neutral',
+        riskScore: (macroContext && macroContext.riskState && macroContext.riskState.totalScore) || 0,
+      };
       const budget = riskBudget.computeRiskBudgetPosition(
         { code: stockData.code, name: stockData.name, price: stockData.price, compositeScore: stockData.compositeScore, expectedReturn: stockData.expectedReturn },
         pf,

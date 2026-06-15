@@ -4,6 +4,17 @@ A股量化交易系统 + 报告引擎 + **24/7 自主学习进化引擎**。Node
 
 ## v3.0 升级 (2026-06-15) — 策略体检+风险预算+完整回测+数据质量+增强归因
 
+### v3.0.1 补丁 (2026-06-15) — 交易约束闭环修复
+
+| 修复 | 文件 | 问题 | 改动 |
+|------|------|------|------|
+| 总控判定严格化 | `strategy_health.js` | -6.3%回撤+0%胜率还判"谨慎开仓" | 4 组级联规则：零胜率→BLOCK，零盈亏比→BLOCK，回撤+连亏+低胜率叠加→升级，3+仓位+负收益→限制买入 |
+| 风险预算regime映射 | `simfolio.js` | `macroContext.riskRegime` 永远为 undefined | 改为 `macroContext.riskState.regime` |
+| 恐慌熔断 | `risk_budget.js` | panic 乘数 0 被 clamp 回升到 1% | panic 直接 return blocker，不再 clamp |
+| 数据质量惩罚 | `simfolio.js` + `data_quality.js` | 数据异常不降权 | 新增 `computeConfidencePenalty()`，DOWN/STALE/WARN 源数折算 0-10 分惩罚，接入评分管线 |
+| 回测接入真实因子 | `full_backtest.js` | `estimateSignalsForDate()` 空壳 | 接入 `hidden_signals.js` + `composite.js`，添加止损/止盈/仓位管理/交易成本模拟 |
+| 总控字段修复 | `buildGateResults()` | 数据质量不可见 | 新增 `dataQuality` 字段到 gateResults，前端可展示 |
+
 ### 新增模块
 | 模块 | 文件 | 功能 |
 |------|------|------|

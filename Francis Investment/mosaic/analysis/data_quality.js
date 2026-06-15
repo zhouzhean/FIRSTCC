@@ -380,8 +380,84 @@ function checkNewsData() {
   return result;
 }
 
+/**
+ * Compute a signal confidence penalty from the latest data quality report.
+ *
+ * Returns an integer 0-N to subtract from compositeScore:
+ *   0   = all sources healthy, no penalty
+ *   1-3 = minor issues (WARN/PROXY on non-critical sources)
+ *   4-6 = moderate issues (STALE on one source, or WARN on 2+)
+ *   7-10= severe issues (DOWN on any source, or STALE on 2+)
+ *
+ * This is designed to be called from simfolio.js before candidate ranking.
+ *
+ * @param {Object} report — optional pre-fetched report (avoids re-reading files)
+ * @returns {{ penalty: number, reasons: string[], report: Object }}
+ */
+function computeConfidencePenalty(report) {
+  report = report || checkAllDataSources();
+  var penalty = 0;
+  var reasons = [];
+
+  var sources = report.sources || {};
+
+  // Critical sources: if DOWN, large penalty
+  var criticalSources = ['marketData', 'indexData'];
+  for (var i = 0; i < criticalSources.length; i++) {
+    var src = sources[criticalSources[i]];
+    if (!src) continue;
+    if (src.status === 'DOWN') {
+      penalty += 5;
+      reasons.push((src.label || criticalSources[i]) + '数据源不可用');
+    } else if (src.status === 'STALE') {
+      penalty += 3;
+      reasons.push((src.label || criticalSources[i]) + '数据过期');
+    }
+  }
+
+  // Important sources: WARN or PROXY
+  var importantSources = ['northBound', 'usMarket', 'klineCache'];
+  for (i = 0; i < importantSources.length; i++) {
+    src = sources[importantSources[i]];
+    if (!src) continue;
+    if (src.status === 'DOWN') {
+      penalty += 3;
+      reasons.push((src.label || importantSources[i]) + '不可用');
+    } else if (src.status === 'STALE') {
+      penalty += 2;
+      reasons.push((src.label || importantSources[i]) + '数据过期');
+    } else if (src.status === 'WARN') {
+      penalty += 1;
+    } else if (src.status === 'PROXY') {
+      penalty += 1;
+      reasons.push((src.label || importantSources[i]) + '使用代理数据');
+    }
+  }
+
+  // Source count penalty: if multiple sources are not OK
+  var notOkCount = 0;
+  for (var key in sources) {
+    if (sources[key].status !== 'OK') notOkCount++;
+  }
+  if (notOkCount >= 4) {
+    penalty += 3;
+    reasons.push('多个数据源(' + notOkCount + '个)状态异常，信号置信度大幅降低');
+  } else if (notOkCount >= 2) {
+    penalty += 1;
+    reasons.push('部分数据源(' + notOkCount + '个)状态异常');
+  }
+
+  return {
+    penalty: Math.min(10, penalty),
+    reasons: reasons,
+    overallScore: report.overallScore || 0,
+    report: report,
+  };
+}
+
 module.exports = {
   checkAllDataSources,
+  computeConfidencePenalty,
   checkMarketData,
   checkIndexData,
   checkNorthBound,

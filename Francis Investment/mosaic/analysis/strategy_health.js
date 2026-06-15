@@ -507,14 +507,19 @@ function computeMonthlyHeatmap(dailyNav) {
 /**
  * Synthesizes all available data into a single trading control verdict.
  *
- * Verdicts:
+ * Verdicts (aligned with simfolio gate chain):
  *   ALLOW    — Conditions normal, trading permitted
- *   CAUTIOUS — Some concerns, but trading allowed with reduced size
- *   REDUCE   — Material concerns, only selling / reduce-only allowed
- *   BLOCK    — Serious issues, all new buys blocked
+ *   CAUTIOUS — Some concerns, but trading allowed with reduced size + raised threshold
+ *   REDUCE   — Material concerns, only selling / reduce-only allowed (matches simfolio drawdown restrict)
+ *   BLOCK    — Serious issues, all new buys blocked (matches simfolio halt + circuit breaker)
  *
- * NOTE: This is a diagnostic judgment, NOT a trading execution gate.
- * The existing simfolio 6-gate chain handles actual trade blocking.
+ * KEY DESIGN PRINCIPLE: The verdict should align with what the simfolio gates
+ * would actually do. If thinkTankGate is defensive (score >= 3) or drawdown
+ * is at restrict level, this should show REDUCE or BLOCK — not CAUTIOUS.
+ *
+ * This is stricter than v3.0 original because it uses CASCADING compound checks:
+ * individual flags like -6% drawdown alone → CAUTIOUS, but -6% drawdown
+ * + 0% win rate + 4 consecutive losses + 0 profit factor together → BLOCK.
  */
 function computeMasterControlJudgment(context) {
   const reasons = [];
@@ -527,91 +532,167 @@ function computeMasterControlJudgment(context) {
   const snapshot = context.snapshot || {};
   const pf = context.pf || {};
 
-  // 1. Check drawdown
+  // ── Individual dimension checks ──
+
+  // 1. Drawdown
   const maxDD = safeNum(riskMetrics.maxDrawdown, 0);
+  let ddSeverity = 0; // 0=none, 1=warn, 2=restrict, 3=halt
   if (maxDD <= -10) {
     reasons.push('最大回撤超10%：' + maxDD + '%');
     recoveryConditions.push('回撤修复到-5%以内持续5个交易日');
-    worstVerdict = Math.max(worstVerdict, 3);
+    ddSeverity = 3;
   } else if (maxDD <= -8) {
     reasons.push('最大回撤超8%：' + maxDD + '%');
     recoveryConditions.push('回撤修复到-5%以内');
-    worstVerdict = Math.max(worstVerdict, 2);
+    ddSeverity = 2;
   } else if (maxDD <= -5) {
     reasons.push('最大回撤超5%：' + maxDD + '%');
     recoveryConditions.push('回撤收窄至-3%以内');
-    worstVerdict = Math.max(worstVerdict, 1);
+    ddSeverity = 1;
   }
 
-  // 2. Check Sharpe ratio
-  if (riskMetrics.sharpeRatio !== null && riskMetrics.sharpeRatio < -0.5) {
+  // 2. Sharpe ratio
+  let sharpeSeverity = 0;
+  if (riskMetrics.sharpeRatio !== null && riskMetrics.sharpeRatio < -1.0) {
     reasons.push('Sharpe比率严重为负：' + riskMetrics.sharpeRatio);
     recoveryConditions.push('Sharpe比率回升至0以上');
-    worstVerdict = Math.max(worstVerdict, 2);
+    sharpeSeverity = 2;
   } else if (riskMetrics.sharpeRatio !== null && riskMetrics.sharpeRatio < 0) {
     reasons.push('Sharpe比率为负：' + riskMetrics.sharpeRatio);
-    recoveryConditions.push('Sharpe比率回升至0以上');
-    worstVerdict = Math.max(worstVerdict, 1);
+    sharpeSeverity = 1;
   }
 
-  // 3. Check win rate
-  if (tradeStats.winRate !== null && tradeStats.totalTrades >= 5) {
-    if (tradeStats.winRate < 30) {
-      reasons.push('胜率低于30%：' + tradeStats.winRate + '%');
+  // 3. Win rate — lower bar: check at 3+ trades, not 5+
+  let winRateSeverity = 0;
+  const hasMinTrades = tradeStats.totalTrades >= 3;
+  const hasAdequateSample = tradeStats.totalTrades >= 5;
+  if (tradeStats.winRate !== null && hasMinTrades) {
+    if (tradeStats.winRate === 0) {
+      reasons.push('胜率0%：' + tradeStats.totalTrades + '笔交易全部亏损');
+      recoveryConditions.push('出现连续2笔盈利交易');
+      winRateSeverity = 3; // Zero win rate with any trades → BLOCK
+    } else if (tradeStats.winRate < 25 && hasAdequateSample) {
+      reasons.push('胜率极低：' + tradeStats.winRate + '% (' + tradeStats.totalTrades + '笔)');
       recoveryConditions.push('最近10笔交易胜率回升至40%以上');
-      worstVerdict = Math.max(worstVerdict, 2);
-    } else if (tradeStats.winRate < 40) {
+      winRateSeverity = 2;
+    } else if (tradeStats.winRate < 40 && hasAdequateSample) {
       reasons.push('胜率偏低：' + tradeStats.winRate + '%');
       recoveryConditions.push('胜率回升至45%以上');
-      worstVerdict = Math.max(worstVerdict, 1);
+      winRateSeverity = 1;
     }
   }
 
-  // 4. Check consecutive losses
+  // 4. Consecutive losses
   const consecLosses = context.attributionSummary ? context.attributionSummary.consecutiveLosses : 0;
+  let consecSeverity = 0;
   if (consecLosses >= 5) {
-    reasons.push('连续亏损5笔以上：' + consecLosses + '笔');
-    recoveryConditions.push('出现盈利交易');
-    worstVerdict = Math.max(worstVerdict, 3);
-  } else if (consecLosses >= 3) {
+    reasons.push('连续亏损' + consecLosses + '笔');
+    recoveryConditions.push('出现连续2笔盈利交易');
+    consecSeverity = 3;
+  } else if (consecLosses >= 4) {
     reasons.push('连续亏损' + consecLosses + '笔');
     recoveryConditions.push('出现盈利交易');
-    worstVerdict = Math.max(worstVerdict, 2);
+    consecSeverity = 2;
+  } else if (consecLosses >= 2) {
+    reasons.push('连续亏损' + consecLosses + '笔');
+    consecSeverity = 1;
   }
 
-  // 5. Check portfolio in loss with positions
+  // 5. Portfolio in loss
   const totalReturn = safeNum(riskMetrics.totalReturn, 0);
   const positionCount = pf.positions ? pf.positions.length : 0;
-  if (totalReturn < -5 && positionCount >= 3) {
+  let lossSeverity = 0;
+  if (totalReturn <= -8) {
+    reasons.push('组合严重浮亏：总收益' + totalReturn + '%');
+    recoveryConditions.push('总收益回升至-3%以上');
+    lossSeverity = 3;
+  } else if (totalReturn < -5 && positionCount >= 3) {
     reasons.push('持仓浮亏较重：总收益' + totalReturn + '%，持仓' + positionCount + '只');
     recoveryConditions.push('总收益回升至-3%以上或减仓至2只以下');
-    worstVerdict = Math.max(worstVerdict, 2);
+    lossSeverity = 2;
   } else if (totalReturn < -3) {
     reasons.push('总收益为负：' + totalReturn + '%');
     recoveryConditions.push('总收益回正');
-    worstVerdict = Math.max(worstVerdict, 1);
+    lossSeverity = 1;
   }
 
-  // 6. Check profit factor
-  if (tradeStats.profitFactor !== null && tradeStats.totalTrades >= 5) {
-    if (tradeStats.profitFactor < 0.5) {
+  // 6. Profit factor — zero profit factor means ALL trades lost money
+  let pfSeverity = 0;
+  if (tradeStats.profitFactor !== null && hasMinTrades) {
+    if (tradeStats.profitFactor === 0) {
+      reasons.push('盈亏比为0：全部交易亏损，无盈利记录');
+      recoveryConditions.push('出现盈利交易，盈亏比回升至0.5以上');
+      pfSeverity = 3; // Zero profit factor → BLOCK
+    } else if (tradeStats.profitFactor < 0.5) {
       reasons.push('盈亏比严重偏低：' + tradeStats.profitFactor);
       recoveryConditions.push('盈亏比回升至0.8以上');
-      worstVerdict = Math.max(worstVerdict, 3);
-    } else if (tradeStats.profitFactor < 0.8) {
+      pfSeverity = 2;
+    } else if (tradeStats.profitFactor < 0.8 && hasAdequateSample) {
       reasons.push('盈亏比偏低：' + tradeStats.profitFactor);
       recoveryConditions.push('盈亏比回升至1.0以上');
-      worstVerdict = Math.max(worstVerdict, 2);
+      pfSeverity = 1;
     }
   }
+
+  // ── Compound cascading: multi-dimension escalation ──
+
+  // Take the max single-dimension severity as the baseline
+  worstVerdict = Math.max(ddSeverity, sharpeSeverity, winRateSeverity,
+                           consecSeverity, lossSeverity, pfSeverity);
+
+  // CASCADE RULE 1: If drawdown is at warn level AND we have consecutive losses
+  // with zero win rate, escalate from CAUTIOUS (1) to REDUCE (2) or BLOCK (3)
+  if (ddSeverity >= 1 && consecSeverity >= 2 && winRateSeverity >= 2) {
+    // -5% drawdown + 2+ consecutive losses + terrible win rate → at least REDUCE
+    worstVerdict = Math.max(worstVerdict, 2);
+    reasons.push('[级联] 回撤叠加连续亏损叠加低胜率 → 升级至REDUCE/BLOCK');
+  }
+
+  // CASCADE RULE 2: Negative total return + zero win rate + zero profit factor
+  // This is the "strategy is broken" signal — BLOCK immediately
+  if (lossSeverity >= 1 && winRateSeverity >= 3 && pfSeverity >= 3) {
+    worstVerdict = 3;
+    reasons.push('[级联] 负收益+零胜率+零盈亏比 → 策略疑似失效，禁止开仓');
+    recoveryConditions.push('连续3笔盈利交易 + 盈亏比>0.8 + 总收益回升至-3%以上');
+  }
+
+  // CASCADE RULE 3: 4+ consecutive losses + any other severity-2 dimension
+  if (consecSeverity >= 2) {
+    const otherSevere = (ddSeverity >= 2 ? 1 : 0) + (winRateSeverity >= 2 ? 1 : 0) +
+                        (pfSeverity >= 2 ? 1 : 0) + (lossSeverity >= 2 ? 1 : 0);
+    if (otherSevere >= 1) {
+      worstVerdict = Math.max(worstVerdict, 2);
+      reasons.push('[级联] 连续亏损叠加其他严重信号 → 限制买入');
+    }
+  }
+
+  // CASCADE RULE 4: 3+ positions + negative return + any severity ≥ 2
+  if (positionCount >= 3 && totalReturn < 0 && worstVerdict >= 1) {
+    // Having 3+ positions while losing money is risk compounding
+    worstVerdict = Math.max(worstVerdict, 2);
+    reasons.push('[级联] 持有' + positionCount + '只仓位且总收益为负 → 暂停新增买入');
+    recoveryConditions.push('减仓至≤2只或总收益回正');
+  }
+
+  // ── Final verdict ──
 
   // If no reasons at all, system is healthy
   if (reasons.length === 0) {
     reasons.push('各项指标正常，系统运行良好');
   }
 
+  // Deduplicate recovery conditions
+  const uniqueRecovery = [];
+  const seenRecovery = new Set();
+  for (const rc of recoveryConditions) {
+    if (!seenRecovery.has(rc)) {
+      seenRecovery.add(rc);
+      uniqueRecovery.push(rc);
+    }
+  }
+
   const verdictMap = ['ALLOW', 'CAUTIOUS', 'REDUCE', 'BLOCK'];
-  const verdict = verdictMap[worstVerdict];
+  const verdict = verdictMap[Math.min(3, worstVerdict)];
 
   const verdictLabels = {
     'ALLOW': '允许开仓',
@@ -620,14 +701,17 @@ function computeMasterControlJudgment(context) {
     'BLOCK': '禁止开仓',
   };
 
-  // Confidence: base 100%, reduce by -10 per reason (floor 30%)
-  const confidence = Math.max(30, 100 - reasons.length * 10);
+  // Confidence: base 100%, severity-weighted reduction
+  const severitySum = ddSeverity + sharpeSeverity + winRateSeverity +
+                      consecSeverity + lossSeverity + pfSeverity;
+  const confidence = Math.max(20, 100 - severitySum * 12);
 
-  // Determine market state based on recent stats
+  // Determine market state
   let marketStateHint = '正常';
-  if (maxDD <= -8) marketStateHint = '回撤警戒';
-  else if (maxDD <= -5) marketStateHint = '回撤观察';
-  if (tradeStats.winRate !== null && tradeStats.winRate < 35 && consecLosses >= 3) marketStateHint = '策略失效预警';
+  if (worstVerdict >= 3) marketStateHint = '策略疑似失效 — 暂停所有买入';
+  else if (worstVerdict >= 2) marketStateHint = '策略承压 — 仅允许减仓观察';
+  else if (worstVerdict >= 1) marketStateHint = '策略偏弱 — 提高买入门槛';
+  if (consecSeverity >= 2 && winRateSeverity >= 2) marketStateHint = '策略失效预警 — 连续亏损+低胜率';
 
   return {
     verdict: verdict,
@@ -635,7 +719,16 @@ function computeMasterControlJudgment(context) {
     confidence: confidence,
     marketStateHint: marketStateHint,
     reasons: reasons,
-    recoveryConditions: recoveryConditions,
+    recoveryConditions: uniqueRecovery,
+    severityBreakdown: {
+      drawdown: ddSeverity,
+      sharpe: sharpeSeverity,
+      winRate: winRateSeverity,
+      consecutiveLosses: consecSeverity,
+      portfolioLoss: lossSeverity,
+      profitFactor: pfSeverity,
+      composite: Math.min(3, worstVerdict),
+    },
     lastUpdated: new Date().toISOString(),
   };
 }

@@ -146,19 +146,46 @@ function simulateRegime(regime, dates, batchSize) {
       avgSignalCount: 0,    // average signals per day
       signalQuality: 0,     // % signals that were profitable
       volatility: 0,        // return volatility (std of daily returns)
+      sharpeApprox: null,   // approximate Sharpe from daily returns
+      maxDrawdown: 0,       // max drawdown during simulation
     },
     signalDetail: {},
+    tradeLog: [],           // simulated trades for attribution
   };
+
+  // Lazy-load real factor engines
+  var computeHiddenSignals, computeCompositeScore;
+  try {
+    var hs = require('../factors/hidden_signals');
+    computeHiddenSignals = hs.computeHiddenSignals;
+  } catch (_) {}
+  try {
+    var cs = require('../factors/composite');
+    computeCompositeScore = cs.computeCompositeScore || cs.computeScore;
+  } catch (_) {}
 
   var signalHits = {};
   for (var f = 0; f < FACTORS.length; f++) {
     signalHits[FACTORS[f].id] = { hits: 0, total: 0 };
   }
 
-  // Simulation logic: for each sampled day, estimate what the pipeline would produce
+  // Simulation: walk through each day, compute real signals, simulate trades
   var dailyReturns = [];
   var totalSignalHits = 0;
   var totalSignals = 0;
+  var simulatedCash = 100000;
+  var simulatedPositions = []; // [{ code, shares, entryPrice, entryDate }]
+  var navSeries = [100000];
+  var peakNav = 100000;
+  var maxDD = 0;
+
+  // Config thresholds
+  var BUY_MIN_SCORE = 55;
+  var STOP_LOSS_PCT = -0.08;
+  var TAKE_PROFIT_PCT = 0.15;
+  var MAX_POSITIONS = 5;
+  var COMMISSION = 0.00025;
+  var STAMP_TAX = 0.001;
 
   for (var d = 0; d < dates.length; d++) {
     var date = dates[d];
@@ -166,47 +193,223 @@ function simulateRegime(regime, dates, batchSize) {
 
     if (!klineSnapshot || klineSnapshot.length < 3) continue;
 
-    // Estimate signals based on technical conditions
-    var signals = estimateSignalsForDate(date, klineSnapshot);
-    if (signals.length === 0) continue;
+    // Step 1: Update position prices, check stop-loss / take-profit
+    for (var p = simulatedPositions.length - 1; p >= 0; p--) {
+      var pos = simulatedPositions[p];
+      var currentKline = null;
+      for (var ki = 0; ki < klineSnapshot.length; ki++) {
+        if (klineSnapshot[ki].code === pos.code) {
+          currentKline = klineSnapshot[ki];
+          break;
+        }
+      }
+      if (!currentKline) continue;
 
-    totalSignals += signals.length;
+      var currentPrice = currentKline.close;
+      var pnlPct = (currentPrice - pos.entryPrice) / pos.entryPrice;
 
-    // Check 5-day forward return
-    var fwdDate = getForwardTradingDay(date, 5);
-    var fwdKline = getKlineSnapshot(fwdDate);
+      // Check stop-loss
+      if (pnlPct <= STOP_LOSS_PCT) {
+        var sellAmount = pos.shares * currentPrice;
+        var sellCost = sellAmount * (COMMISSION + STAMP_TAX);
+        simulatedCash += sellAmount - sellCost;
+        result.tradeLog.push({
+          date: date, code: pos.code, action: 'sell',
+          reason: 'stop_loss', entryPrice: pos.entryPrice,
+          exitPrice: currentPrice, pnlPct: Math.round(pnlPct * 10000) / 100,
+        });
+        simulatedPositions.splice(p, 1);
+      }
+      // Check take-profit
+      else if (pnlPct >= TAKE_PROFIT_PCT) {
+        sellAmount = pos.shares * currentPrice;
+        sellCost = sellAmount * (COMMISSION + STAMP_TAX);
+        simulatedCash += sellAmount - sellCost;
+        result.tradeLog.push({
+          date: date, code: pos.code, action: 'sell',
+          reason: 'take_profit', entryPrice: pos.entryPrice,
+          exitPrice: currentPrice, pnlPct: Math.round(pnlPct * 10000) / 100,
+        });
+        simulatedPositions.splice(p, 1);
+      }
+    }
 
-    if (fwdKline && fwdKline.length > 0) {
-      // For each signal, check forward return
+    // Step 2: Compute signals and scores using real factor engines
+    var buyCandidates = [];
+    for (var ki = 0; ki < klineSnapshot.length; ki++) {
+      var k = klineSnapshot[ki];
+      if (!k.close || k.close <= 0) continue;
+
+      // Build minimal stock object for factor computation
+      var stockObj = {
+        code: k.code,
+        name: k.code,
+        price: k.close,
+        peTTM: k.pe || null,
+        changePercent: k.changePercent || 0,
+        turnover: k.volume || 0,
+      };
+
+      var signals = [];
+      var compositeScore = 0;
+
+      // Compute real hidden signals if available
+      if (computeHiddenSignals) {
+        try {
+          // Build kline array from cached data for this stock
+          var stockKlines = getStockKlines(k.code, date);
+          var hiddenResult = computeHiddenSignals(stockObj, null, stockKlines, false);
+          if (hiddenResult && hiddenResult.signals) {
+            signals = hiddenResult.signals;
+          }
+        } catch (_) {}
+      }
+
+      // Compute composite score
+      if (computeCompositeScore) {
+        try {
+          compositeScore = computeCompositeScore(stockObj, null, signals, {}) || 0;
+        } catch (_) {
+          compositeScore = 0;
+        }
+      }
+
+      // Fallback: estimate score from signal count if composite unavailable
+      if (compositeScore === 0 && signals.length > 0) {
+        compositeScore = 40 + signals.length * 5;
+      }
+
+      // Count signals by factor type
       for (var s = 0; s < signals.length; s++) {
         var sig = signals[s];
-        var kIdx = klineIdx(klineSnapshot, sig.code);
-        var fIdx = klineIdx(fwdKline, sig.code);
+        if (signalHits[sig.id]) {
+          signalHits[sig.id].total++;
+        }
+      }
+      totalSignals += signals.length;
 
-        if (kIdx >= 0 && fIdx >= 0) {
-          var entryPrice = klineSnapshot[kIdx].close;
-          var exitPrice = fwdKline[fIdx].close;
-          var ret = (exitPrice - entryPrice) / entryPrice;
+      if (compositeScore >= BUY_MIN_SCORE) {
+        buyCandidates.push({
+          code: k.code,
+          price: k.close,
+          compositeScore: compositeScore,
+          signals: signals,
+        });
+      }
+    }
 
-          if (signalHits[sig.type]) {
-            signalHits[sig.type].total++;
-            if (ret > 0) signalHits[sig.type].hits++;
+    // Step 3: Execute buys (top candidates by score, within position limits)
+    buyCandidates.sort(function(a, b) { return b.compositeScore - a.compositeScore; });
+    var buysToday = 0;
+    var maxBuysPerDay = 2;
+
+    for (var bc = 0; bc < buyCandidates.length && buysToday < maxBuysPerDay; bc++) {
+      var c = buyCandidates[bc];
+
+      // Skip if already holding
+      var alreadyHolding = false;
+      for (var ph = 0; ph < simulatedPositions.length; ph++) {
+        if (simulatedPositions[ph].code === c.code) { alreadyHolding = true; break; }
+      }
+      if (alreadyHolding) continue;
+
+      // Position limit
+      if (simulatedPositions.length >= MAX_POSITIONS) break;
+
+      // Allocation: 15% of cash for strong candidates, 10% for normal
+      var allocPct = c.compositeScore >= 65 ? 0.15 : 0.10;
+      var allocAmount = simulatedCash * allocPct;
+      var shares = Math.floor(allocAmount / c.price / 100) * 100;
+      if (shares < 100) continue;
+
+      var buyCost = shares * c.price * (1 + COMMISSION);
+      if (buyCost > simulatedCash * 0.3) continue; // max 30% per position
+
+      simulatedCash -= buyCost;
+      simulatedPositions.push({
+        code: c.code,
+        shares: shares,
+        entryPrice: c.price,
+        entryDate: date,
+      });
+      buysToday++;
+
+      result.tradeLog.push({
+        date: date, code: c.code, action: 'buy',
+        price: c.price, shares: shares,
+        score: c.compositeScore,
+        signalCount: c.signals.length,
+      });
+
+      // Check forward returns for signal quality tracking
+      var fwdDate = getForwardTradingDay(date, 5);
+      var fwdKline = getKlineSnapshot(fwdDate);
+      if (fwdKline) {
+        for (var fk = 0; fk < fwdKline.length; fk++) {
+          if (fwdKline[fk].code === c.code) {
+            var fwdPrice = fwdKline[fk].close;
+            var fwdRet = (fwdPrice - c.price) / c.price;
+            // Mark all signals from this candidate
+            for (var ss = 0; ss < c.signals.length; ss++) {
+              var sid = c.signals[ss].id;
+              if (signalHits[sid]) {
+                if (fwdRet > 0) signalHits[sid].hits++;
+              }
+            }
+            if (fwdRet > 0) totalSignalHits++;
+            break;
           }
-          if (ret > 0) totalSignalHits++;
         }
       }
     }
 
-    // Daily return proxy: average signal return
-    if (signals.length > 0) {
-      // Approximate daily return
-      dailyReturns.push(0); // simplified — real returns need portfolio simulation
+    // Step 4: Compute daily NAV
+    var positionValue = 0;
+    for (var pv = 0; pv < simulatedPositions.length; pv++) {
+      var posPv = simulatedPositions[pv];
+      var posPrice = posPv.entryPrice; // default to entry if no current price
+      for (var kp = 0; kp < klineSnapshot.length; kp++) {
+        if (klineSnapshot[kp].code === posPv.code) {
+          posPrice = klineSnapshot[kp].close;
+          break;
+        }
+      }
+      positionValue += posPv.shares * posPrice;
+    }
+
+    var nav = simulatedCash + positionValue;
+    navSeries.push(nav);
+    if (nav > peakNav) peakNav = nav;
+    var dd = (nav - peakNav) / peakNav * 100;
+    if (dd < maxDD) maxDD = dd;
+
+    if (navSeries.length >= 2) {
+      var prevNav = navSeries[navSeries.length - 2];
+      dailyReturns.push(prevNav > 0 ? (nav - prevNav) / prevNav : 0);
     }
   }
 
-  // Compute metrics
+  // Compute final metrics
   result.metrics.totalSignals = totalSignals;
   result.metrics.signalQuality = totalSignals > 0 ? Math.round(totalSignalHits / totalSignals * 100) : 0;
+  result.metrics.totalReturn = navSeries.length > 1
+    ? Math.round((navSeries[navSeries.length - 1] / navSeries[0] - 1) * 10000) / 100
+    : 0;
+  result.metrics.maxDrawdown = Math.round(maxDD * 100) / 100;
+  result.metrics.tradeCount = result.tradeLog.filter(function(t) { return t.action === 'sell'; }).length;
+
+  // Approximate Sharpe
+  if (dailyReturns.length >= 10) {
+    var avgRet = dailyReturns.reduce(function(a, b) { return a + b; }, 0) / dailyReturns.length;
+    var retVar = dailyReturns.reduce(function(s, r) { return s + Math.pow(r - avgRet, 2); }, 0) / dailyReturns.length;
+    var retStd = Math.sqrt(retVar);
+    if (retStd > 0) {
+      result.metrics.sharpeApprox = Math.round((avgRet / retStd) * Math.sqrt(252) * 100) / 100;
+    }
+    result.metrics.volatility = Math.round(retStd * Math.sqrt(252) * 10000) / 100;
+  } else {
+    result.metrics.volatility = 0;
+  }
 
   // Signal detail
   for (var key in signalHits) {
@@ -217,6 +420,11 @@ function simulateRegime(regime, dates, batchSize) {
         total: sh.total,
       };
     }
+  }
+
+  // Trim tradeLog to last 50 entries to keep result size manageable
+  if (result.tradeLog.length > 50) {
+    result.tradeLog = result.tradeLog.slice(-50);
   }
 
   return result;
@@ -378,23 +586,24 @@ function getForwardTradingDay(date, n) {
   return d.toISOString().slice(0, 10);
 }
 
-function estimateSignalsForDate(date, klineSnapshot) {
-  // Estimate H1-H9 signals from K-line snapshot
-  // Simplified: check basic technical conditions
-  var signals = [];
+/**
+ * Load per-stock K-line data from cache for a specific cutoff date.
+ * Returns an array of kline objects up to (and including) the given date.
+ */
+function getStockKlines(code, cutoffDate) {
+  try {
+    var klineFile = path.join(KLINES_DIR, code + '.json');
+    if (!fs.existsSync(klineFile)) return null;
+    var data = JSON.parse(fs.readFileSync(klineFile, 'utf8'));
+    if (!data || !data.klines || data.klines.length === 0) return null;
 
-  for (var i = 0; i < klineSnapshot.length; i++) {
-    var k = klineSnapshot[i];
-    // H1 缩量止跌: volume below average and price near low
-    // H8 短期反转: price has dropped recently
-    // Simplified: just tag random signals for structure testing
-    if (k.close > 0 && k.volume > 0) {
-      // Don't generate fake signals — this is a placeholder
-      // Real implementation would use hidden_signals.computeHiddenSignals()
-    }
+    // Return all klines on or before cutoffDate
+    return data.klines.filter(function(k) {
+      return k.date <= cutoffDate;
+    });
+  } catch (_) {
+    return null;
   }
-
-  return signals;
 }
 
 function aggregateRegimes(regimeResults) {

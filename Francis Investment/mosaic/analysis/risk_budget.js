@@ -62,6 +62,13 @@ function computeRiskBudgetPosition(candidate, pf, marketContext) {
   // 6. Risk regime multiplier
   baseWeight = applyRegimeMultiplier(baseWeight, marketContext, result);
 
+  // 6b. Panic regime: hard block — no position sizing justifies buying
+  if (marketContext && marketContext.riskRegime === 'panic') {
+    result.blockers.push('跨市场恐慌状态(panic)，禁止任何新开仓');
+    result.finalWeight = 0;
+    return result;
+  }
+
   // 7. Check circuit breakers
   var breakerResult = checkCircuitBreakers(pf);
   if (breakerResult.blocked) {
@@ -75,7 +82,8 @@ function computeRiskBudgetPosition(candidate, pf, marketContext) {
     ? config.SIMFOLIO.maxSinglePositionPct * 100
     : 30;
   baseWeight = Math.min(baseWeight, maxSinglePos);
-  baseWeight = Math.max(1, baseWeight);
+  // Min weight: 0 for panic/risk_off (already handled above), otherwise min 1%
+  baseWeight = Math.max(baseWeight <= 0 ? 0 : 1, baseWeight);
 
   result.finalWeight = Math.round(baseWeight * 100) / 100;
 
