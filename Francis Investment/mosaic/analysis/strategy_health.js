@@ -74,6 +74,7 @@ function computeStrategyHealth(options) {
     tradeStats: tradeStats,
     pf: pf,
     snapshot: snapshot,
+    attributionSummary: attributionSummary,
   });
 
   return {

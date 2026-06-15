@@ -51,39 +51,59 @@ function runFullBacktest(options) {
   _state.error = null;
   var startTime = Date.now();
 
-  console.log('[FullBacktest] 开始全周期回测 (' + startYear + '-' + endYear + ', batch=' + batchSize + ')...');
+  console.log('[FullBacktest] 开始全周期回测...');
 
   try {
-    // Phase 1: Generate trading day list + classify regimes
-    _state.progress = { phase: 'classify', pct: 5, message: '识别市场状态...' };
-    var trainingDays = generateTrainingDays(startYear, endYear);
-    console.log('[FullBacktest] 交易日总数: ' + trainingDays.length);
+    // Phase 1: Discover actual available trading days from K-line cache
+    _state.progress = { phase: 'scan', pct: 2, message: '扫描K线缓存...' };
+    var availableDates = discoverAvailableDates();
+    console.log('[FullBacktest] K线缓存可用日期: ' + availableDates.length + ' 天 (' +
+      (availableDates.length > 0 ? availableDates[0] + ' ~ ' + availableDates[availableDates.length - 1] : '无') + ')');
 
-    if (trainingDays.length < 60) {
+    // If cache has usable data, use it. Otherwise fall back to generated dates.
+    var trainingDays;
+    var sourceNote = '';
+    if (availableDates.length >= 10) {
+      trainingDays = availableDates;
+      sourceNote = 'based_on_kline_cache';
+      console.log('[FullBacktest] 使用K线缓存实际日期');
+    } else {
+      trainingDays = generateTrainingDays(startYear, endYear);
+      sourceNote = 'based_on_calendar_estimate';
+      console.log('[FullBacktest] K线缓存不足(' + availableDates.length + '天)，使用日历生成交易日');
+    }
+
+    if (trainingDays.length < 5) {
       _state.running = false;
-      _state.lastResult = { available: false, reason: '数据不足，需要至少60个交易日' };
+      _state.lastResult = { available: false, reason: '数据不足，需要至少5个交易日（缓存中仅' + trainingDays.length + '天）' };
       console.log('[FullBacktest] 数据不足，跳过');
       return _state.lastResult;
     }
 
     // Phase 2: Classify each day's market regime
+    _state.progress = { phase: 'classify', pct: 5, message: '识别市场状态 (' + trainingDays.length + ' 天)...' };
     var regimeMap = {};
     for (var i = 0; i < trainingDays.length; i++) {
       regimeMap[trainingDays[i]] = classifyDailyRegime(trainingDays[i]);
     }
 
-    // Phase 3: Run simplified daily simulation (sampled for efficiency)
-    // We sample roughly 1 in 3 days to keep computation manageable
-    var sampledDays = [];
-    for (i = 0; i < trainingDays.length; i += 3) {
-      sampledDays.push(trainingDays[i]);
+    // Phase 3: Use all available days for simulation (no artificial sampling for small datasets)
+    var allDays;
+    if (trainingDays.length <= 30) {
+      // Small dataset: use every day
+      allDays = trainingDays;
+    } else {
+      // Sample roughly 1 in 3 days + include last 30 days
+      var sampledDays = [];
+      for (i = 0; i < trainingDays.length; i += 3) {
+        sampledDays.push(trainingDays[i]);
+      }
+      var recentDays = trainingDays.slice(-30);
+      allDays = dedupArray(sampledDays.concat(recentDays)).sort();
     }
-    // Always include last 60 days for recency
-    var recentDays = trainingDays.slice(-60);
-    var allDays = dedupArray(sampledDays.concat(recentDays)).sort();
 
-    _state.progress = { phase: 'simulate', pct: 10, message: '模拟交易 (' + allDays.length + ' 天采样)...' };
-    console.log('[FullBacktest] 采样回测日: ' + allDays.length + ' 天');
+    _state.progress = { phase: 'simulate', pct: 10, message: '模拟交易 (' + allDays.length + ' 天)...' };
+    console.log('[FullBacktest] 回测日: ' + allDays.length + ' 天');
 
     // Phase 4: Run regimes batch
     var regimeResults = {};
@@ -92,8 +112,8 @@ function runFullBacktest(options) {
     for (var r = 0; r < allRegimeTags.length; r++) {
       var regime = allRegimeTags[r];
       var regimeDays = allDays.filter(function(d) { return regimeMap[d] === regime; });
-      if (regimeDays.length < 5) {
-        regimeResults[regime] = { days: regimeDays.length, sampled: false, note: '样本不足（<5天），未独立统计' };
+      if (regimeDays.length < 3) {
+        regimeResults[regime] = { days: regimeDays.length, sampled: false, note: '样本不足（<3天），未独立统计' };
         continue;
       }
       regimeResults[regime] = simulateRegime(regime, regimeDays.slice(0, Math.min(regimeDays.length, 90)), batchSize);
@@ -104,11 +124,12 @@ function runFullBacktest(options) {
     // Phase 5: Aggregate
     _state.progress = { phase: 'aggregate', pct: 95, message: '汇总结果...' };
     var result = {
-      version: 'v3.0-backtest-001',
+      version: 'v3.0.1-backtest-001',
       runDate: new Date().toISOString(),
-      dateRange: startYear + '-' + endYear,
+      dateRange: trainingDays.length > 0 ? trainingDays[0] + ' ~ ' + trainingDays[trainingDays.length - 1] : 'N/A',
       totalDays: trainingDays.length,
       sampledDays: allDays.length,
+      source: sourceNote,
       regimes: regimeResults,
       overall: aggregateRegimes(regimeResults),
       duration: Math.round((Date.now() - startTime) / 1000),
@@ -268,14 +289,22 @@ function simulateRegime(regime, dates, batchSize) {
       // Compute composite score
       if (computeCompositeScore) {
         try {
-          compositeScore = computeCompositeScore(stockObj, null, signals, {}) || 0;
+          var compositeResult = computeCompositeScore(stockObj, null, signals, {});
+          // composite.js returns either a number or { compositeScore: N, ... }
+          if (typeof compositeResult === 'number') {
+            compositeScore = compositeResult;
+          } else if (compositeResult && typeof compositeResult.compositeScore === 'number' && !isNaN(compositeResult.compositeScore)) {
+            compositeScore = compositeResult.compositeScore;
+          } else {
+            compositeScore = 0;
+          }
         } catch (_) {
           compositeScore = 0;
         }
       }
 
-      // Fallback: estimate score from signal count if composite unavailable
-      if (compositeScore === 0 && signals.length > 0) {
+      // Fallback: estimate score from signal count if composite unavailable or NaN
+      if ((!compositeScore || isNaN(compositeScore) || compositeScore <= 0) && signals.length > 0) {
         compositeScore = 40 + signals.length * 5;
       }
 
@@ -469,6 +498,38 @@ function classifyDailyRegime(date) {
   return 'other';
 }
 
+/**
+ * Scan all K-line cache files and extract the union of all available dates.
+ * This gives us the actual date range we can backtest against — much more
+ * reliable than generating calendar dates that have no data.
+ */
+function discoverAvailableDates() {
+  try {
+    if (!fs.existsSync(KLINES_DIR)) return [];
+    var files = fs.readdirSync(KLINES_DIR).filter(function(f) { return f.endsWith('.json'); });
+    if (files.length === 0) return [];
+
+    var dateSet = {};
+    var readCount = 0;
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var data = JSON.parse(fs.readFileSync(path.join(KLINES_DIR, files[i]), 'utf8'));
+        if (data && data.klines) {
+          for (var k = 0; k < data.klines.length; k++) {
+            var d = data.klines[k].date;
+            if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+              dateSet[d] = true;
+            }
+          }
+        }
+        readCount++;
+      } catch (_) {}
+    }
+    console.log('[FullBacktest] 扫描了 ' + readCount + '/' + files.length + ' 个K线文件, 发现 ' + Object.keys(dateSet).length + ' 个唯一日期');
+    return Object.keys(dateSet).sort();
+  } catch (_) { return []; }
+}
+
 // ===== Helpers =====
 
 var regimeLabels = {
@@ -610,8 +671,11 @@ function aggregateRegimes(regimeResults) {
   var agg = {
     totalDays: 0,
     sampledDays: 0,
-    avgSignalQuality: 0,
     regimeCount: 0,
+    regimesWithReturn: {},
+    avgSignalQuality: 0,
+    worstRegime: null,
+    bestRegime: null,
   };
 
   var qualitySum = 0;
@@ -625,6 +689,22 @@ function aggregateRegimes(regimeResults) {
       count++;
       if (rr.metrics && rr.metrics.signalQuality != null) {
         qualitySum += rr.metrics.signalQuality;
+      }
+      // Track per-regime return for comparison
+      var ret = rr.metrics ? (rr.metrics.totalReturn || 0) : 0;
+      agg.regimesWithReturn[key] = {
+        label: rr.label || key,
+        days: rr.days,
+        totalReturn: ret,
+        tradeCount: rr.metrics ? (rr.metrics.tradeCount || 0) : 0,
+        signalQuality: rr.metrics ? (rr.metrics.signalQuality || 0) : 0,
+      };
+      // Track best/worst regime
+      if (!agg.bestRegime || ret > agg.bestRegime.totalReturn) {
+        agg.bestRegime = { regime: key, label: rr.label, totalReturn: ret };
+      }
+      if (!agg.worstRegime || ret < agg.worstRegime.totalReturn) {
+        agg.worstRegime = { regime: key, label: rr.label, totalReturn: ret };
       }
     }
   }

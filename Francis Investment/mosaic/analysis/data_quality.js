@@ -76,11 +76,18 @@ function checkAllDataSources() {
   }
 
   report.overallScore = scoreCount > 0 ? Math.min(100, Math.round(scoreSum / scoreCount)) : 0;
+
+  // Use computeConfidencePenalty logic for consistent, realistic confidence impact
+  // (the old simple count only looked at DOWN/STALE — missed WARN/PROXY entirely)
+  var penaltyResult = computeConfidencePenalty(report);
   report.confidenceImpact.affectedModules = affectedModules;
-  report.confidenceImpact.confidenceReduction = Math.round(affectedModules.length * 5 * 10) / 10;
-  report.confidenceImpact.recommendation = affectedModules.length > 0
-    ? affectedModules.join('、') + ' 数据异常，相关结论可信度降低'
-    : '所有数据源运行正常';
+  report.confidenceImpact.confidenceReduction = penaltyResult.penalty;
+  report.confidenceImpact.penaltyReasons = penaltyResult.reasons;
+  report.confidenceImpact.recommendation = penaltyResult.penalty > 0
+    ? penaltyResult.reasons.join('；') + ' → 信号置信度降-' + penaltyResult.penalty + '分'
+    : (uncertainSignals.length > 0 || lowConfModules.length > 0
+      ? '部分数据源非最优状态（' + uncertainSignals.concat(lowConfModules).join('、') + '），但尚未触发惩罚阈值'
+      : '所有数据源运行正常');
 
   report.unknownStatus.missingData = missingData;
   report.unknownStatus.uncertainSignals = uncertainSignals;
