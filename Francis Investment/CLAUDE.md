@@ -1,19 +1,8 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS 运行中（v3.0）。全自动采集、评分、模拟交易、盘后总结、美股→A股相关性追踪、历史复盘、市场周期识别、6维期望收益预测、动态权重学习、交易归因反馈、策略体检、风险预算、完整回测框架、数据质量监控。
+A股量化交易系统 v3.0.1 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
-## v3.0 升级 (2026-06-15) — 策略体检+风险预算+完整回测+数据质量+增强归因
-
-### v3.0.1 补丁 (2026-06-15) — 交易约束闭环修复
-
-| 修复 | 文件 | 问题 | 改动 |
-|------|------|------|------|
-| 总控判定严格化 | `strategy_health.js` | -6.3%回撤+0%胜率还判"谨慎开仓" | 4 组级联规则：零胜率→BLOCK，零盈亏比→BLOCK，回撤+连亏+低胜率叠加→升级，3+仓位+负收益→限制买入 |
-| 风险预算regime映射 | `simfolio.js` | `macroContext.riskRegime` 永远为 undefined | 改为 `macroContext.riskState.regime` |
-| 恐慌熔断 | `risk_budget.js` | panic 乘数 0 被 clamp 回升到 1% | panic 直接 return blocker，不再 clamp |
-| 数据质量惩罚 | `simfolio.js` + `data_quality.js` | 数据异常不降权 | 新增 `computeConfidencePenalty()`，DOWN/STALE/WARN 源数折算 0-10 分惩罚，接入评分管线 |
-| 回测接入真实因子 | `full_backtest.js` | `estimateSignalsForDate()` 空壳 | 接入 `hidden_signals.js` + `composite.js`，添加止损/止盈/仓位管理/交易成本模拟 |
-| 总控字段修复 | `buildGateResults()` | 数据质量不可见 | 新增 `dataQuality` 字段到 gateResults，前端可展示 |
+## v3.0.1 (2026-06-15) — 策略体检+风险预算+完整回测+数据质量+增强归因+交易约束闭环
 
 ### 新增模块
 | 模块 | 文件 | 功能 |
@@ -42,7 +31,15 @@ A股量化交易系统 + 报告引擎 + **24/7 自主学习进化引擎**。Node
 - **AI 状态标识**："策略运行中"（替换旧 "AI 就绪"）
 
 ### 修改文件
-`mosaic_server.js`, `simfolio.js`（风险预算集成+增强归因传入）, `config.js`（新增 RISK_BUDGET 配置块）, `evolution_scheduler.js`（新增 full_backtest 周日任务）, `app.js`, `index.html`, `style.css`
+`mosaic_server.js`, `simfolio.js`（风险预算集成+增强归因传入+数据质量惩罚）, `config.js`（新增 RISK_BUDGET 配置块）, `evolution_scheduler.js`（新增 full_backtest 周日任务）, `app.js`, `index.html`, `style.css`
+
+### v3.0.1 约束闭环补丁
+| 修复 | 原因 | 改动 |
+|------|------|------|
+| 总控判定严格化 | -6.3%回撤+0%胜率仍判"谨慎开仓" | 4 组级联规则：零胜率→BLOCK / 零盈亏比→BLOCK / 回撤+连亏+低胜率叠加升级 / 3+持仓+负收益限买 |
+| 风险预算regime映射 | `macroContext.riskRegime` 永远 undefined | 改为 `macroContext.riskState.regime`；panic 直接 blocker 不 clamp |
+| 数据质量→信号降权 | 数据异常不影响评分 | `computeConfidencePenalty()` 0-10分惩罚接入评分管线 + gateResults 暴露 |
+| 回测接入真实因子 | `estimateSignalsForDate()` 空壳 | 接入 hidden_signals+composite，加止损/止盈/仓位/交易成本模拟 |
 
 ---
 
@@ -74,7 +71,7 @@ A股量化交易系统 + 报告引擎 + **24/7 自主学习进化引擎**。Node
 - **分层仓位**：强买入 15-25% / 普通买入 8-12%
 - **风险预算模型（v3.0）**：波动率调整 → 相关性惩罚 → 流动性限制 → Kelly准则 → 风险状态乘数 → 熔断检查（回退到固定百分比仓位）
 - **回撤管理（3 档）**：warn(-5%) / restrict(-8%) / halt(-10%)
-- **多级风控门（6 门）**：回撤门 → 市场方向门 → 跨市场熔断 → 持仓浮亏门 → 思维舱防御门 → 归因避让板块
+- **多级风控门（6 门+数据质量惩罚）**：回撤门 → 市场方向门 → 跨市场熔断 → 数据质量惩罚(降权0-10分) → 持仓浮亏门 → 思维舱防御门 → 归因避让板块
 - 卖出：硬止损 -8% / 软止损 评分<35 / 移动止盈
 - T+1：当天买入的股票只有硬止损可卖出
 
@@ -378,5 +375,9 @@ Francis Investment/
 - **v2.9.1 北向绩效函数名**：正确函数名是 `factor_performance.getNBPerformance()`，不是 `getNBSentimentRecord`
 - **Loop 5 归因 `sectorAvoid` 触发条件**：v2.9.1 已扩展到所有亏损 >5% 的卖出（不限于硬止损），按亏损深度分层（>8%→5天，3-8%→3天）
 - **v3.0 风险预算集成**：`simfolio.js` 的 `checkBuySignal()` 中 `risk_budget.computeRiskBudgetPosition()` 用 try/catch 包裹，失败时回退到固定百分比仓位
+- **v3.0.1 总控判定级联**：`computeMasterControlJudgment()` 现在使用级联规则，零胜率/零盈亏比直接 BLOCK，不再按单维度独立取 max
+- **v3.0.1 regime 字段路径**：`getCachedRiskState()` 返回 `{regime, totalScore, ...}`，不是 `{riskRegime}`。读取时用 `riskState.regime`
+- **v3.0.1 数据质量惩罚**：`computeConfidencePenalty()` 在每次 pipeline 运行时读取磁盘文件检查数据源年龄，会产生少量 I/O。惩罚已接入 gateResults.dataQuality
+- **v3.0.1 回测真实因子限制**：`full_backtest.js` 模拟的 stock 对象缺少 PE/ROE/负债率字段，H4/H5/H6 基本面因子无法触发，仅 H1/H2/H3/H7/H8/H9 生效。完整验证需要历史财务数据
 - **策略体检 tradingDays < 20**：年化收益率/Sharpe/Sortino/Calmar 全部返回 null，前端显示 "数据不足"
 - **`.gitignore` 运行时数据**：新增运行时数据目录时务必同步更新 .gitignore
