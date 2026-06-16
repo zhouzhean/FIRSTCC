@@ -1,8 +1,13 @@
-A股量化交易系统 v3.2.1 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.2.2 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
 ## 核心理念
 
 全部服务端计算，零 Claude tokens 消耗。数据下载→清洗→因子回测→有效性矩阵→参数搜索→跨市场相关性→自动报告，全部 Node.js 本地跑。
+
+## v3.2.2 (2026-06-16) — 历史复盘/验证板块显示修复
+
+- `history-review.js` `_drawTrainingFactorChart()` 未闭合 `if` 块导致整个文件语法错误 → 两个板块都挂
+- 空数据时返回 placeholder 文字 + 正确闭合
 
 ## v3.2 (2026-06-16) — 智能投研系统升级
 
@@ -210,6 +215,7 @@ curl -s http://8.153.101.112:8765/api/verification/dashboard
 | regime 字段路径 | `riskState.regime`，不是 `riskState.riskRegime` |
 | **klines 目录冲突 [v3.2]** | `market_data.js`→`klines_short/`，`bootstrap_history.js`→`klines/`，不可混用 |
 | **training-matrix API [v3.2]** | 默认返回完整数据（含 factorCombos），`?full=0` 轻量模式 |
+| **前端 JS 语法错误 [v3.2.2]** | `history-review.js` 任何一个 function 有语法错误会导致整个文件加载失败，`node --check` 在部署前验证 |
 
 ### 绝不提交的运行时数据
 `portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`, `weekend_archive/*.json`, `margin_cache.json`, `dynamic_weights.json`, `stock_factor_performance.json`, `cycle_factor_matrix.json`, `sector_leadlag.json`, `trade_attribution.json`, `klines/*.json`, `klines_short/*.json`, `night_backtest_result.json`, `self_reflection_result.json`, `us_as_predictions.json`, `us_as_verification_history.json`, `factor_combinations.json`, `weight_grid_result.json`, `full_backtest_result*.json`, `data_quality_report.json`, `strategy_health_snapshot.json`, `*_snapshot.json`, `bootstrap_state.json`, `training_matrix.json`, `factor_effectiveness.json`, `param_search_results.json`, `cross_market_linkage.json`, `expected_return_verification.json`, `history_context.json`
