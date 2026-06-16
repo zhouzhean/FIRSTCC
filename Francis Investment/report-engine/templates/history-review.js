@@ -1217,6 +1217,13 @@ function _drawTrainingFactorChart(canvas) {
   // [v3.2] Read factor data from stored JS variable, not DOM table parsing
   var factors = window._hrTrainingFactors;
   if (!factors || factors.length === 0) {
+    // No data — draw placeholder text
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '12px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('训练因子数据加载中...', w / 2, h / 2);
+    return;
+  }
   // Chart layout
   var padding = { top: 20, right: 20, bottom: 50, left: 120 };
   var chartW = w - padding.left - padding.right;
