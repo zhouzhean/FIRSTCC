@@ -511,9 +511,9 @@ async function fetchIndicesSina() {
  * Falls back to Eastmoney if Tencent returns no data.
  */
 async function fetchKline(code, days = 30) {
-  // Check disk cache first
+  // Check disk cache first (v3.2: writes to klines_short/ — daily pipeline cache, separate from bootstrap long-history klines/)
   const __fs = require('fs'), __path = require('path');
-  const __cacheDir = __path.join(__dirname, '..', '..', 'report-engine', 'data', 'klines');
+  const __cacheDir = __path.join(__dirname, '..', '..', 'report-engine', 'data', 'klines_short');
   try {
     const cacheFile = __path.join(__cacheDir, code + '.json');
     if (__fs.existsSync(cacheFile)) {

@@ -12,6 +12,10 @@ module.exports = {
   REPORT_ENGINE_DIR,
   DATA_DIR,
 
+  // ---- K线数据目录 (v3.2 分离：短期缓存 vs 长期历史) ----
+  KLINES_SHORT_DIR: path.join(DATA_DIR, 'klines_short'),  // 日常 Pipeline 30 天缓存
+  KLINES_LONG_DIR: path.join(DATA_DIR, 'klines'),         // Bootstrap 3-5 年历史数据
+
   // ---- 筛选条件 ----
   FILTER: {
     maxPrice: 20.00,

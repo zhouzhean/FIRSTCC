@@ -116,6 +116,11 @@ function renderHistoryReviewDashboard(data) {
     html += _renderFactorGrid(data.factorPerformance);
   }
 
+  // Row 5.5: [v3.2] Deep Analysis Synthesis
+  if (data.deepAnalysis) {
+    html += _renderDeepAnalysis(data.deepAnalysis);
+  }
+
   // Row 6: Factor Combos + Discoveries
   html += _renderCombosAndDiscoveries(data);
 
@@ -356,6 +361,10 @@ function _renderSectorRotation(rotation) {
   var sectors = rotation.sectors || [];
   var phase = rotation.currentPhase || {};
 
+  // [v3.2] Store sector data for Canvas heatmap
+  window._hrSectorNames = sectors;
+  window._hrSectorMatrix = rotation.matrix || [];
+
   var html = '<div class="hr-section">';
   html += '<div class="hr-section-title">[DEEP] 板块轮动矩阵';
   if (phase.phase) {
@@ -418,6 +427,109 @@ function _renderFactorGrid(factors) {
   }
 
   html += '</div></div>';
+  return html;
+}
+
+// ============ Row 5.5: Deep Analysis Synthesis [v3.2] ============
+
+function _renderDeepAnalysis(da) {
+  var html = '<div class="hr-section" style="border-left:3px solid #8b5cf6;">';
+  html += '<div class="hr-section-title">' +
+    '<span style="color:#8b5cf6;">[DEEP]</span> 深度综合分析';
+  if (da.generatedAt) html += ' <span class="hr-subtle">' + da.generatedAt.slice(0, 10) + '</span>';
+  html += '</div>';
+
+  // Card grid: similarity stats across horizons
+  html += '<div class="hr-cards-4" style="margin-bottom:12px;">';
+
+  // Card 1: T+5 forward stats from similar periods
+  if (da.similarityStats) {
+    var ss = da.similarityStats;
+    var wrColor = ss.winRate >= 55 ? '#16a34a' : ss.winRate >= 45 ? '#f59e0b' : '#dc2626';
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">相似行情后 T+5 (共' + ss.count + '个)</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:22px;color:' + wrColor + ';">胜率 ' + ss.winRate + '%</div>';
+    html += '<div class="hr-mini-card-sub">均收益 ' + (ss.avgReturn >= 0 ? '+' : '') + ss.avgReturn +
+      '% · 中位数 ' + (ss.medianReturn >= 0 ? '+' : '') + ss.medianReturn + '%</div>';
+    html += '<div class="hr-mini-card-sub" style="margin-top:2px;">' +
+      '范围 [' + ss.minReturn + '% ~ +' + ss.maxReturn + '%] · 收益风险比 ' + ss.riskReward + '</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">相似行情 T+5</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:14px;color:#94a3b8;">等待深度分析</div>';
+    html += '</div>';
+  }
+
+  // Card 2: T+10 stats
+  if (da.fwd10dStats) {
+    var s10 = da.fwd10dStats;
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">相似行情后 T+10</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:18px;">胜率 ' + s10.winRate + '%</div>';
+    html += '<div class="hr-mini-card-sub">均收益 ' + (s10.avgReturn >= 0 ? '+' : '') + s10.avgReturn +
+      '% · RR ' + s10.riskReward + '</div>';
+    html += '</div>';
+  }
+
+  // Card 3: T+20 stats
+  if (da.fwd20dStats) {
+    var s20 = da.fwd20dStats;
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">相似行情后 T+20</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:18px;">胜率 ' + s20.winRate + '%</div>';
+    html += '<div class="hr-mini-card-sub">均收益 ' + (s20.avgReturn >= 0 ? '+' : '') + s20.avgReturn +
+      '% · RR ' + s20.riskReward + '</div>';
+    html += '</div>';
+  }
+
+  // Card 4: Crisis interpretation
+  if (da.crisisInterpretation) {
+    var ci = da.crisisInterpretation;
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">危机信号解读</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:16px;">' + ci.label + ' (' + ci.score + ')</div>';
+    html += '<div class="hr-mini-card-sub">' + ci.recommendation + '</div>';
+    html += '</div>';
+  } else if (da.factorHealth) {
+    var fh = da.factorHealth;
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">因子健康度</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:16px;">' +
+      '<span style="color:#16a34a;">HOT: ' + fh.hotCount + '</span> · ' +
+      '<span style="color:#dc2626;">COLD: ' + fh.coldCount + '</span></div>';
+    html += '<div class="hr-mini-card-sub">热: ' + (fh.hotNames.join(', ') || '无') + '</div>';
+    html += '<div class="hr-mini-card-sub">冷: ' + (fh.coldNames.join(', ') || '无') + '</div>';
+    html += '</div>';
+  }
+
+  html += '</div>'; // end cards
+
+  // Percentile distribution bar for T+5
+  if (da.similarityStats && da.similarityStats.percentiles) {
+    var p = da.similarityStats.percentiles;
+    html += '<div style="display:flex;align-items:center;gap:8px;font-size:10px;color:#64748b;">';
+    html += '<span>T+5 分布:</span>';
+    html += '<div style="flex:1;height:16px;background:#f1f5f9;border-radius:8px;position:relative;overflow:hidden;">';
+    // Red zone (negative)
+    html += '<div style="position:absolute;left:0;top:0;height:100%;width:25%;background:#fef2f2;"></div>';
+    // Green zone (positive)
+    html += '<div style="position:absolute;left:50%;top:0;height:100%;width:50%;background:#f0fdf4;"></div>';
+    // Percentile markers
+    html += '<div style="position:absolute;left:' + (50 + p.p10 / da.similarityStats.maxReturn * 50) +
+      '%;top:0;height:100%;width:1px;background:#dc2626;"></div>';
+    html += '<div style="position:absolute;left:' + (50 + p.p90 / da.similarityStats.maxReturn * 50) +
+      '%;top:0;height:100%;width:1px;background:#16a34a;"></div>';
+    html += '</div>';
+    html += '<span>P10=' + p.p10 + '%</span>';
+    html += '<span>P25=' + p.p25 + '%</span>';
+    html += '<span>中位数=' + da.similarityStats.medianReturn + '%</span>';
+    html += '<span>P75=' + p.p75 + '%</span>';
+    html += '<span>P90=' + p.p90 + '%</span>';
+    html += '</div>';
+  }
+
+  html += '</div>';
   return html;
 }
 
@@ -658,6 +770,9 @@ function _renderTrainingFactorGrid(factorEff) {
   html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">最大</th>';
   html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">最小</th>';
   html += '</tr></thead><tbody>';
+
+  // [v3.2] Store factor data for Canvas chart (avoid DOM parsing)
+  window._hrTrainingFactors = factors;
 
   for (var i = 0; i < factors.length; i++) {
     var f = factors[i];
@@ -955,12 +1070,58 @@ function _drawSectorHeatmap(canvas) {
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   ctx.scale(dpr, dpr);
-
   ctx.clearRect(0, 0, w, h);
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '11px -apple-system, "Microsoft YaHei", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('(板块轮动热力图 — 需要深度分析数据)', w / 2, h / 2);
+
+  // [v3.2] Use real sector rotation matrix data stored by _renderSectorRotation
+  var sectors = window._hrSectorNames || [];
+  var matrix = window._hrSectorMatrix || [];
+
+  if (sectors.length === 0 || matrix.length === 0) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '11px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(板块轮动热力图 -- 需要深度分析数据)', w / 2, h / 2);
+    return;
+  }
+
+  var pad = { top: 8, right: 12, bottom: 8, left: 72 };
+  var cols = matrix.length > 0 ? matrix[0].length : 1;
+  var cellW = (w - pad.left - pad.right) / Math.max(cols, 1);
+  var cellH = (h - pad.top - pad.bottom) / Math.max(sectors.length, 1);
+
+  for (var i = 0; i < sectors.length; i++) {
+    // Sector label
+    ctx.fillStyle = '#64748b';
+    ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(sectors[i], pad.left - 6, pad.top + i * cellH + cellH / 2 + 3);
+
+    var row = matrix[i] || [];
+    for (var j = 0; j < Math.min(row.length, cols); j++) {
+      var val = row[j];
+      var x = pad.left + j * cellW + 1;
+      var y = pad.top + i * cellH + 1;
+      var cw = cellW - 2;
+      var ch = cellH - 2;
+
+      // Color: negative=red, positive=green, intensity by abs(value)
+      var intensity = Math.min(Math.abs(val || 0) / 5, 1);
+      if ((val || 0) >= 0) {
+        ctx.fillStyle = 'rgba(22, 163, 74, ' + (0.2 + intensity * 0.7) + ')';
+      } else {
+        ctx.fillStyle = 'rgba(220, 38, 38, ' + (0.2 + intensity * 0.7) + ')';
+      }
+      ctx.fillRect(x, y, cw, ch);
+
+      // Show value in cell
+      if (cellW > 40) {
+        ctx.fillStyle = '#1e293b';
+        ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText((val || 0).toFixed(1) + '%', x + cw / 2, y + ch / 2 + 3);
+      }
+    }
+  }
 }
 
 function _drawSparkline(canvas) {
@@ -971,12 +1132,74 @@ function _drawSparkline(canvas) {
   canvas.width = w * dpr;
   canvas.height = h * dpr;
   ctx.scale(dpr, dpr);
-
   ctx.clearRect(0, 0, w, h);
+
+  // [v3.2] Use verification history data
+  var verifData = window._hrVerificationHistory;
+  if (!verifData || !verifData.history || verifData.history.length < 2) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(验证趋势 -- 等待数据积累)', w / 2, h / 2);
+    return;
+  }
+
+  var points = [];
+  for (var i = verifData.history.length - 1; i >= 0; i--) {
+    var entry = verifData.history[i];
+    var score = entry.overallScore;
+    if (score != null) points.unshift(score);
+  }
+
+  if (points.length < 2) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(验证趋势 -- 等待数据积累)', w / 2, h / 2);
+    return;
+  }
+
+  var pad = { top: 6, right: 6, bottom: 14, left: 6 };
+  var chartW = w - pad.left - pad.right;
+  var chartH = h - pad.top - pad.bottom;
+
+  var minScore = Math.min.apply(null, points);
+  var maxScore = Math.max.apply(null, points);
+  var range = maxScore - minScore || 1;
+
+  // Draw line
+  ctx.beginPath();
+  ctx.strokeStyle = '#6366f1';
+  ctx.lineWidth = 1.5;
+  ctx.lineJoin = 'round';
+  for (var p = 0; p < points.length; p++) {
+    var px = pad.left + (p / (points.length - 1)) * chartW;
+    var py = pad.top + chartH - ((points[p] - minScore) / range) * chartH;
+    if (p === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // Fill area
+  ctx.lineTo(w - pad.right, pad.top + chartH);
+  ctx.lineTo(pad.left, pad.top + chartH);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(99, 102, 241, 0.08)';
+  ctx.fill();
+
+  // Dot for latest
+  ctx.beginPath();
+  var lx = pad.left + chartW;
+  var ly = pad.top + chartH - ((points[points.length - 1] - minScore) / range) * chartH;
+  ctx.arc(lx, ly, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#6366f1';
+  ctx.fill();
+
+  // Labels
   ctx.fillStyle = '#94a3b8';
-  ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
-  ctx.textAlign = 'center';
-  ctx.fillText('(验证趋势 — 等待数据积累)', w / 2, h / 2);
+  ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('验证评分 ' + points[0] + ' → ' + points[points.length - 1], pad.left, pad.top + chartH + 12);
 }
 
 // [v3.1] Training: Factor hit rate bar chart
@@ -991,41 +1214,9 @@ function _drawTrainingFactorChart(canvas) {
 
   ctx.clearRect(0, 0, w, h);
 
-  // Extract data from table (the chart is drawn before table, so we parse the factorEffectiveness data)
-  // Instead, we read factor data from the table that was already rendered
-  var table = canvas.parentElement.parentElement.querySelector('table');
-  if (!table) {
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '12px -apple-system, "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('(等待因子数据)', w / 2, h / 2);
-    return;
-  }
-
-  var rows = table.querySelectorAll('tbody tr');
-  if (rows.length === 0) {
-    ctx.fillStyle = '#94a3b8';
-    ctx.font = '12px -apple-system, "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('(等待因子数据)', w / 2, h / 2);
-    return;
-  }
-
-  var factors = [];
-  for (var i = 0; i < rows.length; i++) {
-    var cells = rows[i].querySelectorAll('td');
-    if (cells.length >= 5) {
-      var name = cells[0].textContent.trim();
-      var hitRate = parseFloat(cells[3].textContent.trim());
-      var avgRet = parseFloat(cells[4].textContent.trim());
-      if (!isNaN(hitRate)) {
-        factors.push({ name: name, hitRate: hitRate, avgRet: avgRet });
-      }
-    }
-  }
-
-  if (factors.length === 0) return;
-
+  // [v3.2] Read factor data from stored JS variable, not DOM table parsing
+  var factors = window._hrTrainingFactors;
+  if (!factors || factors.length === 0) {
   // Chart layout
   var padding = { top: 20, right: 20, bottom: 50, left: 120 };
   var chartW = w - padding.left - padding.right;

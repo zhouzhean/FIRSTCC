@@ -511,6 +511,36 @@ function computeCompositeScore(stock, detail, klines, hiddenResult, marketDown, 
   }
   adjustedTotal = Math.max(0, Math.min(100, adjustedTotal + sectorBonus));
 
+  // === [v3.2] Regime-aware factor weighting ===
+  // Read factor_effectiveness.json from bootstrap training, detect current market regime,
+  // and boost/penalize triggered factors based on their historical performance in this regime.
+  let regimeBonus = 0;
+  let regimeBonusLabel = '';
+  try {
+    var currentRegime = detectCurrentRegime(ctx);
+    if (currentRegime && hiddenResult && hiddenResult.signals) {
+      var regimeEff = loadFactorEffectivenessByRegime(currentRegime);
+      if (regimeEff) {
+        for (var ri = 0; ri < hiddenResult.signals.length; ri++) {
+          var sig = hiddenResult.signals[ri];
+          var re = regimeEff[sig.id];
+          if (re) {
+            if (re.avgReturn > 2) {
+              regimeBonus += 3;
+              regimeBonusLabel = (regimeBonusLabel ? regimeBonusLabel + ',' : '') + sig.id + '+';
+            } else if (re.avgReturn < -1) {
+              regimeBonus -= 3;
+              regimeBonusLabel = (regimeBonusLabel ? regimeBonusLabel + ',' : '') + sig.id + '-';
+            }
+          }
+        }
+      }
+    }
+  } catch (_) { /* regime data not available */ }
+  if (regimeBonus !== 0) {
+    adjustedTotal = Math.max(0, Math.min(100, adjustedTotal + regimeBonus));
+  }
+
   // Rating (based on adjusted total)
   let rating;
   if (adjustedTotal >= 80) rating = 'S';
@@ -691,6 +721,47 @@ function getUSPredictionAccuracy() {
   } catch (_) { return null; }
 }
 
+// === [v3.2] Regime detection & regime-aware factor effectiveness ===
+
+/**
+ * Detect current market regime from pipeline context.
+ * Uses advance ratio, total turnover, and volatility to classify into
+ * bull / bear / high_vol / low_liquidity / sideways / other.
+ */
+function detectCurrentRegime(ctx) {
+  if (!ctx) return null;
+  // Check if market context is available (populated by pipeline)
+  var mc = ctx.marketContext || ctx;
+  if (mc.advanceRatio == null && mc.totalTurnover == null && mc.avgAbsChange == null) return null;
+  if (mc.advanceRatio > 0.55) return 'bull';
+  if (mc.advanceRatio < 0.3) return 'bear';
+  if (mc.totalTurnover != null && mc.totalTurnover < 500) return 'low_liquidity';
+  if (mc.avgAbsChange != null && mc.avgAbsChange > 2.5) return 'high_vol';
+  if (mc.avgAbsChange != null && mc.avgAbsChange < 0.5) return 'sideways';
+  return 'other';
+}
+
+/**
+ * Load factor effectiveness by market regime from bootstrap training output.
+ * Returns a lookup: factorId -> { hits, total, avgReturn } for the given regime.
+ */
+function loadFactorEffectivenessByRegime(regime) {
+  var effPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'factor_effectiveness.json');
+  if (!fs.existsSync(effPath)) return null;
+  try {
+    var eff = JSON.parse(fs.readFileSync(effPath, 'utf8'));
+    var t5 = eff.matrix && eff.matrix['T+5'];
+    if (!t5) return null;
+    var lookup = {};
+    Object.keys(t5).forEach(function(fid) {
+      if (t5[fid].byRegime && t5[fid].byRegime[regime] && !t5[fid].byRegime[regime]._insufficient) {
+        lookup[fid] = t5[fid].byRegime[regime];
+      }
+    });
+    return Object.keys(lookup).length > 0 ? lookup : null;
+  } catch (_) { return null; }
+}
+
 module.exports = {
   computeCompositeScore,
   starsFromScore,
@@ -702,4 +773,6 @@ module.exports = {
   loadCycleFactorPreferences,
   loadFalseSignalPatterns,
   getUSPredictionAccuracy,
+  detectCurrentRegime,
+  loadFactorEffectivenessByRegime,
 };

@@ -249,7 +249,120 @@ function getReport(mode) {
     marketProfile: _state.marketProfile,
     discoveries: _state.discoveries,
     tickHistory: _state.tickHistory,
+    deepAnalysis: _computeDeepAnalysis(),
   };
+}
+
+/**
+ * v3.2: Compute deep analysis synthesis — cross-sectional stats from similar periods,
+ * factor effectiveness trends, crisis interpretation, cross-market signals.
+ */
+function _computeDeepAnalysis() {
+  var analysis = {
+    generatedAt: new Date().toISOString(),
+    lastDeepRun: _state.lastDeep,
+  };
+
+  // 1. Similar period forward return statistics
+  if (_state.similarityResults && _state.similarityResults.length > 0) {
+    var sims = _state.similarityResults;
+
+    // Gather all forward return data points
+    var fwd5dReturns = [];
+    var fwd10dReturns = [];
+    var fwd20dReturns = [];
+    for (var si = 0; si < sims.length; si++) {
+      var s = sims[si];
+      if (s.future5d && s.future5d.total != null) fwd5dReturns.push({ val: s.future5d.total, sim: s.similarity });
+      if (s.future10d && s.future10d.total != null) fwd10dReturns.push({ val: s.future10d.total, sim: s.similarity });
+      if (s.future20d && s.future20d.total != null) fwd20dReturns.push({ val: s.future20d.total, sim: s.similarity });
+    }
+
+    if (fwd5dReturns.length > 0) {
+      fwd5dReturns.sort(function(a, b) { return a.val - b.val; });
+      var raw5d = fwd5dReturns.map(function(r) { return r.val; });
+      analysis.similarityStats = {
+        count: raw5d.length,
+        winRate: +(raw5d.filter(function(r) { return r > 0; }).length / raw5d.length * 100).toFixed(1),
+        avgReturn: +(raw5d.reduce(function(s, r) { return s + r; }, 0) / raw5d.length).toFixed(2),
+        medianReturn: +raw5d[Math.floor(raw5d.length / 2)].toFixed(2),
+        maxReturn: +raw5d[raw5d.length - 1].toFixed(2),
+        minReturn: +raw5d[0].toFixed(2),
+        riskReward: _computeRiskReward(raw5d),
+        percentiles: {
+          p10: +raw5d[Math.floor(raw5d.length * 0.1)].toFixed(2),
+          p25: +raw5d[Math.floor(raw5d.length * 0.25)].toFixed(2),
+          p75: +raw5d[Math.floor(raw5d.length * 0.75)].toFixed(2),
+          p90: +raw5d[Math.floor(raw5d.length * 0.9)].toFixed(2),
+        },
+        topMatch: fwd5dReturns.length > 0 ? {
+          similarity: +(fwd5dReturns[fwd5dReturns.length - 1].sim * 100).toFixed(1),
+          fwdReturn: +fwd5dReturns[fwd5dReturns.length - 1].val.toFixed(2),
+        } : null,
+      };
+    }
+
+    if (fwd10dReturns.length > 0) {
+      fwd10dReturns.sort(function(a, b) { return a.val - b.val; });
+      var raw10d = fwd10dReturns.map(function(r) { return r.val; });
+      analysis.fwd10dStats = {
+        count: raw10d.length,
+        winRate: +(raw10d.filter(function(r) { return r > 0; }).length / raw10d.length * 100).toFixed(1),
+        avgReturn: +(raw10d.reduce(function(s, r) { return s + r; }, 0) / raw10d.length).toFixed(2),
+        riskReward: _computeRiskReward(raw10d),
+      };
+    }
+
+    if (fwd20dReturns.length > 0) {
+      fwd20dReturns.sort(function(a, b) { return a.val - b.val; });
+      var raw20d = fwd20dReturns.map(function(r) { return r.val; });
+      analysis.fwd20dStats = {
+        count: raw20d.length,
+        winRate: +(raw20d.filter(function(r) { return r > 0; }).length / raw20d.length * 100).toFixed(1),
+        avgReturn: +(raw20d.reduce(function(s, r) { return s + r; }, 0) / raw20d.length).toFixed(2),
+        riskReward: _computeRiskReward(raw20d),
+      };
+    }
+  }
+
+  // 2. Crisis interpretation
+  if (_state.crisisWarning) {
+    var cw = _state.crisisWarning;
+    analysis.crisisInterpretation = {
+      score: cw.score,
+      level: cw.level,
+      label: cw.label,
+      recommendation: (cw.score >= 70) ? '防御优先：建议减仓至30%以下，只保留最强信号' :
+                     (cw.score >= 50) ? '谨慎操作：降低单笔仓位，提高买入阈值' :
+                     (cw.score >= 30) ? '中性偏谨慎：注意止损纪律' : '正常交易环境',
+    };
+  }
+
+  // 3. Factor health summary
+  if (_state.factorPerformance && _state.factorPerformance.length > 0) {
+    var hotFactors = _state.factorPerformance.filter(function(f) { return f.status === 'hot'; });
+    var coldFactors = _state.factorPerformance.filter(function(f) { return f.status === 'cold'; });
+    analysis.factorHealth = {
+      hotCount: hotFactors.length,
+      coldCount: coldFactors.length,
+      hotNames: hotFactors.map(function(f) { return f.name; }),
+      coldNames: coldFactors.map(function(f) { return f.name; }),
+    };
+  }
+
+  return analysis;
+}
+
+function _computeRiskReward(sortedReturns) {
+  var gains = sortedReturns.filter(function(r) { return r > 0; });
+  var losses = sortedReturns.filter(function(r) { return r < 0; });
+  var avgGain = gains.length > 0 ? gains.reduce(function(s, r) { return s + r; }, 0) / gains.length : 0;
+  var avgLoss = losses.length > 0 ? Math.abs(losses.reduce(function(s, r) { return s + r; }, 0) / losses.length) : 1;
+  return avgLoss > 0 ? +(avgGain / avgLoss).toFixed(2) : (avgGain > 0 ? 99 : 0);
+}
+
+function getDeepAnalysis() {
+  return { ok: true, ..._computeDeepAnalysis() };
 }
 
 function getPatterns() {
@@ -1628,5 +1741,6 @@ module.exports = {
   getReport,
   getPatterns,
   getVerification,
+  getDeepAnalysis,
   setSSEBroadcast,
 };

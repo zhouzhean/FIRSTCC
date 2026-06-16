@@ -220,6 +220,7 @@ var SECTIONS = [
   { id: 'predict',        label: '预测引擎',         icon: '', render: function(d,m) { renderPredictDashboard(); return ''; } },
   { id: 'crossMarket',     label: '跨市场分析',       icon: '', render: function(d,m) { renderCrossMarketDirect(); return ''; } },
   { id: 'historyReview',   label: '历史复盘',         icon: '', render: function(d,m) { renderHistoryReviewUnified(); return ''; } },
+  { id: 'verification',    label: '验证',              icon: '', render: function(d,m) { loadVerificationDashboard(); return ''; } },
   { id: 'knowledgeBase',   label: 'AI 知识库',        icon: '', render: function(d,m) { return renderKnowledgeBaseSection(d,m); } },
 ];
 
@@ -1439,6 +1440,11 @@ function loadHistoryReviewUnified() {
     if (paramSearch.ok || paramSearch.recommendation) {
       data.paramSearch = paramSearch;
     }
+    // [v3.2] Deep analysis is embedded in the full report response
+    // If report has deepAnalysis, pass it through
+    if (report.deepAnalysis) {
+      data.deepAnalysis = report.deepAnalysis;
+    }
 
     if (!data.ok && !patterns.ok && !(trainingMatrix.ok || trainingMatrix.summary)) {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
@@ -1451,6 +1457,10 @@ function loadHistoryReviewUnified() {
     }
 
     if (typeof renderHistoryReviewDashboard === 'function') {
+      // [v3.2] Store verification data for sparkline Canvas
+      if (data.verificationHistory) {
+        window._hrVerificationHistory = data.verificationHistory;
+      }
       var html = renderHistoryReviewDashboard(data);
       container.innerHTML = html;
       // Draw canvases after DOM update
@@ -1467,6 +1477,43 @@ function loadHistoryReviewUnified() {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">模板未加载 — 请刷新页面</div>';
     }
   });
+}
+
+// ============ [v3.2] Verification Dashboard ============
+
+function loadVerificationDashboard() {
+  var container = document.getElementById('history-review-unified');
+  if (!container) return;
+
+  fetch('/api/verification/dashboard')
+    .then(function(r) { return r.json(); })
+    .catch(function() { return null; })
+    .then(function(data) {
+      if (!data || !data.ok) {
+        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+          '<div style="font-size:48px;margin-bottom:16px;">--</div>' +
+          '<div style="font-size:15px;">验证仪表板数据暂不可用</div>' +
+          '<div style="font-size:12px;margin-top:8px;">需要积累足够的交易和预测数据后才能显示验证统计</div>' +
+          '</div>';
+        return;
+      }
+
+      if (typeof renderVerificationDashboard === 'function') {
+        var html = renderVerificationDashboard(data);
+        container.innerHTML = html;
+
+        // Inject CSS
+        var styleId = 'hr-verif-css';
+        if (!document.getElementById(styleId)) {
+          var style = document.createElement('style');
+          style.id = styleId;
+          style.textContent = renderHistoryReviewCSS();
+          document.head.appendChild(style);
+        }
+      } else {
+        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">验证仪表板模板未加载 — 请刷新页面</div>';
+      }
+    });
 }
 
 // ============ Placeholder Helper ============
@@ -2466,6 +2513,10 @@ function renderCurrentSection() {
   }
   if (sectionId === 'historyReview') {
     renderHistoryReviewUnified();
+    return;
+  }
+  if (sectionId === 'verification') {
+    loadVerificationDashboard();
     return;
   }
 

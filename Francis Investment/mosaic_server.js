@@ -1475,6 +1475,26 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
+  // [v3.2] Deep analysis synthesis — cross-sectional stats from similar periods
+  if (pathname === '/api/history/deep-analysis') {
+    try {
+      const historyReview = require('./mosaic/analysis/history_review');
+      return jsonResponse(res, historyReview.getDeepAnalysis());
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // [v3.2] Post-game verification dashboard
+  if (pathname === '/api/verification/dashboard') {
+    try {
+      const verificationDashboard = require('./mosaic/analysis/verification_dashboard');
+      return jsonResponse(res, { ok: true, ...verificationDashboard.getDashboard() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // ===== 周末深度分析 API (DEPRECATED v2.9 — 透传到 history engine) =====
   if (pathname === '/api/weekend-analysis/status') {
     try {
@@ -1719,7 +1739,21 @@ const server = http.createServer(async function(req, res) {
       var matrixFile = path.join(DATA_DIR, 'evolution', 'training_matrix.json');
       if (fs.existsSync(matrixFile)) {
         var matrix = JSON.parse(fs.readFileSync(matrixFile, 'utf8'));
-        // Return only summary + factor rankings (omit raw data to keep response small)
+        // v3.2: return full data by default, ?full=0 for lightweight mode
+        var fullMode = url.searchParams.get('full') !== '0';
+        if (fullMode) {
+          return jsonResponse(res, {
+            ok: true,
+            summary: matrix.summary,
+            config: matrix.config,
+            duration: matrix.duration,
+            generatedAt: matrix.generatedAt,
+            factorMatrix: matrix.factorMatrix || null,
+            factorCombos: matrix.factorCombos || null,
+            crossMarket: matrix.crossMarket || null,
+            paramSearch: matrix.paramSearch || null,
+          });
+        }
         return jsonResponse(res, {
           ok: true,
           summary: matrix.summary,

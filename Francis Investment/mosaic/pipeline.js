@@ -141,6 +141,29 @@ class Pipeline extends EventEmitter {
       const indices = await marketData.fetchIndices();
       const marketDown = indices.length > 0 && (indices[0].changePercent || 0) < -0.3;
 
+      // [v3.2] Build market context for regime detection (advance ratio, turnover, volatility)
+      const marketContext = { advanceRatio: null, totalTurnover: null, avgAbsChange: null };
+      try {
+        var advanceCount = 0, totalCount = 0;
+        var absChanges = [];
+        var sumTurnover = 0, turnoverCount = 0;
+        for (var mi = 0; mi < indices.length; mi++) {
+          var idx = indices[mi];
+          if (idx.changePercent != null) {
+            if (idx.changePercent > 0) advanceCount++;
+            totalCount++;
+            absChanges.push(Math.abs(idx.changePercent));
+          }
+          if (idx.turnover != null) { sumTurnover += idx.turnover; turnoverCount++; }
+        }
+        if (totalCount > 0) marketContext.advanceRatio = advanceCount / totalCount;
+        if (absChanges.length > 0) {
+          absChanges.sort(function(a,b) { return a - b; });
+          marketContext.avgAbsChange = absChanges.reduce(function(s,v) { return s+v; }, 0) / absChanges.length;
+        }
+        if (turnoverCount > 0) marketContext.totalTurnover = sumTurnover / turnoverCount;
+      } catch (_) { /* market context optional */ }
+
       // === Step 3b: Fetch enrichment data (LHB, sector flow, north-bound) ===
       this._setProgress(47, '正在获取龙虎榜+板块资金流+北向资金+两融数据...');
       const marginData = require('./collectors/margin_data');
@@ -256,6 +279,7 @@ class Pipeline extends EventEmitter {
           northBoundSentiment: nbSentiment,
           marginSentiment: marginSentiment,  // 两融情绪
           stockFlowHistory: stockFlowHistory, // 个股资金流历史（连续流入天数）
+          marketContext: marketContext,        // [v3.2] 市场状态上下文（regime检测用）
         };
 
         // Compute composite score with full context

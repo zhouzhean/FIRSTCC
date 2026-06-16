@@ -64,10 +64,39 @@ function computeExpectedReturn(stock, context) {
   const totalDims = Object.keys(breakdown).length;
   const confidence = Math.min(1.0, contributedDims / totalDims);
 
+  // [v3.2] Calibrate probabilities from factor effectiveness data
+  var probability = null;
+  var confidenceInterval = null;
+  try {
+    var calib = calibrateProbabilities(expectedReturn, stock.hiddenSignals || []);
+    if (calib) {
+      probability = calib.probability;
+      confidenceInterval = calib.confidenceInterval;
+    }
+  } catch (_) { /* calibration not available */ }
+
+  // [v3.2] Compute suggested position size (Kelly-inspired)
+  var suggestedPositionSize = null;
+  if (probability && probability.up != null) {
+    suggestedPositionSize = computeSuggestedPositionSize(probability, expectedReturn);
+  }
+
+  // [v3.2] Compute failure conditions
+  var failureConditions = [];
+  if (stock.peTTM && stock.peTTM > 100) failureConditions.push('PE极端高估(>100)');
+  if (stock.changePercent && Math.abs(stock.changePercent) > 9.5) failureConditions.push('接近涨跌停');
+  if (stock.turnoverRate != null && stock.turnoverRate < 0.1) failureConditions.push('流动性枯竭');
+  if (!stock.peTTM || stock.peTTM < 0) failureConditions.push('PE为负(亏损)');
+
   return {
     expectedReturn: +expectedReturn.toFixed(2),
     breakdown: breakdown,
     confidence: +confidence.toFixed(2),
+    // [v3.2] Probabilistic outputs
+    probability: probability,
+    confidenceInterval: confidenceInterval,
+    suggestedPositionSize: suggestedPositionSize,
+    failureConditions: failureConditions,
     label: expectedReturn > 3 ? '强看多' : expectedReturn > 1 ? '看多' : expectedReturn > 0 ? '微看多' : expectedReturn > -1 ? '中性偏空' : expectedReturn > -3 ? '看空' : '强看空',
   };
 }
@@ -476,9 +505,81 @@ function verifyExpectedReturns(dateStr) {
   }
 }
 
+// ====== [v3.2] Probability Calibration Functions ======
+
+/**
+ * Calibrate probability estimates from factor effectiveness data.
+ * Uses historical hit rates and return distributions to estimate
+ * P(up), P(flat), P(down) for the expected return.
+ */
+function calibrateProbabilities(expectedReturn, signals) {
+  var effPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'factor_effectiveness.json');
+  if (!fs.existsSync(effPath)) return null;
+
+  try {
+    var eff = JSON.parse(fs.readFileSync(effPath, 'utf8'));
+    var t5 = eff.matrix && eff.matrix['T+5'];
+    if (!t5) return null;
+
+    // Gather historical hit rates for triggered signals
+    var totalHitRate = 0, totalSamples = 0, count = 0;
+    for (var i = 0; i < signals.length; i++) {
+      var sig = signals[i];
+      var fe = t5[sig.id];
+      if (fe && fe.hitRate != null && !fe._insufficient) {
+        totalHitRate += fe.hitRate;
+        totalSamples += fe.total || 0;
+        count++;
+      }
+    }
+
+    if (count === 0) return null;
+    var avgHitRate = totalHitRate / count;
+
+    // Map to calibrated probability
+    // P(up) ≈ avgHitRate / 100 (already in %)
+    // P(down) ≈ 1 - P(up) - P(flat)
+    var pUp = Math.min(0.95, Math.max(0.05, avgHitRate / 100));
+    var pFlat = 0.15; // approx flat probability
+    var pDown = 1 - pUp - pFlat;
+
+    // Confidence interval: approx ±2 * SE
+    // SE ≈ sqrt(p*(1-p)/n), where n = avg samples per factor
+    var avgSamples = count > 0 ? totalSamples / count : 100;
+    var se = Math.sqrt(pUp * (1 - pUp) / Math.max(avgSamples, 10));
+    var ciLow = +Math.max(0, expectedReturn - 2 * se * 100).toFixed(2);
+    var ciHigh = +Math.min(100, expectedReturn + 2 * se * 100).toFixed(2);
+
+    return {
+      probability: {
+        up: +pUp.toFixed(2),
+        flat: +pFlat.toFixed(2),
+        down: +pDown.toFixed(2),
+      },
+      confidenceInterval: { lower: ciLow, upper: ciHigh, level: 0.68 },
+      calibratedFrom: count + '个因子 · 均样本' + Math.round(avgSamples),
+    };
+  } catch (_) { return null; }
+}
+
+/**
+ * Kelly-inspired position sizing: f = edge / odds
+ * edge = P(up) * avgUpPct - P(down) * abs(avgDownPct)
+ */
+function computeSuggestedPositionSize(probability, expectedReturn) {
+  if (!probability) return null;
+  var edge = (probability.up || 0) * 0.05 - (probability.down || 0) * 0.03;
+  if (edge <= 0) return 0;
+  var kelly = edge / 0.05;
+  // Half-Kelly for safety, capped at 30% max single position
+  return +Math.min(kelly * 0.5, 0.30).toFixed(2);
+}
+
 module.exports = {
   computeExpectedReturn,
   rankByExpectedReturn,
   verifyExpectedReturns,
+  calibrateProbabilities,
+  computeSuggestedPositionSize,
   DEFAULT_WEIGHTS,
 };
