@@ -886,12 +886,280 @@ function runParameterSearch(dailyResults, klineCache) {
 
 /**
  * Incremental update: process only last N days, merge with existing matrix.
+ * Uses EMA weighting to blend new results with historical data.
+ * Returns the merged training matrix.
  */
 function incrementalUpdate(days) {
-  // Similar to full run but only for recent days
-  // Merge results by adjusting hit rates with EMA weighting
+  days = days || 20;
   console.log('[Incremental] 增量更新最近 ' + days + ' 天...');
-  // Implementation would reuse the same pipeline with a date filter
+
+  // Load existing matrix (the "base" to merge into)
+  var existingMatrix = null;
+  try {
+    if (fs.existsSync(TRAINING_MATRIX_FILE)) {
+      existingMatrix = JSON.parse(fs.readFileSync(TRAINING_MATRIX_FILE, 'utf8'));
+      console.log('[Incremental] 已加载现有矩阵 (generated: ' + existingMatrix.generatedAt + ')');
+    }
+  } catch (e) {
+    console.log('[Incremental] 无法加载现有矩阵，将生成全新矩阵');
+  }
+
+  // Load existing factor effectiveness
+  var existingFactors = null;
+  try {
+    if (fs.existsSync(FACTOR_EFFECTIVENESS_FILE)) {
+      existingFactors = JSON.parse(fs.readFileSync(FACTOR_EFFECTIVENESS_FILE, 'utf8'));
+    }
+  } catch (e) { /* will compute fresh */ }
+
+  // ===== Phase 1: Download recent klines for cached stocks =====
+  console.log('[Incremental] Phase 1: 更新最近K线...');
+  var klineFiles;
+  try {
+    klineFiles = fs.readdirSync(KLINES_DIR).filter(function(f) { return f.endsWith('.json'); });
+  } catch (e) { klineFiles = []; }
+  console.log('[Incremental] K线缓存: ' + klineFiles.length + ' 文件');
+
+  var downloaded = 0, failed = 0;
+  var downloadPromises = klineFiles.map(function(file) {
+    var code = file.replace('.json', '');
+    if (!/^\d{6}$/.test(code)) return Promise.resolve();
+    return fetchHistoricalKlines(code, 640).then(function(klines) {
+      var cleaned = cleanKlines(klines);
+      if (cleaned.length > 0) {
+        writeJSON(path.join(KLINES_DIR, file), { ts: Date.now(), klines: cleaned, code: code });
+        downloaded++;
+      } else { failed++; }
+    }).catch(function() { failed++; });
+  });
+
+  return Promise.all(downloadPromises).then(function() {
+    console.log('[Incremental] K线更新: ' + downloaded + ' 成功, ' + failed + ' 失败');
+
+    // ===== Phase 2: Replay only recent days =====
+    console.log('[Incremental] Phase 2: 回放最近 ' + days + ' 天...');
+    var tradingDays = generateTradingDays(START_YEAR, END_YEAR);
+    var recentDays = tradingDays.slice(-days);
+
+    // Build kline index for recent days only
+    var dailyResults = [];
+    var totalStockDays = 0;
+
+    for (var d = 0; d < recentDays.length; d++) {
+      var date = recentDays[d];
+      var klineSnapshot = [];
+
+      for (var f = 0; f < klineFiles.length; f++) {
+        var code = klineFiles[f].replace('.json', '');
+        if (!/^\d{6}$/.test(code)) continue;
+
+        try {
+          var klineData = JSON.parse(fs.readFileSync(path.join(KLINES_DIR, code + '.json'), 'utf8'));
+          if (!klineData || !klineData.klines) continue;
+
+          var klines = klineData.klines;
+          var dateIdx = -1;
+          for (var ki = 0; ki < klines.length; ki++) {
+            if (klines[ki].date === date) { dateIdx = ki; break; }
+          }
+          if (dateIdx < MIN_KLINES_FOR_FACTOR) continue;
+
+          var todayKline = klines[dateIdx];
+          var prevKline = dateIdx >= 1 ? klines[dateIdx - 1] : null;
+          var changePercent = prevKline ? ((todayKline.close - prevKline.close) / prevKline.close * 100) : 0;
+
+          var fwdReturns = {};
+          FORWARD_HORIZONS.forEach(function(h) {
+            var fwdIdx = dateIdx + h;
+            if (fwdIdx < klines.length) {
+              fwdReturns[h] = (klines[fwdIdx].close - todayKline.close) / todayKline.close * 100;
+            } else { fwdReturns[h] = null; }
+          });
+
+          klineSnapshot.push({
+            code: code, close: todayKline.close, open: todayKline.open,
+            high: todayKline.high, low: todayKline.low, volume: todayKline.volume,
+            turnover: todayKline.turnover || 0,
+            changePercent: Math.round(changePercent * 100) / 100,
+            pe: null, klines: klines.slice(0, dateIdx + 1), fwdReturns: fwdReturns,
+          });
+        } catch (e) { /* skip */ }
+      }
+
+      if (klineSnapshot.length < 10) continue;
+
+      // Load factor engines
+      var computeHiddenSignals, computeCompositeScore;
+      try { computeHiddenSignals = require('../factors/hidden_signals').computeHiddenSignals; } catch (e) {}
+      try {
+        computeCompositeScore = require('../factors/composite').computeCompositeScore ||
+                                require('../factors/composite').computeScore;
+      } catch (e) {}
+
+      var dayResult = replayDay(date, klineSnapshot, {
+        computeHiddenSignals: computeHiddenSignals,
+        computeCompositeScore: computeCompositeScore,
+      });
+
+      dayResult.stocks.forEach(function(s) {
+        for (var ki = 0; ki < klineSnapshot.length; ki++) {
+          if (klineSnapshot[ki].code === s.code) { s.fwdReturns = klineSnapshot[ki].fwdReturns; break; }
+        }
+      });
+      dayResult.marketRegimes = classifyRegime(date, dayResult.marketContext, null);
+      dailyResults.push(dayResult);
+      totalStockDays += klineSnapshot.length;
+    }
+
+    console.log('[Incremental] 回放完成: ' + dailyResults.length + ' 天, ' + totalStockDays + ' stock-days');
+
+    if (dailyResults.length === 0) {
+      console.log('[Incremental] 无新数据，跳过合并');
+      return existingMatrix;
+    }
+
+    // ===== Phase 3: Compute incremental factor effectiveness =====
+    console.log('[Incremental] Phase 3: 计算增量因子矩阵...');
+    var newFactorMatrix = {};
+    FORWARD_HORIZONS.forEach(function(h) {
+      newFactorMatrix['T+' + h] = computeFactorEffectiveness(dailyResults, h);
+    });
+
+    // ===== Merge with existing matrix using EMA =====
+    // EMA alpha: new data weight. With ~20 incremental days vs ~500 base days,
+    // alpha=0.15 gives a gentle update while allowing trends to shift over weeks.
+    var EMA_ALPHA = 0.15;
+
+    var mergedMatrix = {};
+    FORWARD_HORIZONS.forEach(function(h) {
+      var hKey = 'T+' + h;
+      mergedMatrix[hKey] = {};
+
+      var newFactors = newFactorMatrix[hKey] || {};
+      var oldFactors = (existingFactors && existingFactors.matrix && existingFactors.matrix[hKey]) ? existingFactors.matrix[hKey] : {};
+
+      // Collect all factor IDs from both old and new
+      var allFactorIds = {};
+      Object.keys(oldFactors).forEach(function(k) { allFactorIds[k] = true; });
+      Object.keys(newFactors).forEach(function(k) { allFactorIds[k] = true; });
+
+      Object.keys(allFactorIds).forEach(function(fid) {
+        var oldF = oldFactors[fid];
+        var newF = newFactors[fid];
+
+        if (!oldF || oldF._insufficient || oldF.total < 10) {
+          // No reliable old data — use new directly
+          mergedMatrix[hKey][fid] = newF || oldF;
+        } else if (!newF || newF._insufficient || newF.total < 5) {
+          // No meaningful new data — keep old
+          mergedMatrix[hKey][fid] = oldF;
+        } else {
+          // EMA blend
+          mergedMatrix[hKey][fid] = {
+            name: newF.name || oldF.name,
+            category: newF.category || oldF.category,
+            hitRate: Math.round((oldF.hitRate * (1 - EMA_ALPHA) + newF.hitRate * EMA_ALPHA) * 100) / 100,
+            avgFwdReturn: Math.round((oldF.avgFwdReturn * (1 - EMA_ALPHA) + newF.avgFwdReturn * EMA_ALPHA) * 100) / 100,
+            maxDrawdown: Math.round(Math.max(oldF.maxDrawdown || 0, newF.maxDrawdown || 0) * 100) / 100,
+            profitFactor: Math.round((oldF.profitFactor * (1 - EMA_ALPHA) + newF.profitFactor * EMA_ALPHA) * 100) / 100,
+            total: oldF.total + newF.total,
+            wins: (oldF.wins || 0) + (newF.wins || 0),
+            losses: (oldF.losses || 0) + (newF.losses || 0),
+            _merged: true,
+            _oldSamples: oldF.total,
+            _newSamples: newF.total,
+          };
+        }
+      });
+    });
+
+    // ===== Phase 4: Incremental combo mining (on new data only) =====
+    console.log('[Incremental] Phase 4: 增量组合挖掘...');
+    var newComboResults = {};
+    FORWARD_HORIZONS.forEach(function(h) {
+      newComboResults['T+' + h] = mineFactorCombinations(dailyResults, h);
+    });
+
+    // Merge combos: keep top synergy pairs from both
+    var mergedCombos = {};
+    FORWARD_HORIZONS.forEach(function(h) {
+      var hKey = 'T+' + h;
+      var oldC = (existingMatrix && existingMatrix.factorCombos && existingMatrix.factorCombos[hKey])
+        ? existingMatrix.factorCombos[hKey] : { synergyPairs: [], conflictPairs: [] };
+      var newC = newComboResults[hKey] || { synergyPairs: [], conflictPairs: [] };
+
+      mergedCombos[hKey] = {
+        synergyPairs: dedupeAndMergePairs(oldC.synergyPairs || [], newC.synergyPairs || []),
+        conflictPairs: dedupeAndMergePairs(oldC.conflictPairs || [], newC.conflictPairs || []),
+      };
+    });
+
+    // ===== Write merged outputs =====
+    var mergedFactorsOutput = {
+      computedAt: new Date().toISOString(),
+      sampleDays: ((existingFactors && existingFactors.sampleDays) || 0) + dailyResults.length,
+      sampleStocks: klineFiles.length,
+      horizons: FORWARD_HORIZONS,
+      matrix: mergedMatrix,
+      _incremental: true,
+      _newDays: dailyResults.length,
+    };
+    writeJSON(FACTOR_EFFECTIVENESS_FILE, mergedFactorsOutput);
+    console.log('[Incremental] 合并因子矩阵已保存 → ' + FACTOR_EFFECTIVENESS_FILE);
+
+    // Build merged training matrix
+    var mergedTraining = {
+      version: 'v1.1-incremental',
+      generatedAt: new Date().toISOString(),
+      config: {
+        universe: (existingMatrix && existingMatrix.config && existingMatrix.config.universe) || 'hs300',
+        startYear: START_YEAR, endYear: END_YEAR,
+        sampleDays: ((existingMatrix && existingMatrix.config && existingMatrix.config.sampleDays) || 0) + dailyResults.length,
+        sampleStocks: klineFiles.length,
+        horizons: FORWARD_HORIZONS,
+      },
+      summary: buildSummary(dailyResults, mergedMatrix, mergedCombos, (existingMatrix && existingMatrix.paramSearch) || {}),
+      factorMatrix: mergedMatrix,
+      factorCombos: mergedCombos,
+      crossMarket: (existingMatrix && existingMatrix.crossMarket) || { available: false },
+      paramSearch: (existingMatrix && existingMatrix.paramSearch) || {},
+      _incremental: true,
+      _newDays: dailyResults.length,
+    };
+    writeJSON(TRAINING_MATRIX_FILE, mergedTraining);
+    console.log('[Incremental] 合并训练矩阵已保存 → ' + TRAINING_MATRIX_FILE);
+
+    // Update state
+    var state = loadState();
+    state.lastIncrementalRun = new Date().toISOString();
+    state.totalAccumulatedDays = mergedTraining.config.sampleDays;
+    saveState(state);
+
+    console.log('[Incremental] 增量更新完成 — 累计样本天数: ' + mergedTraining.config.sampleDays);
+    return mergedTraining;
+  });
+}
+
+/**
+ * Deduplicate and merge factor pair lists, keeping the best entries.
+ */
+function dedupeAndMergePairs(oldPairs, newPairs) {
+  var map = {};
+  oldPairs.forEach(function(p) {
+    var key = p.factors ? p.factors.sort().join('+') : (p.pair || 'unknown');
+    map[key] = p;
+  });
+  newPairs.forEach(function(p) {
+    var key = p.factors ? p.factors.sort().join('+') : (p.pair || 'unknown');
+    if (map[key]) {
+      // EMA blend the effect size
+      map[key].effect = Math.round((map[key].effect * 0.7 + p.effect * 0.3) * 100) / 100;
+      map[key].bothCount = (map[key].bothCount || 0) + (p.bothCount || 0);
+    } else {
+      map[key] = p;
+    }
+  });
+  return Object.values(map).sort(function(a, b) { return (b.effect || 0) - (a.effect || 0); });
 }
 
 // ====== Auto Report Generator ======

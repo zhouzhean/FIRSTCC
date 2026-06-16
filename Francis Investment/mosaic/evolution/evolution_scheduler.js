@@ -84,10 +84,22 @@ function checkAndRun(now, dateStr) {
   }
 
   // --- [v3.1]: Bootstrap History Training (Sunday 01:00-01:45, before night_backtest) ---
+  // First run = full, subsequent = incremental (EMA merge into existing matrix)
   if (day === 0 && h === 1 && m >= 0 && m < 45) {
     tryRunTask('bootstrap_history', dateStr, function() {
       var bh = require('./bootstrap_history');
-      return bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
+      var fs = require('fs');
+      var path = require('path');
+      var trainingFile = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'training_matrix.json');
+      var hasExisting = false;
+      try { hasExisting = fs.existsSync(trainingFile); } catch (e) {}
+      if (hasExisting) {
+        console.log('[EvolutionScheduler] bootstrap: 增量模式 (已有训练矩阵)');
+        return bh.incrementalUpdate(20);
+      } else {
+        console.log('[EvolutionScheduler] bootstrap: 首次全量模式');
+        return bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
+      }
     });
   }
 
