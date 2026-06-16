@@ -33,17 +33,22 @@ AI 只在：解释、改策略、审查异常、总结报告时介入。
 
 ### 使用
 ```bash
-# 全量训练（沪深300，5年）
+# 全量训练（沪深300，5年，首次约2-3小时）
 node mosaic/evolution/bootstrap_history.js
 
-# 仅增量更新（最近20天）
+# 仅增量更新（最近20天，几秒完成）
 node mosaic/evolution/bootstrap_history.js --incremental
 
-# 仅使用现有K线缓存（跳过下载）
+# 仅使用现有K线缓存（跳过下载，约1.2h）
 node mosaic/evolution/bootstrap_history.js --skipDownload
 
-# 全A股（慎用，约1周）
+# 全A股（慎用，约3-4天）
 node mosaic/evolution/bootstrap_history.js --universe all
+
+# 云端触发
+curl -X POST http://8.153.101.112:8765/api/evolution/run-bootstrap
+# 或直接 ssh 后台运行：
+ssh root@8.153.101.112 "cd '/root/FIRSTCC/Francis Investment' && nohup node mosaic/evolution/bootstrap_history.js >> bootstrap_train.log 2>&1 &"
 ```
 
 ### 关键设计决策
@@ -52,6 +57,8 @@ node mosaic/evolution/bootstrap_history.js --universe all
 - **因子引擎复用**：调用 `hidden_signals.js` 和 `composite.js` 的 REAL 计算函数，不是简化近似。
 - **前向收益计算**：当日 close → T+N 日 close，无未来数据泄漏。
 - **Token 消耗**：脚本运行时完全不消耗 tokens。仅当 AI 读取输出 JSON 时才消耗 (~15K tokens)。
+- **K线数据源**：腾讯 ifzq API（`web.ifzq.gtimg.cn`），前复权日线，单次最多 ~640 条。Eastmoney push2his 在阿里云 ECS 被墙不可用。
+- **运行耗时**：沪深300 首次全量 ~2-3h（Phase1 下载 ~5min + Phase2 回放 ~1.5-2h）；之后 `--incremental` 仅几秒。全A ~3-4 天。
 
 ## v3.0.4 (2026-06-16) — 策略体检板块 UI/响应式/数据修复 + 云端版本同步
 

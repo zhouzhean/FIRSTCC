@@ -5,7 +5,7 @@
  * 调度：首次手动运行，之后 evolution_scheduler 自动触发增量更新。
  *
  * 完整训练链路：
- *   Phase 1 — 历史K线拉取+清洗（复权/停牌/涨跌停/异常值检测）
+ *   Phase 1 — 历史K线拉取+清洗（腾讯API/前复权/停牌/涨跌停/异常值检测）
  *   Phase 2 — 每日回放：用真实因子引擎计算每个历史交易日的因子触发 + 复合评分
  *   Phase 3 — 因子有效性矩阵：胜率/平均收益/最大回撤/盈亏比，按市场状态分组
  *   Phase 4 — 因子组合挖掘：协同对(1+1>2) / 冲突对(1+1<1) / 衰减曲线
@@ -177,54 +177,67 @@ function generateTradingDays(startYear, endYear) {
 }
 
 /**
- * Fetch historical klines for a single stock via Eastmoney API.
- * Uses the same API as market_data.js fetchKline but with larger lookback.
+ * Fetch historical klines for a single stock via Tencent API.
+ * Tencent API is accessible from Alibaba Cloud ECS (Eastmoney push2his is blocked).
+ *
+ * Tencent returns up to ~640 trading days per call (~2.5 calendar years).
+ * We request from 2020-01-01 to get maximum available history (pre-reconciled prices).
+ *
+ * API format: https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=<market><code>,day,2020-01-01,,640,qfq
+ * Response: { data: { <code>: { qfqday: [[date,open,close,high,low,volume], ...] } } }
  */
 function fetchHistoricalKlines(code, maxDays) {
-  var market = code.startsWith('6') ? '1' : '0';
-  var secid = market + '.' + code;
+  var market = code.startsWith('6') ? 'sh' : 'sz';
+  var symbol = market + code;
   var https = require('https');
+  var limit = Math.min(maxDays || 640, 640);
 
-  return new Promise(function(resolve, reject) {
-    var url = 'https://push2his.eastmoney.com/api/qt/stock/kline/get' +
-      '?secid=' + secid +
-      '&klt=101&fqt=1&end=20500101&lmt=' + (maxDays || 1500) +
-      '&ut=bd1d9ddb04089700cf9c27f6f7426281' +
-      '&fields=f2,f3,f4,f5,f6,f15,f16,f17,f18';
+  return new Promise(function(resolve) {
+    var url = 'https://web.ifzq.gtimg.cn/appstock/app/fqkline/get' +
+      '?param=' + symbol + ',day,2020-01-01,,' + limit + ',qfq';
 
-    https.get(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-        'Referer': 'https://quote.eastmoney.com/',
-      }
+    var req = https.get(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
     }, function(res) {
       var data = '';
       res.on('data', function(c) { data += c; });
       res.on('end', function() {
         try {
           var json = JSON.parse(data);
-          if (json && json.data && json.data.klines) {
-            var klines = json.data.klines.map(function(line) {
-              var parts = line.split(',');
-              return {
-                date: parts[0],
-                open: parseFloat(parts[1]),
-                close: parseFloat(parts[2]),
-                high: parseFloat(parts[3]),
-                low: parseFloat(parts[4]),
-                volume: parseFloat(parts[5]),
-                turnover: parseFloat(parts[6]) || 0,
-              };
-            });
-            resolve(klines);
-          } else {
-            resolve([]);
+          if (json && json.code === 0 && json.data && json.data[symbol]) {
+            var stored = json.data[symbol];
+            // Find the qfqday key (may be "qfqday" or variant)
+            var dayKey = null;
+            var keys = Object.keys(stored);
+            for (var ki = 0; ki < keys.length; ki++) {
+              if (keys[ki].indexOf('qfqday') >= 0) { dayKey = keys[ki]; break; }
+            }
+            if (dayKey && stored[dayKey]) {
+              var raw = stored[dayKey];
+              var klines = raw.map(function(row) {
+                return {
+                  date: row[0],
+                  open: parseFloat(row[1]),
+                  close: parseFloat(row[2]),
+                  high: parseFloat(row[3]),
+                  low: parseFloat(row[4]),
+                  volume: parseFloat(row[5]),
+                  turnover: 0, // Tencent doesn't provide turnover in this API
+                };
+              });
+              resolve(klines);
+              return;
+            }
           }
+          resolve([]);
         } catch (e) {
           resolve([]);
         }
       });
-    }).on('error', function() { resolve([]); });
+    });
+
+    req.on('error', function() { resolve([]); });
+    req.setTimeout(15000, function() { req.destroy(); resolve([]); });
   });
 }
 
