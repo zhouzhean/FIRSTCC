@@ -1482,15 +1482,12 @@ function loadHistoryReviewUnified() {
 // ============ [v3.2] Verification Dashboard ============
 
 function loadVerificationDashboard() {
-  var container = document.getElementById('history-review-unified');
-  if (!container) return;
-
   fetch('/api/verification/dashboard')
     .then(function(r) { return r.json(); })
     .catch(function() { return null; })
     .then(function(data) {
       if (!data || !data.ok) {
-        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
+        $contentArea.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
           '<div style="font-size:48px;margin-bottom:16px;">--</div>' +
           '<div style="font-size:15px;">验证仪表板数据暂不可用</div>' +
           '<div style="font-size:12px;margin-top:8px;">需要积累足够的交易和预测数据后才能显示验证统计</div>' +
@@ -1498,21 +1495,23 @@ function loadVerificationDashboard() {
         return;
       }
 
-      if (typeof renderVerificationDashboard === 'function') {
-        var html = renderVerificationDashboard(data);
-        container.innerHTML = html;
-
-        // Inject CSS
-        var styleId = 'hr-verif-css';
-        if (!document.getElementById(styleId)) {
-          var style = document.createElement('style');
-          style.id = styleId;
-          style.textContent = renderHistoryReviewCSS();
-          document.head.appendChild(style);
-        }
-      } else {
-        container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">验证仪表板模板未加载 — 请刷新页面</div>';
+      if (typeof renderVerificationDashboard !== 'function') {
+        $contentArea.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">验证仪表板模板未加载 — 请刷新页面</div>';
+        return;
       }
+
+      var html = renderVerificationDashboard(data);
+
+      // Inject CSS
+      var styleEl = document.createElement('style');
+      styleEl.textContent = renderHistoryReviewCSS();
+      document.head.appendChild(styleEl);
+
+      $contentArea.innerHTML = '';
+      var container = document.createElement('div');
+      container.style.cssText = 'height:100%;overflow-y:auto;background:#f5f6fa;';
+      container.innerHTML = html;
+      $contentArea.appendChild(container);
     });
 }
 
