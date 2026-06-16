@@ -1,6 +1,79 @@
 # Francis Investment CLAUDE.md
 
-A股量化交易系统 v3.0.3 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.1.0 + 报告引擎 + **24/7 自主学习进化引擎**。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+
+## v3.1.0 (2026-06-16) — 历史训练+实盘校准：量化学习系统
+
+### 核心理念
+**全部服务端计算，零 Claude tokens 消耗。**
+
+数据下载 → 清洗 → 因子回测 → 有效性矩阵 → 参数搜索 → 跨市场相关性 → 模型更新 → 自动报告
+└──────────── 全部 Node.js 本地跑，0 tokens ────────────┘
+AI 只在：解释、改策略、审查异常、总结报告时介入。
+
+### 新增
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| 历史数据训练引擎 | `mosaic/evolution/bootstrap_history.js` | 7 Phase 完整训练链路：K线拉取/清洗 → 每日回放(真实因子引擎) → 因子有效性矩阵 → 因子组合挖掘(协同/冲突) → 跨市场相关性 → 参数网格搜索 → 自动报告生成 |
+| 调度集成 | `mosaic/evolution/evolution_scheduler.js` | 周日 01:00 自动触发 bootstrap（在 night_backtest 之前） |
+| 因子有效性矩阵 | `data/evolution/factor_effectiveness.json` | 17个因子 × T+1/3/5/10/20 的胜率/平均收益/盈亏比，按市场状态(bull/bear/high_vol/low_liquidity/sideways)分组 |
+| 参数优化结果 | `data/evolution/param_search_results.json` | 止损线×买入阈值×仓位×最大持仓数的网格搜索 Top 50 |
+| 训练综合矩阵 | `data/evolution/training_matrix.json` | ~50KB 结构JSON，包含所有分析结果汇总 |
+| 自动训练报告 | `data/evolution/training_report_YYYYMMDD.md` | Markdown 格式，可直接查看或邮件发送 |
+
+### 新增 API（v3.1）
+| 路由 | 用途 |
+|------|------|
+| `GET /api/evolution/training-matrix` | 查看训练矩阵摘要（summary+config，不含原始数据） |
+| `GET /api/evolution/factor-effectiveness` | 因子有效性详情（按 horizon + regime） |
+| `GET /api/evolution/param-search` | 参数搜索最优结果 + 推荐配置 |
+| `GET /api/evolution/training-report` | 获取最新自动训练报告 (markdown) |
+| `GET /api/evolution/bootstrap-status` | 训练状态（上次运行时间、完成阶段、错误） |
+| `POST /api/evolution/run-bootstrap` | 手动触发全量训练（后台运行，2-4 小时） |
+
+### 使用
+```bash
+# 全量训练（沪深300，5年）
+node mosaic/evolution/bootstrap_history.js
+
+# 仅增量更新（最近20天）
+node mosaic/evolution/bootstrap_history.js --incremental
+
+# 仅使用现有K线缓存（跳过下载）
+node mosaic/evolution/bootstrap_history.js --skipDownload
+
+# 全A股（慎用，约1周）
+node mosaic/evolution/bootstrap_history.js --universe all
+```
+
+### 关键设计决策
+- **数据范围**：默认沪深300成分股 (~300只) × 5年，输出 ~50KB JSON。全A股约500MB。
+- **采样策略**：每3天采1天 + 最近60天全量，减少计算量但不失真。
+- **因子引擎复用**：调用 `hidden_signals.js` 和 `composite.js` 的 REAL 计算函数，不是简化近似。
+- **前向收益计算**：当日 close → T+N 日 close，无未来数据泄漏。
+- **Token 消耗**：脚本运行时完全不消耗 tokens。仅当 AI 读取输出 JSON 时才消耗 (~15K tokens)。
+
+## v3.0.4 (2026-06-16) — 策略体检板块 UI/响应式/数据修复 + 云端版本同步
+
+### 修复
+| # | 问题 | 文件 | 修改 |
+|---|------|------|------|
+| 1 | Canvas 图表模糊（无 Retina/HiDPI 适配） | `strategy-health.js`, `app.js` | 3 个 Canvas 添加 `devicePixelRatio` 缩放 + CSS `aspect-ratio` 替代固定 width/height |
+| 2 | 手机端布局不匀称（inline style 覆盖 CSS @media） | `app.js:2560-2614` | 所有 inline `grid-template-columns` 移除，改用 CSS class `.sh-cards-row/.sh-chart-row/.sh-detail-row` |
+| 3 | 总控栏小屏拥挤 | `app.js` renderMCBar() | flex 布局加 `flex-wrap:wrap;gap:8px` |
+| 4 | 热力图/Canvas 容器小屏溢出 | `style.css` | `.sh-chart-card` 加 `overflow-x:auto`；超小屏字号缩小 |
+| 5 | 交易成本用硬编码费率估算 | `strategy_health.js` computeTradeStats() | 优先读 `trade.costs` 实际记录，fallback 到费率估算 |
+| 6 | 回撤曲线 yMax 硬编码 `=2` | `strategy-health.js` drawShDDChart() | 改为动态 `Math.max(2, maxPositive*1.3+1)`，适应各种回撤幅度 |
+| 7 | 云端版本号停留在 2.9.1 | `mosaic_server.js:373` | 更新为 `3.0.3`，与本地同步 |
+| 8 | `templates/strategy-health.js` 与 `app.js` 双重渲染路径 | `strategy-health.js` 头部 | 标注主渲染路径在 `app.js`，Canvas 绘制函数为共享全局函数 |
+
+### 响应式断点（策略体检专用）
+| 断点 | 指标卡片 | 图表区 | 字号 |
+|------|---------|--------|------|
+| >960px | 4 列 | 2 列 | 标准 (28px value) |
+| 720-960px | 2 列 | 1 列 | 标准 |
+| 400-720px | 2 列 | 1 列 | 缩小 (22px value) |
+| ≤400px | 2 列 | 1 列 | 超小 (18px value) |
 
 ## v3.0.3 (2026-06-15) — 数据质量面板修复 + 回测止损冷却期 + 指标统一
 
@@ -401,4 +474,8 @@ Francis Investment/
 - **v3.0.3 止损冷却期**：回测 `STOP_LOSS_COOLDOWN_DAYS = 4`，止损后 4 个交易日内不会重新买入同一只股票。冷却期按自然日计算后扣减非交易日
 - **v3.0.3 signalQuality 拆分**：`signalQuality` 现在是候选股命中率（候选股数/正向收益数 %），`factorHitRate` 是因子级信号命中率（信号数/正确信号数 %）。注意 `aggregateRegimes()` 的 `avgSignalQuality` 取的是 `signalQuality` 的均值
 - **策略体检 tradingDays < 20**：年化收益率/Sharpe/Sortino/Calmar 全部返回 null，前端显示 "数据不足"
+- **策略体检 Canvas Retina**：3 个 Canvas 绘图函数已加 `devicePixelRatio` 适配。注意 `canvas.width/height` 不能通过 HTML 属性写死（会与 DPR 缩放冲突），必须用 CSS 控制尺寸
+- **策略体检 inline style 陷阱**：`.sh-cards-row/.sh-chart-row/.sh-detail-row` 的 grid 布局必须在 CSS 定义（不在 HTML inline），否则 `@media` 响应式规则被 inline style 覆盖
+- **策略体检渲染双路径**：主路径在 `app.js` renderStrategyHealthDirect()，Canvas 绘制函数在 `templates/strategy-health.js` 全局作用域。修改涉及 DOM 结构需两边同步
+- **交易成本数据源**：`computeTradeStats()` 优先读 `trade.costs`（simfolio 精确记录），fallback 到 A 股费率估算（印花税 0.1%+佣金 0.025%+过户费 0.001%）
 - **`.gitignore` 运行时数据**：新增运行时数据目录时务必同步更新 .gitignore

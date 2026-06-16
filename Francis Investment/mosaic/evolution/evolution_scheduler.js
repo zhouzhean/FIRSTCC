@@ -5,6 +5,7 @@
  * 由主 scheduler.js 的 _tick() 中调用 checkAndRun()。
  *
  * 任务时间表（CST）：
+ *   周日 01:00 → 历史训练 bootstrap (bootstrap_history) [v3.1]
  *   02:00 → 夜间历史回测 (night_backtest)
  *   03:00 → 动态权重网格搜索 (weight_grid_search)
  *   04:00 → 参数推送验证 (parameter_push) [v2.7.0]
@@ -79,6 +80,14 @@ function checkAndRun(now, dateStr) {
     tryRunTask('full_backtest', dateStr, function() {
       var fb = require('./full_backtest');
       return fb.runWeeklyBacktest();
+    });
+  }
+
+  // --- [v3.1]: Bootstrap History Training (Sunday 01:00-01:45, before night_backtest) ---
+  if (day === 0 && h === 1 && m >= 0 && m < 45) {
+    tryRunTask('bootstrap_history', dateStr, function() {
+      var bh = require('./bootstrap_history');
+      return bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
     });
   }
 
@@ -174,6 +183,7 @@ function tryRunCatchup(now, dateStr) {
 
   // Check each task: if the window has passed AND task hasn't run today, try it
   var taskSchedules = [
+    { id: 'bootstrap_history', hour: 1, minute: 0 },
     { id: 'night_backtest', hour: 2, minute: 0 },
     { id: 'weight_grid_search', hour: 3, minute: 0 },
     { id: 'parameter_push', hour: 4, minute: 0 },
@@ -559,6 +569,7 @@ function getStatus() {
     todayTasks: todayTasks,
     recentHistory: _state.history.slice(-20),
     schedule: [
+      { time: '周日 01:00', task: 'bootstrap_history', desc: '历史数据训练引擎 [v3.1]' },
       { time: '02:00', task: 'night_backtest', desc: '夜间历史回测' },
       { time: '03:00', task: 'weight_grid_search', desc: '权重网格搜索' },
       { time: '04:00', task: 'parameter_push', desc: '参数推送验证 [v2.7]' },

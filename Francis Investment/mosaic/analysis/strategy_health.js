@@ -302,21 +302,39 @@ function computeTradeStats(tradeHistory, dailyNav) {
   const bestTrade = sells.length > 0 ? sortedByPnL[sortedByPnL.length - 1] : null;
   const worstTrade = sells.length > 0 ? sortedByPnL[0] : null;
 
-  // Fee breakdown — estimate from trade records
+  // Fee breakdown — use actual costs from trade records when available, fallback to estimate
   let totalCommission = 0, totalStampTax = 0, totalTransferFee = 0;
+  let hasActualCosts = false;
+
   for (const t of sells) {
-    const amount = safeNum(t.amount, 0);
-    // stamp tax: 0.1% on sell only
-    // commission: 0.025%
-    // transfer fee: 0.001%
-    totalStampTax += mathRound(amount * 0.001, 2);
-    totalCommission += mathRound(amount * 0.00025 * 2, 2); // buy + sell
-    totalTransferFee += mathRound(amount * 0.00001 * 2, 2);
+    if (t.costs && typeof t.costs.commission === 'number') {
+      totalCommission += safeNum(t.costs.commission, 0);
+      totalStampTax += safeNum(t.costs.stampTax, 0);
+      totalTransferFee += safeNum(t.costs.transferFee, 0);
+      hasActualCosts = true;
+    }
   }
   for (const t of buys) {
-    const amount = safeNum(t.amount, 0);
-    totalCommission += mathRound(amount * 0.00025, 2);
-    totalTransferFee += mathRound(amount * 0.00001, 2);
+    if (t.costs && typeof t.costs.commission === 'number') {
+      totalCommission += safeNum(t.costs.commission, 0);
+      totalTransferFee += safeNum(t.costs.transferFee, 0);
+    }
+  }
+
+  // Fallback: estimate fees if no actual costs recorded
+  if (!hasActualCosts) {
+    totalCommission = 0; totalStampTax = 0; totalTransferFee = 0;
+    for (const t of sells) {
+      const amount = safeNum(t.amount, 0);
+      totalStampTax += mathRound(amount * 0.001, 2);
+      totalCommission += mathRound(amount * 0.00025 * 2, 2);
+      totalTransferFee += mathRound(amount * 0.00001 * 2, 2);
+    }
+    for (const t of buys) {
+      const amount = safeNum(t.amount, 0);
+      totalCommission += mathRound(amount * 0.00025, 2);
+      totalTransferFee += mathRound(amount * 0.00001, 2);
+    }
   }
 
   // Turnover rate: total buy amount / average NAV

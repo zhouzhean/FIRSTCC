@@ -1559,6 +1559,26 @@ body {
 
 /* ===== Strategy Health Dashboard (v3.0) ===== */
 
+/* Grid layout — defined in CSS (NOT inline) so media queries can override */
+.sh-cards-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.sh-chart-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.sh-detail-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
 .sh-chart-card {
   background: #fff;
   border: 1px solid #e2e8f0;
@@ -1577,10 +1597,13 @@ body {
 }
 
 .sh-canvas {
+  display: block;
   width: 100%;
-  max-width: 100%;
   height: auto;
 }
+.sh-nav-canvas { aspect-ratio: 560 / 260; }
+.sh-dd-canvas { aspect-ratio: 560 / 260; }
+.sh-heatmap-canvas { aspect-ratio: 900 / 240; min-height: 200px; }
 
 .sh-metric-card {
   transition: transform 0.2s, box-shadow 0.2s;
@@ -1602,15 +1625,63 @@ body {
 }
 
 /* Mobile adaptation for strategy health */
-@media (max-width: 720px) {
+@media (max-width: 960px) {
   .sh-cards-row {
-    grid-template-columns: repeat(2, 1fr) !important;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
   }
   .sh-chart-row,
   .sh-detail-row {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .sh-cards-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+  .sh-chart-row,
+  .sh-detail-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    margin-bottom: 12px;
   }
   .sh-metric-card {
     padding: 12px 10px !important;
+  }
+  /* Reduce value font-size on small screens */
+  .sh-metric-card > div:first-child {
+    font-size: 22px !important;
+  }
+  .sh-chart-card {
+    padding: 10px;
+    overflow-x: auto;
+  }
+  /* Canvas containers scrollable on mobile */
+  .sh-heatmap-canvas {
+    min-height: 180px;
+  }
+}
+
+@media (max-width: 400px) {
+  .sh-cards-row {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .sh-metric-card {
+    padding: 10px 8px !important;
+  }
+  .sh-metric-card > div:first-child {
+    font-size: 18px !important;
+  }
+  .sh-chart-card {
+    padding: 8px;
+  }
+  .sh-chart-title-sm {
+    font-size: 12px;
+    margin-bottom: 8px;
   }
 }

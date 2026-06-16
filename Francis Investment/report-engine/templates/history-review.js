@@ -71,6 +71,7 @@ function renderHistoryReviewCSS() {
     '  .hr-cards-4 { grid-template-columns:1fr 1fr; }',
     '  .hr-hero { padding:14px 16px; gap:12px; }',
     '  .hr-hero-stat-val { font-size:18px; }',
+    '  .hr-training-table-wrap { font-size:10px; }',
     '}',
   ].join('\n');
 }
@@ -120,6 +121,20 @@ function renderHistoryReviewDashboard(data) {
 
   // Row 7: Verification & Archive
   html += _renderVerificationArchive(data);
+
+  // === [v3.1] Training Analysis Rows ===
+  // Row 8: Training Summary (bootstrap history engine)
+  if (data.trainingMatrix && (data.trainingMatrix.ok || data.trainingMatrix.summary)) {
+    html += _renderTrainingHero(data.trainingMatrix);
+  }
+
+  // Row 9: Factor Effectiveness Matrix (from bootstrap, T+5)
+  if (data.factorEffectiveness && data.factorEffectiveness.ok && data.factorEffectiveness.matrix) {
+    html += _renderTrainingFactorGrid(data.factorEffectiveness);
+  }
+
+  // Row 10: Parameter Optimization + Factor Combos
+  html += _renderTrainingParamsAndCombos(data);
 
   html += '</div>';
   return html;
@@ -515,6 +530,268 @@ function _renderVerificationArchive(data) {
   return html;
 }
 
+// ============ [v3.1] Training Analysis Functions ============
+
+function _renderTrainingHero(tm) {
+  if (!tm.summary && !tm.config) {
+    // Data from /api/evolution/training-matrix may return summary directly
+    if (tm.computedAt) {
+      return '<div class="hr-section"><div class="hr-section-title">[TRAINING] 训练矩阵 · ' +
+        tm.computedAt.slice(0,10) + '</div>' +
+        '<div style="font-size:12px;color:#94a3b8;">训练数据已生成，但摘要缺失。请检查 training_matrix.json 完整性。</div></div>';
+    }
+    return '';
+  }
+
+  var cfg = tm.config || {};
+  var sum = tm.summary || {};
+  var generatedAt = tm.generatedAt ? tm.generatedAt.slice(0,10) : (tm.computedAt || '').slice(0,10);
+
+  var html = '<div class="hr-section" style="border-left:3px solid #6366f1;">';
+  html += '<div class="hr-section-title">' +
+    '<span style="color:#6366f1;">[TRAINING]</span> 历史训练分析引擎 v1.0';
+  if (generatedAt) html += ' <span class="hr-subtle">生成: ' + generatedAt + '</span>';
+  html += '</div>';
+
+  html += '<div class="hr-cards-4">';
+
+  // Card 1: Training scope
+  html += '<div class="hr-mini-card">';
+  html += '<div class="hr-mini-card-title">训练范围</div>';
+  html += '<div class="hr-mini-card-val" style="font-size:16px;">' + (cfg.universe || '--') + '</div>';
+  html += '<div class="hr-mini-card-sub">' + (cfg.startYear || '') + '~' + (cfg.endYear || '') +
+    ' · ' + (cfg.sampleDays || '--') + ' 天</div>';
+  html += '</div>';
+
+  // Card 2: Duration
+  html += '<div class="hr-mini-card">';
+  html += '<div class="hr-mini-card-title">训练耗时</div>';
+  var dur = tm.duration;
+  var durText = dur ? (dur >= 3600 ? (dur/3600).toFixed(1)+'小时' : (dur/60).toFixed(0)+'分钟') : '--';
+  html += '<div class="hr-mini-card-val" style="font-size:18px;">' + durText + '</div>';
+  html += '<div class="hr-mini-card-sub">' + (cfg.sampleStocks || '--') + ' 只股票 · ' +
+    FORWARD_HORIZONS_FOR_TRAINING().length + ' 个展望期</div>';
+  html += '</div>';
+
+  // Card 3: Best Factor
+  if (sum.topFactors && sum.topFactors.length > 0) {
+    var top = sum.topFactors[0];
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">最强因子 (T+5)</div>';
+    html += '<div class="hr-mini-card-val" style="color:#16a34a;">' + top.name + '</div>';
+    html += '<div class="hr-mini-card-sub">胜率 ' + top.hitRate + '% · +' + top.avgReturn + '%</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">最强因子</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:14px;color:#94a3b8;">等待数据</div>';
+    html += '</div>';
+  }
+
+  // Card 4: Recommend params
+  if (sum.bestParams) {
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">推荐参数</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:15px;">止损 ' + (sum.bestParams.stopLoss*100).toFixed(1) + '%</div>';
+    html += '<div class="hr-mini-card-sub">买入阈值 ≥' + sum.bestParams.buyMinScore + '分</div>';
+    html += '</div>';
+  } else {
+    html += '<div class="hr-mini-card">';
+    html += '<div class="hr-mini-card-title">推荐参数</div>';
+    html += '<div class="hr-mini-card-val" style="font-size:14px;color:#94a3b8;">等待数据</div>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+
+  // Weakest factors
+  if (sum.weakestFactors && sum.weakestFactors.length > 0) {
+    html += '<div style="margin-top:12px;font-size:11px;color:#64748b;">';
+    html += '最弱因子: ';
+    var weakParts = sum.weakestFactors.map(function(f) {
+      return '<span style="color:#dc2626;">' + f.name + '</span> (胜率' + f.hitRate + '%)';
+    });
+    html += weakParts.join(' · ');
+    if (sum.topSynergyPair) {
+      html += ' &nbsp;|&nbsp; 最优组合: <span style="color:#6366f1;font-weight:600;">' + sum.topSynergyPair + '</span>';
+    }
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function FORWARD_HORIZONS_FOR_TRAINING() { return [1, 3, 5, 10, 20]; }
+
+function _renderTrainingFactorGrid(factorEff) {
+  var matrix = factorEff.matrix;
+  var t5 = matrix['T+5'];
+  if (!t5) return '';
+
+  var factors = Object.values(t5).filter(function(f) { return !f._insufficient && f.total >= 10; });
+  if (factors.length === 0) return '';
+
+  // Sort by hitRate desc
+  factors.sort(function(a, b) { return b.hitRate - a.hitRate; });
+
+  var html = '<div class="hr-section">';
+  html += '<div class="hr-section-title">' +
+    '<span style="color:#6366f1;">[TRAINING]</span> 因子有效性矩阵 · T+5 展望';
+  html += '</div>';
+
+  // Top section: bar chart of hit rates
+  html += '<div style="margin-bottom:16px;text-align:center;">';
+  html += '<canvas id="hr-training-factor-chart" style="width:100%;max-width:900px;height:200px;"></canvas>';
+  html += '</div>';
+
+  // Factor table
+  html += '<div style="overflow-x:auto;">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+  html += '<thead><tr style="border-bottom:2px solid #e5e7eb;">';
+  html += '<th style="text-align:left;padding:6px 8px;color:#64748b;font-weight:600;">因子</th>';
+  html += '<th style="text-align:center;padding:6px 8px;color:#64748b;">类别</th>';
+  html += '<th style="text-align:center;padding:6px 8px;color:#64748b;">样本数</th>';
+  html += '<th style="text-align:center;padding:6px 8px;color:#64748b;">胜率</th>';
+  html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">平均收益</th>';
+  html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">盈亏比</th>';
+  html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">最大</th>';
+  html += '<th style="text-align:right;padding:6px 8px;color:#64748b;">最小</th>';
+  html += '</tr></thead><tbody>';
+
+  for (var i = 0; i < factors.length; i++) {
+    var f = factors[i];
+    var hitColor = f.hitRate >= 55 ? '#16a34a' : f.hitRate >= 45 ? '#b8942c' : '#dc2626';
+    var pfColor = (f.profitFactor || 0) >= 1.5 ? '#16a34a' : (f.profitFactor || 0) >= 1.0 ? '#94a3b8' : '#dc2626';
+    var retColor = (f.avgFwdReturn || 0) > 0 ? '#16a34a' : '#dc2626';
+
+    html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+    html += '<td style="padding:6px 8px;font-weight:600;">' + f.name + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;color:#94a3b8;font-size:10px;">' +
+      (f.category || '') + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;color:#64748b;">' + f.total + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;font-weight:700;color:' + hitColor + ';">' +
+      f.hitRate + '%</td>';
+    html += '<td style="padding:6px 8px;text-align:right;font-weight:600;color:' + retColor + ';">' +
+      (f.avgFwdReturn > 0 ? '+' : '') + f.avgFwdReturn + '%</td>';
+    html += '<td style="padding:6px 8px;text-align:right;color:' + pfColor + ';">' +
+      (f.profitFactor || '--') + '</td>';
+    html += '<td style="padding:6px 8px;text-align:right;color:#16a34a;font-size:11px;">' +
+      (f.maxFwdReturn > 0 ? '+' : '') + f.maxFwdReturn + '%</td>';
+    html += '<td style="padding:6px 8px;text-align:right;color:#dc2626;font-size:11px;">' +
+      f.minFwdReturn + '%</td>';
+    html += '</tr>';
+  }
+
+  html += '</tbody></table></div>';
+  html += '</div>';
+  return html;
+}
+
+function _renderTrainingParamsAndCombos(data) {
+  var html = '<div class="hr-section">';
+  html += '<div class="hr-section-title">' +
+    '<span style="color:#6366f1;">[TRAINING]</span> 参数优化 & 因子组合';
+  html += '</div>';
+
+  html += '<div class="hr-combo-grid">';
+
+  // Left: Params
+  html += '<div>';
+  html += '<div style="font-size:11px;font-weight:600;color:#6366f1;margin-bottom:8px;">[参数优化]</div>';
+
+  var paramSearch = data.paramSearch;
+  if (paramSearch && paramSearch.recommendation) {
+    var rec = paramSearch.recommendation;
+    html += '<div class="hr-combo-item green">';
+    html += '<div style="font-weight:600;font-size:14px;">推荐配置</div>';
+    html += '<div style="font-size:11px;color:#64748b;margin-top:4px;">' +
+      '止损线: <b>' + (rec.stopLoss * 100).toFixed(1) + '%</b> · ' +
+      '买入阈值: <b>' + rec.buyMinScore + '分</b></div>';
+    html += '<div style="font-size:11px;color:#64748b;">' +
+      '预期胜率: <b style="color:#16a34a;">' + rec.expectedHitRate + '%</b> · ' +
+      '预期收益: <b style="color:#16a34a;">+' + rec.expectedAvgRet5d + '%</b></div>';
+    html += '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">' + rec.rationale + '</div>';
+    html += '</div>';
+
+    // Show top 3 configs for comparison
+    if (paramSearch.topConfigs && paramSearch.topConfigs.length > 0) {
+      html += '<div style="font-size:10px;color:#94a3b8;margin-top:8px;">Top 3 备选:</div>';
+      for (var i = 0; i < Math.min(3, paramSearch.topConfigs.length); i++) {
+        var cfg = paramSearch.topConfigs[i];
+        html += '<div class="hr-combo-item" style="font-size:10px;">';
+        html += '#' + (i+1) + ' 止损' + (cfg.stopLoss*100).toFixed(1) + '% · 阈值' + cfg.buyMinScore +
+          '分 · 胜率' + cfg.afterStopHitRate + '% · +' + cfg.avgRet5d + '%' +
+          ' (' + cfg.qualifiedCount + '笔)';
+        html += '</div>';
+      }
+    }
+  } else {
+    html += '<div style="font-size:11px;color:#94a3b8;">参数优化尚未运行</div>';
+    html += '<div style="font-size:10px;color:#94a3b8;margin-top:4px;">运行 bootstrap 后自动生成</div>';
+  }
+  html += '</div>';
+
+  // Right: Factor Combos (from training, not weekend mining)
+  html += '<div>';
+  html += '<div style="font-size:11px;font-weight:600;color:#6366f1;margin-bottom:8px;">[因子组合挖掘]</div>';
+
+  // Check if training has factor combo results in data.trainingMatrix
+  var tm = data.trainingMatrix || {};
+  var combosData = null;
+
+  // Try training matrix summary first
+  if (tm.summary && tm.summary.topSynergyPair) {
+    html += '<div class="hr-combo-item green">';
+    html += '<div style="font-weight:600;">最优协同对: ' + tm.summary.topSynergyPair + '</div>';
+    html += '<div style="font-size:10px;color:#64748b;">历史训练发现的最强协同效应</div>';
+    html += '</div>';
+    combosData = 'partial';
+  }
+
+  // If we have the full factorCombos from the matrix
+  if (tm.factorCombos) {
+    var t5Combos = tm.factorCombos['T+5'];
+    if (t5Combos) {
+      // Synergy pairs
+      if (t5Combos.synergyPairs && t5Combos.synergyPairs.length > 0) {
+        html += '<div style="font-size:10px;color:#16a34a;font-weight:600;margin:8px 0 4px;">协同效应 (1+1&gt;2)</div>';
+        for (var i = 0; i < Math.min(t5Combos.synergyPairs.length, 3); i++) {
+          var s = t5Combos.synergyPairs[i];
+          html += '<div class="hr-combo-item green" style="font-size:10px;">';
+          html += '<div><b>' + s.factors.join(' + ') + '</b></div>';
+          html += '<div style="color:#64748b;">联合胜率 ' + s.bothHitRate + '% · 增益 +' + s.effect + '% · ' + s.bothCount + '样本</div>';
+          html += '</div>';
+        }
+      }
+
+      // Conflict pairs
+      if (t5Combos.conflictPairs && t5Combos.conflictPairs.length > 0) {
+        html += '<div style="font-size:10px;color:#dc2626;font-weight:600;margin:8px 0 4px;">冲突效应 (1+1&lt;1)</div>';
+        for (var j = 0; j < Math.min(t5Combos.conflictPairs.length, 3); j++) {
+          var c = t5Combos.conflictPairs[j];
+          html += '<div class="hr-combo-item red" style="font-size:10px;">';
+          html += '<div><b>' + c.factors.join(' + ') + '</b></div>';
+          html += '<div style="color:#64748b;">联合胜率 ' + c.bothHitRate + '% · 衰减 ' + c.effect + '%</div>';
+          html += '</div>';
+        }
+      }
+      combosData = 'full';
+    }
+  }
+
+  if (!combosData) {
+    html += '<div style="font-size:11px;color:#94a3b8;">因子组合数据待生成</div>';
+    html += '<div style="font-size:10px;color:#94a3b8;margin-top:4px;">完整训练后自动计算协同/冲突因子对</div>';
+  }
+
+  html += '</div>'; // end right column
+
+  html += '</div>'; // end hr-combo-grid
+  html += '</div>';
+  return html;
+}
+
 // ============ Canvas Drawing Functions (called after DOM insertion) ============
 
 function drawHistoryReviewCanvases() {
@@ -533,6 +810,10 @@ function drawHistoryReviewCanvases() {
   // Verif sparkline
   var sparkCanvas = document.getElementById('hr-verif-sparkline');
   if (sparkCanvas) _drawSparkline(sparkCanvas);
+
+  // [v3.1] Training factor chart
+  var trainingChart = document.getElementById('hr-training-factor-chart');
+  if (trainingChart) _drawTrainingFactorChart(trainingChart);
 }
 
 function _drawGauge(canvas) {
@@ -696,6 +977,144 @@ function _drawSparkline(canvas) {
   ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('(验证趋势 — 等待数据积累)', w / 2, h / 2);
+}
+
+// [v3.1] Training: Factor hit rate bar chart
+function _drawTrainingFactorChart(canvas) {
+  var ctx = canvas.getContext('2d');
+  var dpr = window.devicePixelRatio || 1;
+  var w = canvas.offsetWidth;
+  var h = canvas.offsetHeight;
+  canvas.width = w * dpr;
+  canvas.height = h * dpr;
+  ctx.scale(dpr, dpr);
+
+  ctx.clearRect(0, 0, w, h);
+
+  // Extract data from table (the chart is drawn before table, so we parse the factorEffectiveness data)
+  // Instead, we read factor data from the table that was already rendered
+  var table = canvas.parentElement.parentElement.querySelector('table');
+  if (!table) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '12px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(等待因子数据)', w / 2, h / 2);
+    return;
+  }
+
+  var rows = table.querySelectorAll('tbody tr');
+  if (rows.length === 0) {
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '12px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('(等待因子数据)', w / 2, h / 2);
+    return;
+  }
+
+  var factors = [];
+  for (var i = 0; i < rows.length; i++) {
+    var cells = rows[i].querySelectorAll('td');
+    if (cells.length >= 5) {
+      var name = cells[0].textContent.trim();
+      var hitRate = parseFloat(cells[3].textContent.trim());
+      var avgRet = parseFloat(cells[4].textContent.trim());
+      if (!isNaN(hitRate)) {
+        factors.push({ name: name, hitRate: hitRate, avgRet: avgRet });
+      }
+    }
+  }
+
+  if (factors.length === 0) return;
+
+  // Chart layout
+  var padding = { top: 20, right: 20, bottom: 50, left: 120 };
+  var chartW = w - padding.left - padding.right;
+  var chartH = h - padding.top - padding.bottom;
+  var barGap = 10;
+  var barW = Math.min(30, (chartW - barGap * (factors.length - 1)) / factors.length);
+
+  // Sort by hitRate descending
+  factors.sort(function(a, b) { return b.hitRate - a.hitRate; });
+
+  // Y-axis: 0 to max hitRate rounded up to nearest 10
+  var maxY = Math.ceil(Math.max.apply(null, factors.map(function(f) { return f.hitRate; })) / 10) * 10;
+  if (maxY < 50) maxY = 60;
+
+  // Grid lines
+  ctx.strokeStyle = '#f1f5f9';
+  ctx.lineWidth = 1;
+  for (var gy = 0; gy <= maxY; gy += 10) {
+    var y = padding.top + chartH - (gy / maxY) * chartH;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(w - padding.right, y);
+    ctx.stroke();
+
+    // Y-axis label
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(gy + '%', padding.left - 6, y + 3);
+  }
+
+  // Bars
+  for (var bi = 0; bi < factors.length; bi++) {
+    var f = factors[bi];
+    var barH = (f.hitRate / maxY) * chartH;
+    var x = padding.left + bi * (barW + barGap);
+    var y = padding.top + chartH - barH;
+
+    // Bar color based on hit rate
+    var color;
+    if (f.hitRate >= 55) color = '#16a34a';
+    else if (f.hitRate >= 45) color = '#b8942c';
+    else color = '#dc2626';
+
+    // Gradient bar
+    var grad = ctx.createLinearGradient(x, y, x, padding.top + chartH);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, color + '44');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barW, barH);
+
+    // Bar border
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x, y, barW, barH);
+
+    // Hit rate text on top of bar
+    ctx.fillStyle = '#1e293b';
+    ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(f.hitRate + '%', x + barW / 2, y - 4);
+
+    // Factor name below bar (rotated or abbreviated)
+    ctx.save();
+    var label = f.name.length > 4 ? f.name.slice(0, 4) + '..' : f.name;
+    ctx.fillStyle = '#64748b';
+    ctx.font = '8px -apple-system, "Microsoft YaHei", sans-serif';
+    ctx.textAlign = 'left';
+    ctx.translate(x + barW / 2, padding.top + chartH + 10);
+    ctx.rotate(-Math.PI / 4);
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+  }
+
+  // 50% reference line
+  ctx.strokeStyle = '#94a3b8';
+  ctx.setLineDash([4, 4]);
+  ctx.lineWidth = 1;
+  var refY = padding.top + chartH - (50 / maxY) * chartH;
+  ctx.beginPath();
+  ctx.moveTo(padding.left, refY);
+  ctx.lineTo(w - padding.right, refY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('50% 基准', w - padding.right + 4, refY + 3);
 }
 
 // Export for app.js

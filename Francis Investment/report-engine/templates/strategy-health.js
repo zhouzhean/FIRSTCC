@@ -1,13 +1,21 @@
 /**
  * Strategy Health Dashboard — v3.0
  *
- * "策略体检页" — Comprehensive performance analytics:
- * 1. NAV curve (Canvas) — portfolio vs benchmark + drawdown sub-chart
- * 2. Monthly heatmap (Canvas) — calendar-style P&L grid
- * 3. Risk metric cards (DOM) — Sharpe/Sortino/Calmar
- * 4. Trade statistics (DOM) — win rate, profit factor, turnover
- * 5. Attribution summary (DOM) — last N trades + sector performance
- * 6. Master control judgment (DOM) — prominent verdict box
+ * "策略体检页" — Comprehensive performance analytics.
+ *
+ * **RENDERING NOTE**: The PRIMARY rendering path is in app.js → renderStrategyHealthDirect().
+ * This file provides fallback rendering (renderStrategyHealth) and Canvas drawing functions
+ * (drawShNavChart, drawShDDChart, drawShHeatmap) that are called by app.js via global scope.
+ * When modifying Canvas logic, keep both this file and app.js rendering in sync.
+ *
+ * Panels:
+ * 1. NAV curve (Canvas) — portfolio vs benchmark
+ * 2. Drawdown curve (Canvas)
+ * 3. Monthly heatmap (Canvas) — calendar-style P&L grid
+ * 4. Risk metric cards (DOM) — Sharpe/Sortino/Calmar
+ * 5. Trade statistics (DOM) — win rate, profit factor, turnover
+ * 6. Attribution summary (DOM) — last N trades + sector performance
+ * 7. Master control judgment (DOM) — prominent verdict box
  */
 
 // Called from app.js renderCurrentSection / renderStrategyHealthDirect
@@ -40,18 +48,18 @@ function renderStrategyHealth(data, containerId) {
   html += '<div class="sh-chart-row">';
   html += '<div class="sh-chart-box">';
   html += '<div class="sh-chart-title">组合净值曲线 vs 基准（上证指数）</div>';
-  html += '<canvas id="sh-nav-chart" class="sh-canvas" width="680" height="300"></canvas>';
+  html += '<canvas id="sh-nav-chart" class="sh-canvas"></canvas>';
   html += '</div>';
   html += '<div class="sh-chart-box">';
   html += '<div class="sh-chart-title">回撤曲线</div>';
-  html += '<canvas id="sh-dd-chart" class="sh-canvas" width="680" height="300"></canvas>';
+  html += '<canvas id="sh-dd-chart" class="sh-canvas"></canvas>';
   html += '</div>';
   html += '</div>';
 
   // ---- Row 3: Monthly Heatmap (Canvas) ----
   html += '<div class="sh-chart-full">';
   html += '<div class="sh-chart-title">月度收益热力图</div>';
-  html += '<canvas id="sh-heatmap" class="sh-canvas" width="900" height="280"></canvas>';
+  html += '<canvas id="sh-heatmap" class="sh-canvas sh-heatmap-canvas"></canvas>';
   html += '</div>';
 
   // ---- Row 4: Trade Stats (left) + Attribution (right) ----
@@ -214,12 +222,17 @@ function renderStatItem(label, value, colorClass) {
 function drawShNavChart(data) {
   var canvas = document.getElementById('sh-nav-chart');
   if (!canvas || !data.navCurve || !data.navCurve.dates || data.navCurve.dates.length < 2) {
-    if (canvas) { var ctx = canvas.getContext('2d'); ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('暂无足够的NAV数据（至少需要2天）', canvas.width/2, canvas.height/2); }
+    if (canvas) { var ctx2 = canvas.getContext('2d'); var rect2 = canvas.getBoundingClientRect(); ctx2.fillStyle = '#94a3b8'; ctx2.font = '13px sans-serif'; ctx2.textAlign = 'center'; ctx2.fillText('暂无足够的NAV数据（至少需要2天）', rect2.width/2, rect2.height/2); }
     return;
   }
 
   var ctx = canvas.getContext('2d');
-  var W = canvas.width, H = canvas.height;
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var W = rect.width, H = rect.height;
   var pad = { top: 20, right: 40, bottom: 40, left: 50 };
   var plotW = W - pad.left - pad.right;
   var plotH = H - pad.top - pad.bottom;
@@ -310,12 +323,17 @@ function drawShNavChart(data) {
 function drawShDDChart(data) {
   var canvas = document.getElementById('sh-dd-chart');
   if (!canvas || !data.drawdownCurve || !data.drawdownCurve.dates || data.drawdownCurve.dates.length < 2) {
-    if (canvas) { var ctx = canvas.getContext('2d'); ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('暂无足够的回撤数据', canvas.width/2, canvas.height/2); }
+    if (canvas) { var ctx2 = canvas.getContext('2d'); var rect2 = canvas.getBoundingClientRect(); ctx2.fillStyle = '#94a3b8'; ctx2.font = '13px sans-serif'; ctx2.textAlign = 'center'; ctx2.fillText('暂无足够的回撤数据', rect2.width/2, rect2.height/2); }
     return;
   }
 
   var ctx = canvas.getContext('2d');
-  var W = canvas.width, H = canvas.height;
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var W = rect.width, H = rect.height;
   var pad = { top: 20, right: 40, bottom: 40, left: 50 };
   var plotW = W - pad.left - pad.right;
   var plotH = H - pad.top - pad.bottom;
@@ -327,7 +345,9 @@ function drawShDDChart(data) {
 
   var yMin = Math.min.apply(null, drawdowns) - 1;
   yMin = Math.min(yMin, -10);
-  var yMax = 2;
+  // Dynamic yMax: at least 2% headroom, also accommodate positive drawdowns (new highs)
+  var maxPositive = Math.max.apply(null, drawdowns);
+  var yMax = Math.max(2, maxPositive * 1.3 + 1);
 
   function x(idx) { return pad.left + (idx / (dates.length - 1)) * plotW; }
   function y(val) { return pad.top + plotH - ((val - yMin) / (yMax - yMin)) * plotH; }
@@ -408,12 +428,17 @@ function drawShDDChart(data) {
 function drawShHeatmap(data) {
   var canvas = document.getElementById('sh-heatmap');
   if (!canvas || !data.monthlyHeatmap || !data.monthlyHeatmap.matrix || data.monthlyHeatmap.matrix.length === 0) {
-    if (canvas) { var ctx = canvas.getContext('2d'); ctx.fillStyle = '#94a3b8'; ctx.font = '13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('暂无足够的月度数据', canvas.width/2, canvas.height/2); }
+    if (canvas) { var ctx2 = canvas.getContext('2d'); var rect2 = canvas.getBoundingClientRect(); ctx2.fillStyle = '#94a3b8'; ctx2.font = '13px sans-serif'; ctx2.textAlign = 'center'; ctx2.fillText('暂无足够的月度数据', rect2.width/2, rect2.height/2); }
     return;
   }
 
   var ctx = canvas.getContext('2d');
-  var W = canvas.width, H = canvas.height;
+  var dpr = window.devicePixelRatio || 1;
+  var rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  var W = rect.width, H = rect.height;
 
   ctx.clearRect(0, 0, W, H);
 

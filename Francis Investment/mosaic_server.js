@@ -370,7 +370,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '2.9.1',
+    version: '3.1.0',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -1706,6 +1706,129 @@ const server = http.createServer(async function(req, res) {
       const dateStr = new Date().toISOString().slice(0, 10);
       const result = usAsPredict.verifyPrediction(dateStr);
       return jsonResponse(res, { ok: true, result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // === [v3.1] Bootstrap History Training ===
+
+  // View training matrix (read-only, no token cost)
+  if (pathname === "/api/evolution/training-matrix") {
+    try {
+      var matrixFile = path.join(DATA_DIR, 'evolution', 'training_matrix.json');
+      if (fs.existsSync(matrixFile)) {
+        var matrix = JSON.parse(fs.readFileSync(matrixFile, 'utf8'));
+        // Return only summary + factor rankings (omit raw data to keep response small)
+        return jsonResponse(res, {
+          ok: true,
+          summary: matrix.summary,
+          config: matrix.config,
+          duration: matrix.duration,
+          generatedAt: matrix.generatedAt,
+        });
+      }
+      return jsonResponse(res, { ok: true, available: false, message: 'Training matrix 尚未生成，请先运行 bootstrap' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // View factor effectiveness detail (T+5 horizon)
+  if (pathname === "/api/evolution/factor-effectiveness") {
+    try {
+      var effFile = path.join(DATA_DIR, 'evolution', 'factor_effectiveness.json');
+      if (fs.existsSync(effFile)) {
+        var eff = JSON.parse(fs.readFileSync(effFile, 'utf8'));
+        return jsonResponse(res, { ok: true, ...eff });
+      }
+      return jsonResponse(res, { ok: true, available: false, message: 'Factor effectiveness 尚未生成' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // View parameter search results
+  if (pathname === "/api/evolution/param-search") {
+    try {
+      var psFile = path.join(DATA_DIR, 'evolution', 'param_search_results.json');
+      if (fs.existsSync(psFile)) {
+        var ps = JSON.parse(fs.readFileSync(psFile, 'utf8'));
+        return jsonResponse(res, { ok: true, ...ps });
+      }
+      return jsonResponse(res, { ok: true, available: false, message: 'Param search 尚未运行' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // View auto-generated training report (latest)
+  if (pathname === "/api/evolution/training-report") {
+    try {
+      var evoDir = path.join(DATA_DIR, 'evolution');
+      if (fs.existsSync(evoDir)) {
+        var reports = fs.readdirSync(evoDir)
+          .filter(function(f) { return f.startsWith('training_report_') && f.endsWith('.md'); })
+          .sort()
+          .reverse();
+        if (reports.length > 0) {
+          var reportContent = fs.readFileSync(path.join(evoDir, reports[0]), 'utf8');
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(reportContent);
+          return;
+        }
+      }
+      return jsonResponse(res, { ok: true, available: false, message: '尚无训练报告' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // Manual trigger: run bootstrap (starts full training pipeline in background)
+  if (pathname === "/api/evolution/run-bootstrap" && req.method === "POST") {
+    try {
+      var bootstrap = require("./mosaic/evolution/bootstrap_history");
+      var opts = {};
+      // Parse body for options
+      if (body) {
+        try {
+          var b = typeof body === 'string' ? JSON.parse(body) : body;
+          if (b.universe) opts.universe = b.universe;
+          if (b.skipDownload) opts.skipDownload = true;
+        } catch (_) {}
+      }
+      // Fire-and-forget: run in background, return immediately
+      bootstrap.runBootstrap(opts).then(function(result) {
+        console.log('[Bootstrap] 后台训练完成: ' + (result.duration || '?') + 's');
+      }).catch(function(err) {
+        console.error('[Bootstrap] 后台训练失败:', err.message);
+      });
+      return jsonResponse(res, {
+        ok: true,
+        message: 'Bootstrap 训练已在后台启动。训练完成后可通过 /api/evolution/training-matrix 查看结果。',
+        estimatedDuration: '2-4小时（取决于数据量和网络）',
+      });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // Bootstrap status (is it running? what was the last result?)
+  if (pathname === "/api/evolution/bootstrap-status") {
+    try {
+      var stateFile = path.join(DATA_DIR, 'evolution', 'bootstrap_state.json');
+      var state = null;
+      if (fs.existsSync(stateFile)) {
+        state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      }
+      return jsonResponse(res, {
+        ok: true,
+        lastFullRun: state ? state.lastFullRun : null,
+        completedPhases: state ? state.completedPhases : [],
+        universe: state ? state.universe : null,
+        totalDays: state ? state.totalDays : 0,
+        errors: state ? state.errors : [],
+      });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }

@@ -1403,15 +1403,21 @@ function loadHistoryReviewUnified() {
   var container = document.getElementById('history-review-unified');
   if (!container) return;
 
-  // Try fetching full report, patterns, and verification in parallel
+  // Try fetching full report, patterns, verification, and training matrix in parallel
   Promise.all([
     fetch('/api/history/report?mode=full').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/history/patterns').then(function(r) { return r.json(); }).catch(function() { return null; }),
     fetch('/api/history/verification-history').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/evolution/training-matrix').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/evolution/factor-effectiveness').then(function(r) { return r.json(); }).catch(function() { return null; }),
+    fetch('/api/evolution/param-search').then(function(r) { return r.json(); }).catch(function() { return null; }),
   ]).then(function(results) {
     var report = results[0] || {};
     var patterns = results[1] || {};
     var verif = results[2] || {};
+    var trainingMatrix = results[3] || {};
+    var factorEff = results[4] || {};
+    var paramSearch = results[5] || {};
 
     // Merge data
     var data = report;
@@ -1423,12 +1429,23 @@ function loadHistoryReviewUnified() {
     if (verif.ok) {
       data.verificationHistory = verif;
     }
+    // v3.1: Training matrix data
+    if (trainingMatrix.ok || trainingMatrix.summary) {
+      data.trainingMatrix = trainingMatrix;
+    }
+    if (factorEff.ok && factorEff.matrix) {
+      data.factorEffectiveness = factorEff;
+    }
+    if (paramSearch.ok || paramSearch.recommendation) {
+      data.paramSearch = paramSearch;
+    }
 
-    if (!data.ok && !patterns.ok) {
+    if (!data.ok && !patterns.ok && !(trainingMatrix.ok || trainingMatrix.summary)) {
       container.innerHTML = '<div style="text-align:center;padding:60px;color:#94a3b8;">' +
         '<div style="font-size:48px;margin-bottom:16px;">--</div>' +
         '<div style="font-size:15px;">历史复盘引擎尚未启动</div>' +
         '<div style="font-size:12px;margin-top:8px;">每日盘后自动运行，周末深度分析在周六 10:30 启动</div>' +
+        '<div style="font-size:12px;margin-top:16px;color:#6366f1;">训练分析可手动触发：POST /api/evolution/run-bootstrap</div>' +
         '</div>';
       return;
     }
@@ -2557,7 +2574,7 @@ function renderStrategyHealthDirect() {
     html += '</div>';
 
     // Risk metric cards (4 up)
-    html += '<div class="sh-cards-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-cards-row">';
     html += _shCard(data.riskMetrics.sharpeRatio !== null ? data.riskMetrics.sharpeRatio : '--', 'Sharpe 比率', '≥1.0 良好', _shSharpeColor(data.riskMetrics.sharpeRatio));
     html += _shCard(data.riskMetrics.sortinoRatio !== null ? data.riskMetrics.sortinoRatio : '--', 'Sortino 比率', '下行风险调整', _shSharpeColor(data.riskMetrics.sortinoRatio));
     html += _shCard(data.riskMetrics.calmarRatio !== null ? data.riskMetrics.calmarRatio : '--', 'Calmar 比率', '收益÷最大回撤', _shSharpeColor(data.riskMetrics.calmarRatio));
@@ -2565,7 +2582,7 @@ function renderStrategyHealthDirect() {
     html += '</div>';
 
     // Second row: more metrics
-    html += '<div class="sh-cards-row" style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-cards-row">';
     html += _shCard(data.riskMetrics.totalReturn !== null ? (data.riskMetrics.totalReturn >= 0 ? '+' : '') + data.riskMetrics.totalReturn + '%' : '--', '总收益', '累计', data.riskMetrics.totalReturn >= 0 ? '#dc2626' : '#16a34a');
     html += _shCard(data.riskMetrics.maxDrawdown !== null ? (data.riskMetrics.maxDrawdown + '%') : '--', '最大回撤', '峰值到谷底', '#ef4444');
     html += _shCard(data.riskMetrics.maxDrawdownDuration !== null ? (data.riskMetrics.maxDrawdownDuration + '天') : '--', '最长回撤持续', '', '#64748b');
@@ -2573,19 +2590,19 @@ function renderStrategyHealthDirect() {
     html += '</div>';
 
     // Charts row: NAV + Drawdown
-    html += '<div class="sh-chart-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
-    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">组合净值曲线 vs 上证基准</div><canvas id="sh-nav-chart" width="560" height="260"></canvas></div>';
-    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">回撤曲线</div><canvas id="sh-dd-chart" width="560" height="260"></canvas></div>';
+    html += '<div class="sh-chart-row">';
+    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">组合净值曲线 vs 上证基准</div><canvas id="sh-nav-chart" class="sh-canvas"></canvas></div>';
+    html += '<div class="sh-chart-card"><div class="sh-chart-title-sm">回撤曲线</div><canvas id="sh-dd-chart" class="sh-canvas sh-dd-canvas"></canvas></div>';
     html += '</div>';
 
     // Monthly heatmap
     html += '<div class="sh-chart-card" style="margin-bottom:18px;">';
     html += '<div class="sh-chart-title-sm">月度收益热力图</div>';
-    html += '<canvas id="sh-heatmap" width="900" height="240"></canvas>';
+    html += '<canvas id="sh-heatmap" class="sh-canvas sh-heatmap-canvas"></canvas>';
     html += '</div>';
 
     // Detail row: Trade stats + Attribution
-    html += '<div class="sh-detail-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-detail-row">';
     html += '<div class="sh-chart-card">';
     html += '<div class="sh-chart-title-sm">交易统计</div>';
     html += _shTradeStatsTable(data.tradeStats);
@@ -2597,7 +2614,7 @@ function renderStrategyHealthDirect() {
     html += '</div>';
 
     // Verdict detail row
-    html += '<div class="sh-detail-row" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:18px;">';
+    html += '<div class="sh-detail-row">';
     html += '<div class="sh-chart-card">';
     html += '<div class="sh-chart-title-sm">当前风险因素</div>';
     html += '<ul class="sh-list" style="margin:0;padding-left:20px;">';
@@ -2661,7 +2678,7 @@ function renderMCBar(mc) {
 
   var html = '';
   html += '<div style="background:' + vc.bg + ';border:2px solid ' + vc.border + ';border-radius:12px;padding:16px 22px;margin-bottom:18px;">';
-  html += '<div style="display:flex;align-items:center;justify-content:space-between;">';
+  html += '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">';
   html += '<div style="display:flex;align-items:center;gap:12px;">';
   html += '<span style="width:12px;height:12px;border-radius:50%;background:' + (dotColors[mc.verdict] || dotColors['ALLOW']) + ';box-shadow:0 0 6px ' + (dotColors[mc.verdict] || dotColors['ALLOW']) + ';display:inline-block;"></span>';
   html += '<span style="color:' + vc.text + ';font-size:20px;font-weight:700;">' + (mc.verdictLabel || mc.verdict) + '</span>';
