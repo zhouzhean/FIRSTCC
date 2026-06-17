@@ -419,6 +419,10 @@ MODEL_REGISTRY:     { forwardSamplesFile, demotionLogFile }
 | calibration.json 路径 | 唯一路径: `data/evolution/calibration.json`；`verification_dashboard.js` 写到这里，`buildDataFileHealth()` 也查这里 |
 | API Health 不能写死 | `buildCockpitData()` 中每个 apiHealth 字段必须基于真实文件存在性或数据内容判断，用 `_fileExists()` 或检查 result 对象 |
 | `_loadVerification()` 字段完整 | 必须携带 predictionDate/targetDate/horizon（不只是 code/actualReturn/score），否则 evaluateShadow 无法做日期对齐 |
+| latestByCode/code-only fallback | **禁用**。`_buildShadowPredictionMap._getPrediction`、`evaluateShadow`、`_computeRankIC` 三处均不允许跨日期 code-only 匹配，只能 date+code+horizon 精确对齐 |
+| forwardSamples 重复累计 | `updateForwardSamples` 必须持久化 `sampleKeys[]` 数组；每次调用只统计新 key；`evaluateShadow` 传 `(versionId, dateStr, sampleKeys, hitSampleKeys)` |
+| Cockpit 加载态阻塞 | API 失败时必须调用 `renderAllError(msg)` 填充所有 panel body；不能只设 connection status 让面板永久 Loading |
+| config.js calibrationFile | 必须指向 `data/evolution/calibration.json`；`CONFIDENCE_CALIBRATION.calibrationFile` 与 `verification_dashboard.js` 内 EVOLUTION_DIR 必须一致 |
 
 ### 绝不提交的运行时数据
 
@@ -428,7 +432,7 @@ MODEL_REGISTRY:     { forwardSamplesFile, demotionLogFile }
 
 ### v3.3.1 修复记录 (2026-06-17)
 
-6个bug修复，解决"API返回200但数据空洞"问题:
+**第一轮**: 6个bug修复，解决"API返回200但数据空洞"问题:
 
 | 问题 | 修复 | 涉及文件 |
 |------|------|----------|
@@ -439,11 +443,26 @@ MODEL_REGISTRY:     { forwardSamplesFile, demotionLogFile }
 | 核心数据文件未生成 (evolution/ + verification/ 目录空) | 云端运行 `verification_runner.js` 生成全部9个文件 | 运维操作 |
 | Cockpit 预测能力面板数据缺失时显示空白 | 缺失时 fallback 显示 Verification Summary 基本命中率 | `cockpit.js` |
 
-**修复后状态**: Shadow/Champion 按 (predictionDate, code, horizon) 严格对齐；9个核心数据文件全部落盘；7个API Health 指示灯全部基于真实文件存在性；Cockpit 每个面板都有真实数据显示（数据缺失时显示原因而非空白）。
+**第二轮 (2026-06-17)**: 4个深层硬问题修复:
+
+| 问题 | 修复 | 涉及文件 |
+|------|------|----------|
+| `_buildShadowPredictionMap._getPrediction` 仍保留 latestByCode fallback | 彻底移除 latestByCode 和 code-only fallback，只允许 date+code+horizon 精确匹配 | `model_registry.js` |
+| `evaluateShadow` 和 `_computeRankIC` 保留 code-only fallback | 移除所有 `predMap[code]` 回退逻辑 | `model_registry.js` |
+| `updateForwardSamples` 无 sampleKeys 持久化，重复评估累加 | 新增 sampleKeys 持久化数组，`updateForwardSamples` 跳过已计入的 key，返回 `{addedTotal, addedHits}` | `model_registry.js` |
+| Cockpit API 失败时面板永久 Loading | 新增 `renderAllError(msg)` 函数，API 404/error 时所有面板显示错误原因而非 spinner | `cockpit.js` |
+| config.js calibrationFile 指向错误路径 `data/verification/` | 修正为 `data/evolution/calibration.json`，与 dashboard/cockpit 统一 | `config.js` |
+| .gitignore 同时存在 evolution/calibration.json 和 verification/calibration.json | 删除 verification/calibration.json，只保留 evolution/ | `.gitignore` |
+
+**修复后状态**: 
+- 5个核心API全部200 OK 返回真实数据
+- 9个核心数据文件全部落盘（evolution/ 8个 + verification/ 3个）
+- Shadow/Champion 按 (predictionDate, code, horizon) 严格对齐，无 code-only fallback
+- forwardSamples 持久化 sampleKeys 防重复累计
+- Cockpit 所有面板：数据缺失/API失败时显示原因而非空转
 
 **当前 Shadow 状态** (2026-06-17):
 - Champion: `v_2026-06-16` (bootstrap), params: stopLoss=-0.03, buyMinScore=45
 - Shadow: `v_2026-06-17` (grid_search), cumulativeIC=0.377, forwardSamples=7, directionHitRate=42.86%
 - Promotion blocked: directionHitRate(>52%), forwardSamples(≥100), evaluationDays(≥5)
 - Leakage Audit: CLEAN (47 checks, 0 violations)
-- 5核心API: 全部200 OK 返回真实数据

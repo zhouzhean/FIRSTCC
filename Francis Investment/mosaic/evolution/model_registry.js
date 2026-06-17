@@ -197,22 +197,63 @@ function logShadowPrediction(versionId, log) {
   _persist();
 }
 
-// ══════ v3.3.1: Forward Sample Tracking ══════
+// ══════ v3.3.1: Forward Sample Tracking (with dedup) ══════
 
 /**
- * [v3.3.1] Update per-shadow forward verification samples.
- * Called after verification_runner completes with real forward returns.
+ * [v3.3.1] Update per-shadow forward verification samples with sampleKey dedup.
+ *
+ * sampleKeys: array of "predictionDate|code|horizon" strings counted this batch.
+ * Only NEW keys (not previously persisted) are added to total/hits.
+ * Returns { addedTotal, addedHits } — how many were actually new.
  */
-function updateForwardSamples(versionId, dateStr, samplesHit, samplesTotal) {
+function updateForwardSamples(versionId, dateStr, sampleKeys, hitSampleKeys) {
   if (!_state.forwardSamples[versionId]) {
-    _state.forwardSamples[versionId] = { total: 0, hits: 0, dates: [], directionHitRate: null };
+    _state.forwardSamples[versionId] = { total: 0, hits: 0, dates: [], directionHitRate: null, sampleKeys: [] };
   }
   var fs = _state.forwardSamples[versionId];
-  fs.total += samplesTotal;
-  fs.hits += samplesHit;
+  if (!fs.sampleKeys) fs.sampleKeys = []; // migrate old records
+
+  // Dedup: only count sampleKeys not already persisted
+  var existingSet = {};
+  for (var i = 0; i < fs.sampleKeys.length; i++) {
+    existingSet[fs.sampleKeys[i]] = true;
+  }
+
+  // Build hit set for fast lookup
+  var hitSet = {};
+  if (hitSampleKeys && hitSampleKeys.length > 0) {
+    for (var j = 0; j < hitSampleKeys.length; j++) {
+      hitSet[hitSampleKeys[j]] = true;
+    }
+  }
+
+  var newKeys = [];
+  var newHits = 0;
+  for (var jj = 0; jj < sampleKeys.length; jj++) {
+    if (!existingSet[sampleKeys[jj]]) {
+      newKeys.push(sampleKeys[jj]);
+      existingSet[sampleKeys[jj]] = true;
+      if (hitSet[sampleKeys[jj]]) newHits++;
+    }
+  }
+
+  if (newKeys.length === 0) {
+    // All samples already counted — no change
+    return { addedTotal: 0, addedHits: 0 };
+  }
+
+  fs.total += newKeys.length;
+  fs.hits += newHits;
   if (fs.dates.indexOf(dateStr) < 0) fs.dates.push(dateStr);
   fs.directionHitRate = fs.total > 0 ? +(fs.hits / fs.total).toFixed(4) : null;
+
+  // Append new keys to persisted list
+  for (var k = 0; k < newKeys.length; k++) {
+    fs.sampleKeys.push(newKeys[k]);
+  }
+
   _persist();
+  return { addedTotal: newKeys.length, addedHits: newHits };
 }
 
 /**
@@ -220,7 +261,7 @@ function updateForwardSamples(versionId, dateStr, samplesHit, samplesTotal) {
  */
 function _getForwardSamples(versionId) {
   var fs = _state.forwardSamples[versionId];
-  return fs || { total: 0, hits: 0, dates: [], directionHitRate: null };
+  return fs || { total: 0, hits: 0, dates: [], directionHitRate: null, sampleKeys: [] };
 }
 
 // ══════ v3.3.1: Tightened Promotion Check ══════
@@ -401,21 +442,23 @@ function evaluateShadow(dateStr) {
 
     // v3.3.1: Update forward samples — strict alignment by predictionDate+code+horizon
     // Each (date, code, horizon) verification entry counts exactly once per shadow.
-    // This prevents double-counting from historical entries already processed.
+    // sampleKeys are persisted to prevent duplicate accumulation on re-evaluation.
     var dirHits = 0, dirTotal = 0;
     var predMap = _buildShadowPredictionMap(shadow.versionId);
     var actuals = verificationData.actualReturns || [];
-    // Track which (date, code) pairs we've already counted for THIS shadow to avoid repeats
+    // Collect sample keys and hit status for persistent dedup
     var countedKeys = {};
+    var sampleKeys = [];       // all new sampleKeys
+    var hitSampleKeys = [];    // subset where direction was correct
     for (var k = 0; k < actuals.length; k++) {
       var a = actuals[k];
       if (a.actualReturn == null) continue;
       var predDate = a.predictionDate || dateStr;
       var horizon = a.horizon || 'T+5';
       var countKey = predDate + '|' + a.code + '|' + horizon;
-      if (countedKeys[countKey]) continue; // already counted this sample
+      if (countedKeys[countKey]) continue; // dedup within this call
 
-      // Use date-aligned prediction lookup
+      // Use date-aligned prediction lookup (STRICT — no code-only fallback)
       var predReturn = typeof predMap._getPrediction === 'function'
         ? predMap._getPrediction(a.code, predDate, horizon)
         : null;
@@ -423,18 +466,21 @@ function evaluateShadow(dateStr) {
       if (predReturn == null) {
         predReturn = predMap[predDate + '|' + a.code + '|' + horizon];
       }
-      // Last resort: old-style code-only lookup
-      if (predReturn == null) {
-        predReturn = predMap[a.code];
-      }
-      if (predReturn == null) continue; // only count stocks this shadow actually predicted
+      // v3.3.1 strict: removed code-only fallback.
+      // OLD records without predictionDate skip here correctly.
+      if (predReturn == null) continue; // only count stocks this shadow actually predicted, by date+code+horizon
       countedKeys[countKey] = true;
+      sampleKeys.push(countKey);
       dirTotal++;
       var predUp = predReturn > 0;
       var actualUp = a.actualReturn > 0;
-      if (predUp === actualUp) dirHits++;
+      if (predUp === actualUp) {
+        dirHits++;
+        hitSampleKeys.push(countKey);
+      }
     }
-    if (dirTotal > 0) updateForwardSamples(shadow.versionId, dateStr, dirHits, dirTotal);
+    // Pass sampleKeys + hitSampleKeys for persistent dedup
+    if (sampleKeys.length > 0) updateForwardSamples(shadow.versionId, dateStr, sampleKeys, hitSampleKeys);
 
     result.evaluated.push({
       versionId: shadow.versionId,
@@ -687,9 +733,13 @@ function _buildShadowPredictionMap(versionId) {
     for (var k in predMap) {
       if (k.indexOf(prefix) === 0) return predMap[k];
     }
-    // Last resort: latest prediction for this code (any date)
-    return latestByCode[code] != null ? latestByCode[code] : null;
+    // v3.3.1 strict: NO latestByCode fallback — return null if not matched by date+code+horizon
+    return null;
   };
+
+  // Expose for backward-compat: OLD verification records without predictionDate
+  // may need code-only fallback as a last resort. New code MUST use _getPrediction.
+  predMap._latestByCode = latestByCode;
 
   return predMap;
 }
@@ -767,17 +817,15 @@ function _computeRankIC(versionId, verificationData) {
       var predDate = a.predictionDate || '';
       var horizon = a.horizon || 'T+3';
 
-      // Date-aligned lookup (same method as evaluateShadow)
+      // Date-aligned lookup (same strict method as evaluateShadow)
       var predReturn = typeof predMap._getPrediction === 'function'
         ? predMap._getPrediction(a.code, predDate, horizon)
         : null;
       if (predReturn == null) {
         predReturn = predMap[predDate + '|' + a.code + '|' + horizon];
       }
-      // Fallback: try code-only (backward compat with old verification records)
-      if (predReturn == null) {
-        predReturn = predMap[a.code];
-      }
+      // v3.3.1 strict: removed code-only fallback.
+      // Only match when predictionDate+code+horizon align exactly.
       if (predReturn != null) {
         pairs.push({ predicted: predReturn, actual: a.actualReturn });
       }

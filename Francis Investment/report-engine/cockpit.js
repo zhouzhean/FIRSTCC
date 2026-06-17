@@ -19,7 +19,12 @@ var pollTimer = null;
 
 function fetchData() {
   fetch(API)
-    .then(function(res) { return res.json(); })
+    .then(function(res) {
+      if (!res.ok) {
+        throw new Error('HTTP ' + res.status + ' ' + res.statusText);
+      }
+      return res.json();
+    })
     .then(function(data) {
       if (data && data.ok) {
         setConnectionStatus('OK', 'ok');
@@ -32,10 +37,14 @@ function fetchData() {
         renderAll(data);
       } else {
         setConnectionStatus('ERROR', 'error');
+        var reason = (data && data.version) ? 'Service v' + data.version + ' returned ok=false' : 'API returned ok=false';
+        renderAllError(reason);
       }
     })
-    .catch(function() {
+    .catch(function(err) {
       setConnectionStatus('ERROR', 'error');
+      var msg = err && err.message ? err.message : 'Network error / server unreachable';
+      renderAllError(msg);
     });
 }
 
@@ -72,6 +81,30 @@ function renderAll(data) {
   renderCalibration(data.calibration);
   renderChangeLog(data.changeLog);
   renderFailures(data.failures);
+}
+
+/**
+ * Fill ALL panels with error state — prevents perpetual "Loading..." spinners.
+ */
+function renderAllError(msg) {
+  var panelIds = [
+    'api-health-body', 'data-files-body', 'prediction-body',
+    'shadow-champion-body', 'leakage-body', 'permissions-body',
+    'tasks-body', 'verify-body', 'calibration-body',
+    'changelog-body', 'failures-body'
+  ];
+  var errorHtml = '<div class="status-error" style="padding:12px;font-size:13px;">'
+    + esc(msg) + '</div>';
+  for (var i = 0; i < panelIds.length; i++) {
+    var el = document.getElementById(panelIds[i]);
+    if (el) el.innerHTML = errorHtml;
+  }
+  // Also update system panel with error detail
+  var sysEl = document.getElementById('system-body');
+  if (sysEl) {
+    sysEl.innerHTML = '<div class="status-error" style="padding:8px;font-size:13px;">'
+      + esc(msg) + '</div>';
+  }
 }
 
 // ══════ Box A: System Status ══════

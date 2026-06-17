@@ -495,7 +495,7 @@ module.exports = {
       { name: 'high', minScore: 70, maxScore: 100 },
     ],
     minSamplesPerBin: 30,
-    calibrationFile: 'report-engine/data/verification/calibration.json',
+    calibrationFile: 'report-engine/data/evolution/calibration.json',
   },
 
   // ---- v3.3.1: Regime-Aware Verification ----
