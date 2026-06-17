@@ -1,8 +1,18 @@
-A股量化交易系统 v3.2.2 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.2.3 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
 ## 核心理念
 
 全部服务端计算，零 Claude tokens 消耗。数据下载→清洗→因子回测→有效性矩阵→参数搜索→跨市场相关性→自动报告，全部 Node.js 本地跑。
+
+## v3.2.3 (2026-06-17) — K线数据扩充 + 赛后验证闭环
+
+- **K线批量下载工具** `mosaic/tools/download_klines.js`：腾讯 ifzq API, 5 并发, 云端从 284 只 → 1563 只 (110MB)
+  - 覆盖 SH 主板 + 科创板 + SZ 主板 + 中小板 + 创业板
+- **赛后验证执行器** `mosaic/analysis/verification_runner.js`：从 scan_records 提取历史预测，对照实际 K 线计算命中率/Rank IC
+  - 首次运行：13 天有效验证，47 条预测，命中率 57.4%，Rank IC 0.1
+  - 输出 `data/verification/verification_history.json`
+- **scheduler.js**：新增每日 15:30 `_runDailyVerification()` 任务，盘后自动验证
+- **verification_dashboard.js**：Rank IC 优先读取 `verification_summary.json`
 
 ## v3.2.2 (2026-06-16) — 历史复盘/验证板块显示修复
 
