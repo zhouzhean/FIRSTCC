@@ -137,18 +137,41 @@ function _computeExpectedReturnVerification() {
  */
 function _computeStockPredictorVerification() {
   var sf = _readJSON(path.join(SIMFOLIO_DIR, 'stock_factor_performance.json'));
-  if (!sf || !sf.records || sf.records.length === 0) return { available: false, message: '个股因子性能数据不足' };
+  if (!sf) return { available: false, message: '个股因子性能数据不足' };
 
-  // Per-factor aggregation
+  // [v3.2.4] File uses dailyRecords (object keyed by date), not flat records array
+  var records = [];
+  if (sf.records && Array.isArray(sf.records)) {
+    records = sf.records;
+  } else if (sf.dailyRecords && typeof sf.dailyRecords === 'object') {
+    Object.keys(sf.dailyRecords).forEach(function(date) {
+      var dayRecords = sf.dailyRecords[date];
+      if (Array.isArray(dayRecords)) {
+        for (var i = 0; i < dayRecords.length; i++) {
+          dayRecords[i]._date = date;
+          records.push(dayRecords[i]);
+        }
+      }
+    });
+  }
+  if (records.length === 0) return { available: false, message: '个股因子性能数据不足' };
+
+  // Aggregate by factor from factorSignals array in each record
   var factorMap = {};
-  for (var i = 0; i < sf.records.length; i++) {
-    var r = sf.records[i];
-    var fid = r.factor || r.factorId;
-    if (!fid) continue;
-    if (!factorMap[fid]) factorMap[fid] = { total: 0, hits: 0, returns: [] };
-    factorMap[fid].total++;
-    if (r.hit) factorMap[fid].hits++;
-    if (r.fwdReturn != null) factorMap[fid].returns.push(r.fwdReturn);
+  var totalRecords = 0;
+  for (var i = 0; i < records.length; i++) {
+    var r = records[i];
+    var signals = r.factorSignals;
+    if (!signals || !Array.isArray(signals)) continue;
+    totalRecords++;
+    for (var j = 0; j < signals.length; j++) {
+      var fs = signals[j];
+      var fid = fs.id || fs.factor || fs.factorId;
+      if (!fid) continue;
+      if (!factorMap[fid]) factorMap[fid] = { total: 0, hits: 0 };
+      factorMap[fid].total++;
+      if (fs.hit) factorMap[fid].hits++;
+    }
   }
 
   var factors = [];
@@ -156,18 +179,25 @@ function _computeStockPredictorVerification() {
   Object.keys(factorMap).forEach(function(fid) {
     var f = factorMap[fid];
     var hr = f.total > 0 ? f.hits / f.total : 0;
-    var avgRet = f.returns.length > 0 ? f.returns.reduce(function(s, v) { return s + v; }, 0) / f.returns.length : 0;
-    factors.push({ id: fid, hitRate: +(hr * 100).toFixed(1), avgReturn: +avgRet.toFixed(2), samples: f.total });
+    factors.push({
+      id: fid,
+      hitRate: f.hits > 0 ? +(hr * 100).toFixed(1) : null,
+      samples: f.total,
+      verified: f.hits > 0,
+    });
     totalCount += f.total;
     totalHits += f.hits;
   });
 
+  var dates = Object.keys(sf.dailyRecords || {}).sort();
   return {
     available: true,
-    totalRecords: sf.records.length,
-    totalDays: sf.days || (sf.records.length > 0 ? (new Set(sf.records.map(function(r) { return r.date; }))).size : 0),
-    overallHitRate: totalCount > 0 ? +(totalHits / totalCount * 100).toFixed(1) : null,
-    factors: factors.sort(function(a, b) { return b.hitRate - a.hitRate; }),
+    totalRecords: totalRecords,
+    totalDays: dates.length,
+    overallHitRate: totalHits > 0 ? +(totalHits / totalCount * 100).toFixed(1) : null,
+    verified: totalHits > 0,
+    message: totalHits > 0 ? null : '信号已记录，等待赛后验证回填命中率',
+    factors: factors.sort(function(a, b) { return (b.hitRate || -1) - (a.hitRate || -1); }),
   };
 }
 
@@ -189,52 +219,10 @@ function _computeRankIC() {
     };
   }
 
-  // Fallback: scan records
-  var scanPath = path.join(DATA_DIR, 'scan_records_latest.json');
-  var scan = _readJSON(scanPath);
-  if (!scan || !scan.results || scan.results.length === 0) {
-    var files = [];
-    try {
-      files = fs.readdirSync(DATA_DIR).filter(function(f) { return f.startsWith('scan_records_'); });
-      files.sort();
-      if (files.length > 0) {
-        scan = _readJSON(path.join(DATA_DIR, files[files.length - 1]));
-      }
-    } catch (_) {}
-  }
-
-  if (!scan || !scan.results || scan.results.length < 10) return { available: false, message: '扫描记录不足(需≥10条)' };
-
-  var results = scan.results.filter(function(r) { return r.compositeScore != null && r.fwdReturn != null; });
-  if (results.length < 10) return { available: false, message: '有效记录不足(需≥10条)' };
-
-  var n = results.length;
-  var sortedByScore = results.slice().sort(function(a, b) { return (b.compositeScore || 0) - (a.compositeScore || 0); });
-  var sortedByReturn = results.slice().sort(function(a, b) { return (b.fwdReturn || 0) - (a.fwdReturn || 0); });
-
-  var rankByScore = {};
-  for (var i = 0; i < n; i++) {
-    rankByScore[sortedByScore[i].code] = i + 1;
-  }
-  var rankByReturn = {};
-  for (var j = 0; j < n; j++) {
-    rankByReturn[sortedByReturn[j].code] = j + 1;
-  }
-
-  var dSqSum = 0;
-  for (var k = 0; k < results.length; k++) {
-    var code = results[k].code;
-    var d = (rankByScore[code] || 0) - (rankByReturn[code] || 0);
-    dSqSum += d * d;
-  }
-
-  var rankIC = 1 - (6 * dSqSum) / (n * (n * n - 1));
-  return {
-    available: true,
-    rankIC: +rankIC.toFixed(3),
-    samples: n,
-    description: rankIC > 0.2 ? '强正相关' : rankIC > 0.1 ? '弱正相关' : rankIC > 0 ? '微正相关' : rankIC > -0.1 ? '微负相关' : '负相关',
-  };
+  // [v3.2.4] scan_records are in SIMFOLIO_DIR, stored as flat array (not {results:...})
+  // Rank IC requires fwdReturn data which only verification_runner can compute
+  // from kline data. scan_records alone only has scores, not returns.
+  return { available: false, message: '等待验证执行器积累数据(当前样本不足)' };
 }
 
 /**

@@ -1,10 +1,15 @@
-A股量化交易系统 v3.2.3 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.2.4 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
 ## 核心理念
 
 全部服务端计算，零 Claude tokens 消耗。数据下载→清洗→因子回测→有效性矩阵→参数搜索→跨市场相关性→自动报告，全部 Node.js 本地跑。
 
 ## 版本历史
+
+### v3.2.4 (2026-06-17) — 验证仪表板工程Bug修复
+- `verification_dashboard.js`：`_computeStockPredictorVerification()` 适配 `dailyRecords` 对象结构，新增 `verified` 状态标记
+- `verification_dashboard.js`：`_computeRankIC()` fallback 路径从 `DATA_DIR` 修正为 `SIMFOLIO_DIR`
+- `verification_dashboard.js`：scan_records 格式修正（纯数组，非 `{results:...}` 对象）
 
 ### v3.2.3 (2026-06-17) — K线扩充 + 赛后验证闭环
 - `mosaic/tools/download_klines.js`：批量 K 线下载（腾讯 ifzq, 5 并发），284→1563 只 (110MB)
@@ -158,6 +163,8 @@ curl -s http://8.153.101.112:8765/api/verification/dashboard
 | regime 字段路径 | `riskState.regime`，不是 `riskState.riskRegime` |
 | 回测止损冷却期 | `STOP_LOSS_COOLDOWN_DAYS=4` |
 | `safeFixed()` | simfolio.js 所有 `.toFixed()` 必须用它包装 |
+| stock_factor_performance 结构 | `dailyRecords`（对象 key=日期）不是 `records`（数组）；factorSignals 无 hit 字段时=待验证 |
+| scan_records 路径+格式 | 在 `SIMFOLIO_DIR`（非 DATA_DIR）；纯数组，非 `{results:...}` 对象 |
 
 ### 绝不提交的运行时数据
 `portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`, `weekend_archive/*.json`, `margin_cache.json`, `dynamic_weights.json`, `stock_factor_performance.json`, `cycle_factor_matrix.json`, `sector_leadlag.json`, `trade_attribution.json`, `klines/*.json`, `klines_short/*.json`, `night_backtest_result.json`, `self_reflection_result.json`, `us_as_predictions.json`, `us_as_verification_history.json`, `factor_combinations.json`, `weight_grid_result.json`, `full_backtest_result*.json`, `data_quality_report.json`, `strategy_health_snapshot.json`, `*_snapshot.json`, `bootstrap_state.json`, `training_matrix.json`, `factor_effectiveness.json`, `param_search_results.json`, `cross_market_linkage.json`, `expected_return_verification.json`, `history_context.json`, `verification/`, `evolution/`
