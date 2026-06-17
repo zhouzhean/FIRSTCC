@@ -37,6 +37,9 @@ report-engine/data/market_history/indices/
 report-engine/data/weekend_archive/
 report-engine/data/scan_records_*.json
 report-engine/data/margin_cache.json
+report-engine/data/simfolio/index_history_*.json
+report-engine/data/verification/
+report-engine/data/evolution/
 
 # Secrets
 .env

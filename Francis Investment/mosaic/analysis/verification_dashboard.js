@@ -176,11 +176,23 @@ function _computeStockPredictorVerification() {
  * Uses scan_records data if available.
  */
 function _computeRankIC() {
-  // Scan records provide snapshots of predictions vs outcomes
+  // [v3.2.2] First try the new verification_history.json from verification_runner.js
+  var vh = _readJSON(path.join(DATA_DIR, 'verification', 'verification_summary.json'));
+  if (vh && vh.avgRankIC != null && vh.totalPredictions >= 10) {
+    return {
+      available: true,
+      rankIC: vh.avgRankIC,
+      samples: vh.totalPredictions,
+      description: vh.avgRankIC > 0.2 ? '强正相关' : vh.avgRankIC > 0.1 ? '弱正相关'
+        : vh.avgRankIC > 0 ? '微正相关' : vh.avgRankIC > -0.1 ? '微负相关' : '负相关',
+      source: 'verification_runner',
+    };
+  }
+
+  // Fallback: scan records
   var scanPath = path.join(DATA_DIR, 'scan_records_latest.json');
   var scan = _readJSON(scanPath);
   if (!scan || !scan.results || scan.results.length === 0) {
-    // Try finding the most recent scan
     var files = [];
     try {
       files = fs.readdirSync(DATA_DIR).filter(function(f) { return f.startsWith('scan_records_'); });
@@ -196,8 +208,6 @@ function _computeRankIC() {
   var results = scan.results.filter(function(r) { return r.compositeScore != null && r.fwdReturn != null; });
   if (results.length < 10) return { available: false, message: '有效记录不足(需≥10条)' };
 
-  // Rank IC: rank the predictions, rank the outcomes, compute Spearman
-  // Simple: sort by compositeScore, sort by fwdReturn, correlate ranks
   var n = results.length;
   var sortedByScore = results.slice().sort(function(a, b) { return (b.compositeScore || 0) - (a.compositeScore || 0); });
   var sortedByReturn = results.slice().sort(function(a, b) { return (b.fwdReturn || 0) - (a.fwdReturn || 0); });

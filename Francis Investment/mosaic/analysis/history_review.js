@@ -61,6 +61,37 @@ var _state = {
   error: null,
 };
 
+// Restore state from persisted history_context.json (survive server restarts)
+(function _restoreState() {
+  try {
+    var ctxPath = path.join(SIMFOLIO_DIR, 'history_context.json');
+    if (fs.existsSync(ctxPath)) {
+      var ctx = JSON.parse(fs.readFileSync(ctxPath, 'utf8'));
+      if (ctx.deepAnalysis) {
+        var da = ctx.deepAnalysis;
+        _state.lastDeep = da.lastRun || null;
+        _state.similarityResults = da.similarity || [];
+        _state.crisisWarning = da.crisisWarning || null;
+        _state.sectorRotation = da.sectorRotation || null;
+        _state.factorPerformance = da.factorPerformance || null;
+        _state.insights = da.insights || [];
+      }
+      if (ctx.dailyInsights) {
+        _state.dailyInsights = ctx.dailyInsights;
+      }
+      if (ctx.discoveries) {
+        _state.discoveries = ctx.discoveries;
+      }
+      if (ctx.verificationContext) {
+        _state.lastVerification = ctx.verificationContext;
+      }
+      console.log('[HistoryReview] Restored state from history_context.json (lastDeep=' + _state.lastDeep + ')');
+    }
+  } catch (e) {
+    console.error('[HistoryReview] Failed to restore state:', e.message);
+  }
+})();
+
 // ==================== Public API ====================
 
 function runDaily(options) {
@@ -533,6 +564,7 @@ async function _runDeepCycle(opts) {
 
   // W6: Generate insights + write context
   _state.progress = 96;
+  _state.lastDeep = _state.lastDeep || new Date().toISOString();
   _state.insights = _generateInsights(verificationContext);
   _writeHistoryContext(verificationContext);
 

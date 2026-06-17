@@ -187,8 +187,17 @@ class Scheduler extends EventEmitter {
       this._runPostMarketWrapup();
     }
 
-    // 16:00 后：生成每日盘后总结报告（仅交易日）
+    // 15:30 后：每日赛后验证（仅交易日，收盘后30分钟）
     const hourNow = now.getHours();
+    const minNow = now.getMinutes();
+    var verifyKey = 'daily_verification_' + dateStr;
+    if (this._isTradingDay(now) && hourNow >= 15 && minNow >= 30 &&
+        !this._scheduledOps.has(verifyKey)) {
+      this._scheduledOps.add(verifyKey);
+      this._runDailyVerification(dateStr);
+    }
+
+    // 16:00 后：生成每日盘后总结报告（仅交易日）
     const isAfter4pm = hourNow >= 16;
     const summaryKey = 'daily_summary_' + dateStr;
     if (isAfter4pm && this._isTradingDay(now) && !this._scheduledOps.has(summaryKey)) {
@@ -1381,6 +1390,29 @@ class Scheduler extends EventEmitter {
       // silent — US market recording is non-critical
     } finally {
       this._usOpsRunning = false;
+    }
+  }
+
+  // ==================== 操作：每日赛后验证 ====================
+
+  async _runDailyVerification(dateStr) {
+    console.log('[Scheduler] 赛后验证: 开始 (' + dateStr + ')');
+    this._logEvent('daily_verification_start', { date: dateStr });
+    try {
+      var runner = require('./analysis/verification_runner');
+      var result = runner.run({ latest: true });
+      var summary = result ? result.summary : null;
+      console.log('[Scheduler] 赛后验证: 完成, 命中率=' +
+        (summary && summary.overallHitRate != null ? summary.overallHitRate + '%' : 'N/A'));
+      this._logEvent('daily_verification_done', {
+        date: dateStr,
+        newEntries: result ? result.newEntries : 0,
+        overallHitRate: summary ? summary.overallHitRate : null,
+        avgRankIC: summary ? summary.avgRankIC : null,
+      });
+    } catch (e) {
+      console.error('[Scheduler] 赛后验证失败:', e.message);
+      this._logEvent('daily_verification_error', { date: dateStr, error: e.message });
     }
   }
 
