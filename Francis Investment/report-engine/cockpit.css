@@ -1,6 +1,6 @@
-/* Autonomy Cockpit — v3.3.0
-   Follows existing style.css conventions:
-   #0a1628 background, #b8942c gold accent, text labels (no emoji) */
+/* Autonomy Cockpit — v3.3.1
+   Design principle: "可监督状态" (supervisable status).
+   Color coding: Green=PASS/REAL, Yellow=WARN/PENDING, Red=ERROR/BLOCK, Gray=UNKNOWN */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -12,33 +12,46 @@ body {
 }
 
 #cockpit {
-  max-width: 1400px;
+  max-width: 1500px;
   margin: 0 auto;
-  padding: 20px;
+  padding: 16px 20px;
 }
 
+/* ══════ Header ══════ */
 header {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 12px 0;
   border-bottom: 1px solid rgba(184, 148, 44, 0.3);
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 header h1 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   color: #b8942c;
   letter-spacing: 1px;
 }
 
+.version-tag {
+  font-size: 11px;
+  color: #7a8ba0;
+  font-weight: 400;
+  margin-left: 6px;
+}
+
 .status-bar {
   display: flex;
-  gap: 12px;
+  gap: 14px;
   align-items: center;
   font-size: 12px;
   color: #7a8ba0;
+}
+
+.uptime {
+  color: #5a6a7e;
+  font-size: 11px;
 }
 
 .badge {
@@ -54,21 +67,65 @@ header h1 {
 .badge.info   { background: rgba(33, 150, 243, 0.15); color: #2196f3; }
 .badge.muted  { background: rgba(122, 139, 160, 0.15); color: #7a8ba0; }
 
-/* ── Grid ── */
+/* ══════ Supervision Row (System + API + Data Files) ══════ */
+.supervision-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 2fr;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel-super {
+  background: rgba(10, 22, 40, 0.8);
+  border: 1px solid rgba(184, 148, 44, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.panel-super h2 {
+  font-size: 12px;
+  font-weight: 600;
+  color: #b8942c;
+  padding: 8px 12px;
+  background: rgba(184, 148, 44, 0.06);
+  border-bottom: 1px solid rgba(184, 148, 44, 0.12);
+}
+
+.panel-super .panel-body {
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.panel-wide { grid-column: span 2; }
+
+@media (max-width: 1000px) {
+  .supervision-row { grid-template-columns: 1fr 1fr; }
+  .panel-wide { grid-column: span 1; }
+}
+@media (max-width: 650px) {
+  .supervision-row { grid-template-columns: 1fr; }
+}
+
+/* ══════ Main Grid ══════ */
 .grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
+  gap: 12px;
 }
 
 @media (max-width: 1000px) {
   .grid { grid-template-columns: repeat(2, 1fr); }
+  .grid .panel-wide { grid-column: span 2; }
 }
 @media (max-width: 650px) {
   .grid { grid-template-columns: 1fr; }
+  .grid .panel-wide { grid-column: span 1; }
 }
 
-/* ── Panel ── */
+/* ══════ Panel ══════ */
 .panel {
   background: rgba(10, 22, 40, 0.8);
   border: 1px solid rgba(184, 148, 44, 0.2);
@@ -77,89 +134,515 @@ header h1 {
 }
 
 .panel h2 {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: #b8942c;
-  padding: 10px 14px;
+  padding: 8px 12px;
   background: rgba(184, 148, 44, 0.08);
   border-bottom: 1px solid rgba(184, 148, 44, 0.15);
   letter-spacing: 0.5px;
 }
 
 .panel-body {
-  padding: 12px 14px;
-  font-size: 13px;
-  line-height: 1.7;
-  max-height: 320px;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  max-height: 340px;
   overflow-y: auto;
 }
 
-.loading {
+.loading, .no-data {
   color: #7a8ba0;
   font-style: italic;
 }
 
-/* ── Row items ── */
+.panel-body h3 {
+  font-size: 11px;
+  color: #b8942c;
+  margin: 8px 0 4px;
+  border-bottom: 1px solid rgba(184,148,44,0.12);
+  padding-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.panel-body h4 {
+  font-size: 11px;
+  color: #7a8ba0;
+  margin: 6px 0 3px;
+}
+
+/* ══════ Row items ══════ */
 .row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.row:last-child { border-bottom: none; }
+.row .label { color: #7a8ba0; }
+.row .value { font-weight: 600; }
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+}
+
+/* ══════ Status Lights ══════ */
+.status-light {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.status-ok    { background: rgba(0,200,83,0.15); color: #00c853; }
+.status-warn  { background: rgba(255,171,0,0.15); color: #ffab00; }
+.status-error { background: rgba(255,82,82,0.15); color: #ff5252; }
+.status-gray  { background: rgba(122,139,160,0.10); color: #7a8ba0; }
+
+/* ══════ Metric Colors ══════ */
+.metric-good { color: #00c853; font-weight: 600; }
+.metric-warn { color: #ffab00; font-weight: 600; }
+.metric-bad  { color: #ff5252; font-weight: 600; }
+
+/* ══════ Verdict ══════ */
+.verdict {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.verdict-ok  { background: rgba(0,200,83,0.12); color: #00c853; }
+.verdict-warn{ background: rgba(255,171,0,0.12); color: #ffab00; }
+.verdict-bad { background: rgba(255,82,82,0.15); color: #ff5252; }
+
+.recommendation {
+  font-size: 10px;
+  color: #7a8ba0;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+/* ══════ System Status ══════ */
+.sys-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+}
+
+.sys-label { color: #7a8ba0; }
+.sys-value { font-weight: 600; color: #c8d6e5; }
+
+.sys-warning {
+  padding: 4px 8px;
+  margin: 4px 0;
+  background: rgba(255,82,82,0.12);
+  border-left: 2px solid #ff5252;
+  font-size: 10px;
+  color: #ff5252;
+}
+
+/* ══════ API Health ══════ */
+.api-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 10px;
+}
+
+.api-name {
+  font-family: monospace;
+  color: #7a8ba0;
+  font-size: 10px;
+}
+
+/* ══════ Data Files Table ══════ */
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+}
+
+.file-table th {
+  text-align: left;
+  color: #7a8ba0;
+  font-weight: 600;
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(184,148,44,0.15);
+  font-size: 10px;
+}
+
+.file-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.file-name {
+  font-family: monospace;
+  font-size: 10px;
+  color: #c8d6e5;
+}
+
+.file-time { color: #7a8ba0; font-size: 9px; }
+.file-size { color: #7a8ba0; font-size: 9px; text-align: right; }
+
+/* ══════ Prediction Capability ══════ */
+.metric-section {
+  margin-bottom: 8px;
+}
+
+.metric-group {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ic-metric {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: rgba(255,255,255,0.03);
+  min-width: 90px;
+}
+
+.ic-label {
+  font-size: 9px;
+  color: #7a8ba0;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ic-value {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.ic-samples {
+  font-size: 9px;
+  color: #5a6a7e;
+}
+
+.ic-metric.ic-train .ic-value   { color: #64b5f6; }
+.ic-metric.ic-valid .ic-value   { color: #ffab00; }
+.ic-metric.ic-forward .ic-value { color: #00c853; }
+.ic-metric.hr-train .ic-value   { color: #64b5f6; }
+.ic-metric.hr-valid .ic-value   { color: #ffab00; }
+.ic-metric.hr-forward .ic-value { color: #00c853; }
+
+/* ══════ Shadow / Champion ══════ */
+.champion-section, .shadows-section {
+  margin-bottom: 10px;
+}
+
+.champ-card {
+  background: rgba(184,148,44,0.06);
+  border: 1px solid rgba(184,148,44,0.2);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.champ-id {
+  font-family: monospace;
+  font-size: 12px;
+  color: #b8942c;
+  font-weight: 600;
+}
+
+.champ-source {
+  font-size: 10px;
+  color: #7a8ba0;
+  font-weight: 400;
+}
+
+.champ-params {
+  font-size: 10px;
+  color: #7a8ba0;
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.champ-metrics {
+  display: flex;
+  gap: 14px;
+  font-size: 11px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+/* Shadow cards */
+.shadow-card {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+}
+
+.shadow-card.shadow-ready {
+  border-color: rgba(0,200,83,0.3);
+  background: rgba(0,200,83,0.04);
+}
+
+.shadow-card.shadow-waiting {
+  border-color: rgba(122,139,160,0.2);
+}
+
+.shadow-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.shadow-id {
+  font-family: monospace;
+  font-size: 11px;
+  color: #b8942c;
+}
+
+.shadow-badge {
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.shadow-badge.shadow-ready {
+  background: rgba(0,200,83,0.15);
+  color: #00c853;
+}
+
+.shadow-badge.shadow-waiting {
+  background: rgba(122,139,160,0.10);
+  color: #7a8ba0;
+}
+
+.shadow-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 10px;
+  font-size: 10px;
+  margin-top: 4px;
+  color: #7a8ba0;
+}
+
+.shadow-stats div span {
+  color: #5a6a7e;
+}
+
+.shadow-stats strong {
+  color: #c8d6e5;
+}
+
+.shadow-failing {
+  margin-top: 4px;
+  padding: 4px 6px;
+  background: rgba(255,82,82,0.06);
+  border-radius: 3px;
+}
+
+.fail-reason {
+  font-size: 10px;
+  color: #ff5252;
+  padding: 1px 0;
+}
+
+.fail-reason::before {
+  content: '[!] ';
+  font-weight: bold;
+}
+
+/* ══════ Leakage Audit ══════ */
+.audit-stats {
+  margin: 6px 0;
+}
+
+.audit-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+}
+
+.leakage-details {
+  margin-top: 6px;
+}
+
+.leakage-item {
+  font-size: 10px;
+  color: #7a8ba0;
+  padding: 2px 0;
+}
+
+.audit-note {
+  font-size: 10px;
+  color: #7a8ba0;
+  margin-top: 6px;
+  font-style: italic;
+}
+
+/* ══════ Trading Permissions ══════ */
+.perm-detail {
+  margin: 6px 0;
+}
+
+.perm-reason {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px;
+}
+
+.perm-label { color: #7a8ba0; }
+
+.perm-gates {
+  margin-top: 6px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(184,148,44,0.12);
+}
+
+.gate-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 10px;
+}
+
+.perm-buys {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #7a8ba0;
+}
+
+.perm-reasons-list {
+  margin-top: 6px;
+}
+
+.reason-item {
+  font-size: 10px;
+  color: #ffab00;
+  padding: 2px 0;
+}
+
+/* ══════ Tasks ══════ */
+.task-item {
   display: flex;
   justify-content: space-between;
   padding: 4px 0;
   border-bottom: 1px solid rgba(255,255,255,0.04);
 }
-
-.row:last-child { border-bottom: none; }
-
-.row .label { color: #7a8ba0; }
-.row .value { font-weight: 600; }
-
-.value.good  { color: #00c853; }
-.value.warn  { color: #ffab00; }
-.value.bad   { color: #ff5252; }
-.value.muted { color: #7a8ba0; }
-
-/* ── Verdict badge ── */
-.verdict {
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 3px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.verdict.ALLOW    { background: rgba(0, 200, 83, 0.15); color: #00c853; }
-.verdict.CAUTIOUS { background: rgba(255, 171, 0, 0.15); color: #ffab00; }
-.verdict.REDUCE   { background: rgba(255, 82, 82, 0.12); color: #ff5252; }
-.verdict.BLOCK    { background: rgba(255, 82, 82, 0.2); color: #ff1744; }
-
-/* ── Task item ── */
-.task-item {
-  display: flex;
-  justify-content: space-between;
-  padding: 5px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-}
-
 .task-item:last-child { border-bottom: none; }
 
-.task-name { font-size: 12px; }
-.task-status { font-size: 11px; }
+.task-name { font-size: 11px; }
+.task-status { font-size: 10px; font-weight: 600; }
 
-.task-status.ok     { color: #00c853; }
-.task-status.waiting{ color: #7a8ba0; }
-.task-status.failed { color: #ff5252; }
-.task-status.running{ color: #2196f3; }
+.task-ok      { color: #00c853; }
+.task-waiting { color: #7a8ba0; }
+.task-failed  { color: #ff5252; }
+.task-running { color: #2196f3; }
 
-/* ── Failure list ── */
-.failure-item {
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
-  font-size: 12px;
+/* ══════ Verification Summary ══════ */
+.factor-list {
+  margin-top: 6px;
 }
 
-.failure-item:last-child { border-bottom: none; }
-.failure-time { color: #7a8ba0; font-size: 11px; }
+.factor-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+  font-size: 10px;
+}
 
-/* ── Scrollbar ── */
-.panel-body::-webkit-scrollbar { width: 4px; }
-.panel-body::-webkit-scrollbar-track { background: transparent; }
-.panel-body::-webkit-scrollbar-thumb { background: rgba(184,148,44,0.2); border-radius: 2px; }
+/* ══════ Calibration ══════ */
+.calib-bin {
+  margin: 6px 0;
+}
+
+.calib-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+}
+
+.calib-bar-wrap {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  margin: 3px 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.calib-bar-fill {
+  height: 100%;
+  background: rgba(184,148,44,0.5);
+  border-radius: 3px;
+  transition: width 0.5s;
+}
+
+.calib-bar-target {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  width: 2px;
+  background: #00c853;
+}
+
+/* ══════ Change Log ══════ */
+.changelog-entry {
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 10px;
+}
+
+.changelog-entry:last-child { border-bottom: none; }
+
+.cl-module {
+  font-family: monospace;
+  font-size: 10px;
+  color: #b8942c;
+  font-weight: 600;
+}
+
+.cl-purpose {
+  color: #7a8ba0;
+  margin: 2px 0;
+}
+
+.cl-checks {
+  display: flex;
+  gap: 10px;
+  font-size: 9px;
+}
+
+/* ══════ Failure list ══════ */
+.failure-item {
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  font-size: 11px;
+}
+.failure-item:last-child { border-bottom: none; }
+.failure-time { color: #7a8ba0; font-size: 10px; }
+
+/* ══════ Scrollbar ══════ */
+.panel-body::-webkit-scrollbar,
+.panel-super .panel-body::-webkit-scrollbar { width: 4px; }
+.panel-body::-webkit-scrollbar-track,
+.panel-super .panel-body::-webkit-scrollbar-track { background: transparent; }
+.panel-body::-webkit-scrollbar-thumb,
+.panel-super .panel-body::-webkit-scrollbar-thumb { background: rgba(184,148,44,0.15); border-radius: 2px; }

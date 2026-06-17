@@ -1644,6 +1644,362 @@ function buildSummary(dailyResults, factorMatrix, comboResults, paramResults) {
   };
 }
 
+// ====== v3.3.1: Walk-Forward Split ======
+
+var WALK_FORWARD_REPORT_FILE = path.join(EVOLUTION_DIR, 'walk_forward_report.json');
+
+/**
+ * Split trading days into train/validate/forward sets for out-of-sample evaluation.
+ * Uses config.WALK_FORWARD date ranges.
+ */
+function splitTradingDays(allDays, config) {
+  var wf = config || {};
+  var trainStart = wf.trainStart || 2021;
+  var trainEnd = wf.trainEnd || 2024;
+  var validateStart = wf.validateStart || 2025;
+  var validateEnd = wf.validateEnd || 2025;
+  var forwardStart = wf.forwardStart || 2026;
+  var forwardEnd = wf.forwardEnd || 2026;
+
+  var trainDays = [], validateDays = [], forwardDays = [];
+  for (var i = 0; i < allDays.length; i++) {
+    var year = parseInt(allDays[i].slice(0, 4), 10);
+    if (year >= trainStart && year <= trainEnd) {
+      trainDays.push(allDays[i]);
+    } else if (year >= validateStart && year <= validateEnd) {
+      validateDays.push(allDays[i]);
+    } else if (year >= forwardStart && year <= forwardEnd) {
+      forwardDays.push(allDays[i]);
+    }
+  }
+  return { trainDays: trainDays, validateDays: validateDays, forwardDays: forwardDays };
+}
+
+/**
+ * Compute out-of-sample factor effectiveness: re-run factor scoring on validation data,
+ * using the same factor definitions but measuring against actual forward returns.
+ */
+function computeOOSEffectiveness(trainedFactors, validationDailyResults, horizon) {
+  var horKey = 'T+' + horizon;
+  var trainedMatrix = (trainedFactors.matrix && trainedFactors.matrix[horKey]) ? trainedFactors.matrix[horKey] : {};
+  var oosEffectiveness = {};
+
+  // For each validation day, count how many factor signals materialized
+  FACTORS.forEach(function(f) {
+    var totalSignals = 0, totalHits = 0, totalReturn = 0;
+    var returns = [];
+
+    for (var d = 0; d < validationDailyResults.length; d++) {
+      var day = validationDailyResults[d];
+      if (!day.stocks) continue;
+      for (var s = 0; s < day.stocks.length; s++) {
+        var stock = day.stocks[s];
+        if (!stock.signals || stock.signals.indexOf(f.id) < 0) continue;
+        totalSignals++;
+        var fwd = stock.fwdReturns ? stock.fwdReturns[horizon] : null;
+        if (fwd === null || fwd === undefined) continue;
+        totalReturn += fwd;
+        returns.push(fwd);
+        if (fwd > 0) totalHits++;
+      }
+    }
+
+    oosEffectiveness[f.id] = {
+      id: f.id,
+      name: f.name,
+      category: f.category,
+      totalSignals: totalSignals,
+      totalHits: totalHits,
+      hitRate: totalSignals > 0 ? +(totalHits / totalSignals * 100).toFixed(2) : null,
+      avgReturn: returns.length > 0 ? +(totalReturn / returns.length).toFixed(2) : null,
+      // Compare to trained: how much did hit rate decay OOS?
+      trainHitRate: trainedMatrix[f.id] ? trainedMatrix[f.id].hitRate : null,
+      oostrainGap: (trainedMatrix[f.id] && trainedMatrix[f.id].hitRate != null && totalSignals > 0)
+        ? +(trainedMatrix[f.id].hitRate - (totalHits / totalSignals * 100)).toFixed(2) : null,
+    };
+  });
+
+  return oosEffectiveness;
+}
+
+/**
+ * Run walk-forward validation: train on 2021-2024, validate on 2025, forward on 2026.
+ * Produces walk_forward_report.json with IC decomposition and overfit analysis.
+ */
+function runWalkForwardValidation(trainedFactors, validationDailyResults, forwardDailyResults) {
+  var wfConfig;
+  try {
+    var config = require('../config');
+    wfConfig = config.WALK_FORWARD || {};
+  } catch (_) { wfConfig = {}; }
+
+  var report = {
+    generatedAt: new Date().toISOString(),
+    config: {
+      trainRange: (wfConfig.trainStart || 2021) + '-' + (wfConfig.trainEnd || 2024),
+      validateRange: (wfConfig.validateStart || 2025) + '-' + (wfConfig.validateEnd || 2025),
+      forwardRange: (wfConfig.forwardStart || 2026) + '-' + (wfConfig.forwardEnd || 2026),
+    },
+    splits: {
+      train: { days: trainedFactors.config ? trainedFactors.config.sampleDays : 0 },
+      validate: { days: validationDailyResults.length },
+      forward: { days: forwardDailyResults.length },
+    },
+    icDecomposition: {},
+    oostrainGaps: {},
+    icDecayCurve: [],
+    verdict: 'unknown',
+  };
+
+  // Compute OOS effectiveness for each horizon
+  var horizons = [1, 3, 5, 10, 20];
+  horizons.forEach(function(h) {
+    var oos = computeOOSEffectiveness(trainedFactors, validationDailyResults, h);
+    var forwardEff = computeOOSEffectiveness(trainedFactors, forwardDailyResults, h);
+
+    // Average hit rate across all factors
+    var trainHitRates = [], valHitRates = [], fwdHitRates = [];
+    Object.keys(oos).forEach(function(fid) {
+      var f = oos[fid];
+      if (f.trainHitRate != null) trainHitRates.push(f.trainHitRate);
+      if (f.hitRate != null) valHitRates.push(f.hitRate);
+    });
+    Object.keys(forwardEff).forEach(function(fid) {
+      var f = forwardEff[fid];
+      if (f.hitRate != null) fwdHitRates.push(f.hitRate);
+    });
+
+    function avg(arr) { return arr.length > 0 ? arr.reduce(function(a,b) { return a+b; }, 0) / arr.length : null; }
+
+    var avgTrain = avg(trainHitRates);
+    var avgVal = avg(valHitRates);
+    var avgFwd = avg(fwdHitRates);
+
+    report.icDecomposition['T+' + h] = {
+      trainHitRate: avgTrain,
+      validateHitRate: avgVal,
+      forwardHitRate: avgFwd,
+      oostrainGap: (avgTrain != null && avgVal != null) ? +(avgTrain - avgVal).toFixed(2) : null,
+      overfitRatio: (avgTrain != null && avgFwd != null && avgTrain > 0) ? +((avgTrain - avgFwd) / avgTrain).toFixed(4) : null,
+    };
+
+    report.icDecayCurve.push({
+      horizon: h,
+      trainHR: avgTrain,
+      validateHR: avgVal,
+      forwardHR: avgFwd,
+    });
+  });
+
+  // Overall verdict
+  var t5 = report.icDecomposition['T+5'] || {};
+  if (t5.overfitRatio != null) {
+    if (t5.overfitRatio > 0.3) {
+      report.verdict = 'significant_overfit';
+      report.recommendation = 'Reduce model complexity; consider factor pruning or regularization';
+    } else if (t5.overfitRatio > 0.15) {
+      report.verdict = 'moderate_decay';
+      report.recommendation = 'Monitor IC decay; apply EMA smoothing to factor weights';
+    } else if (t5.overfitRatio < 0) {
+      report.verdict = 'generalizing';
+      report.recommendation = 'Model generalizes well; consider expanding universe';
+    } else {
+      report.verdict = 'stable';
+      report.recommendation = 'Continue monitoring; no action needed';
+    }
+  }
+
+  // Per-factor OOS gaps from T+5
+  report.oostrainGaps = computeOOSEffectiveness(trainedFactors, validationDailyResults, 5);
+
+  return report;
+}
+
+/**
+ * Run bootstrap with explicit train/validate/forward split for out-of-sample evaluation.
+ */
+async function runBootstrapWithSplit(options) {
+  var wfConfig;
+  try {
+    wfConfig = require('../config').WALK_FORWARD || {};
+  } catch (_) { wfConfig = {}; }
+  var icConfig = require('../config').IC_DECOMPOSITION || {};
+
+  console.log('');
+  console.log('╔══════════════════════════════════════════════╗');
+  console.log('║   Walk-Forward Split Mode (v3.3.1)          ║');
+  console.log('║   Train: ' + (wfConfig.trainStart || 2021) + '-' + (wfConfig.trainEnd || 2024) +
+    '  Validate: ' + (wfConfig.validateStart || 2025) + '  Forward: ' + (wfConfig.forwardStart || 2026) + '      ║');
+  console.log('╚══════════════════════════════════════════════╝');
+  console.log('');
+
+  // Step 1: Train on training period
+  console.log('=== STEP 1/3: Training (' + (wfConfig.trainStart || 2021) + '-' + (wfConfig.trainEnd || 2024) + ') ===');
+  var trainOptions = Object.assign({}, options, {
+    startYear: wfConfig.trainStart || 2021,
+    endYear: wfConfig.trainEnd || 2024,
+  });
+  var trainedResult = await runBootstrap(trainOptions);
+
+  // Step 2: Replay validation period (2025) using kline data
+  console.log('');
+  console.log('=== STEP 2/3: Validation (' + (wfConfig.validateStart || 2025) + ') ===');
+
+  var tradingDays = generateTradingDays(wfConfig.trainStart || 2021, wfConfig.forwardEnd || 2026);
+  var splits = splitTradingDays(tradingDays, wfConfig);
+
+  var validationResults;
+  try {
+    validationResults = await replayDaysInRange(splits.validateDays, options.skipDownload);
+    console.log('Validation replay: ' + (validationResults ? validationResults.length : 0) + ' days');
+  } catch (e) {
+    console.log('Validation replay failed: ' + e.message);
+    validationResults = [];
+  }
+
+  // Step 3: Replay forward period (2026)
+  console.log('');
+  console.log('=== STEP 3/3: Forward (' + (wfConfig.forwardStart || 2026) + ') ===');
+
+  var forwardResults;
+  try {
+    forwardResults = await replayDaysInRange(splits.forwardDays, options.skipDownload);
+    console.log('Forward replay: ' + (forwardResults ? forwardResults.length : 0) + ' days');
+  } catch (e) {
+    console.log('Forward replay failed: ' + e.message);
+    forwardResults = [];
+  }
+
+  // Step 4: Compute walk-forward report
+  console.log('');
+  console.log('=== Computing Walk-Forward Report ===');
+
+  // Load the trained factor effectiveness
+  var trainedFactors;
+  try {
+    trainedFactors = JSON.parse(fs.readFileSync(FACTOR_EFFECTIVENESS_FILE, 'utf8'));
+  } catch (e) {
+    console.log('WARN: Cannot load trained factors, building from memory');
+    trainedFactors = { matrix: {}, config: { sampleDays: trainedResult.sampleDays || 0 } };
+  }
+
+  var wfReport = runWalkForwardValidation(
+    trainedFactors,
+    validationResults || [],
+    forwardResults || []
+  );
+
+  // Add training summary
+  if (trainedResult.summary) {
+    wfReport.trainSummary = trainedResult.summary;
+  }
+
+  writeJSON(WALK_FORWARD_REPORT_FILE, wfReport);
+  console.log('Walk-forward report saved → ' + WALK_FORWARD_REPORT_FILE);
+
+  // Also save IC decomposition
+  var icDecompositionFile = path.join(EVOLUTION_DIR, 'ic_decomposition.json');
+  var icDecomp = {
+    generatedAt: new Date().toISOString(),
+    trainingIC: null, // bootstrap doesn't compute rank IC; will be populated by verification_dashboard
+    validationIC: null,
+    forwardIC: null,
+    hitRateDecomposition: wfReport.icDecomposition,
+    icDecayCurve: wfReport.icDecayCurve,
+    overfitRatio: wfReport.icDecomposition['T+5'] ? wfReport.icDecomposition['T+5'].overfitRatio : null,
+    verdict: wfReport.verdict,
+    recommendation: wfReport.recommendation,
+  };
+  writeJSON(icDecompositionFile, icDecomp);
+  console.log('IC decomposition saved → ' + icDecompositionFile);
+
+  return wfReport;
+}
+
+/**
+ * Replay a specific set of days without re-downloading klines.
+ * Returns dailyResults compatible with computeFactorEffectiveness.
+ */
+async function replayDaysInRange(targetDays, skipDownload) {
+  if (!targetDays || targetDays.length === 0) return [];
+
+  var klineFiles;
+  try {
+    klineFiles = fs.readdirSync(KLINES_DIR).filter(function(f) { return f.endsWith('.json'); });
+  } catch (e) { return []; }
+
+  // Sample every 3rd day for efficiency, same as main bootstrap
+  var sampledDays = [];
+  for (var i = 0; i < targetDays.length; i += 3) {
+    sampledDays.push(targetDays[i]);
+  }
+  // Include last 60 densely
+  var last60 = targetDays.slice(-60);
+  last60.forEach(function(d) {
+    if (sampledDays.indexOf(d) < 0) sampledDays.push(d);
+  });
+  sampledDays.sort();
+
+  var computeHiddenSignals, computeCompositeScore;
+  try { computeHiddenSignals = require('../factors/hidden_signals').computeHiddenSignals; } catch (_) {}
+  try {
+    computeCompositeScore = require('../factors/composite').computeCompositeScore;
+  } catch (_) {
+    try { computeCompositeScore = require('../factors/composite').computeScore; } catch (_2) {}
+  }
+
+  var dailyResults = [];
+  for (var d = 0; d < sampledDays.length; d++) {
+    var date = sampledDays[d];
+    var klineSnapshot = [];
+    for (var f = 0; f < klineFiles.length; f++) {
+      var code = klineFiles[f].replace('.json', '');
+      if (!/^\d{6}$/.test(code)) continue;
+      try {
+        var klineData = JSON.parse(fs.readFileSync(path.join(KLINES_DIR, code + '.json'), 'utf8'));
+        if (!klineData || !klineData.klines) continue;
+        var klines = klineData.klines;
+        var dateIdx = -1;
+        for (var ki = 0; ki < klines.length; ki++) {
+          if (klines[ki].date === date) { dateIdx = ki; break; }
+        }
+        if (dateIdx < MIN_KLINES_FOR_FACTOR) continue;
+        var todayKline = klines[dateIdx];
+        var fwdReturns = {};
+        FORWARD_HORIZONS.forEach(function(h) {
+          var fwdIdx = dateIdx + h;
+          fwdReturns[h] = (fwdIdx < klines.length) ? (klines[fwdIdx].close - todayKline.close) / todayKline.close * 100 : null;
+        });
+        klineSnapshot.push({
+          code: code, close: todayKline.close, open: todayKline.open,
+          high: todayKline.high, low: todayKline.low, volume: todayKline.volume,
+          changePercent: dateIdx >= 1 ? ((todayKline.close - klines[dateIdx - 1].close) / klines[dateIdx - 1].close * 100) : 0,
+          klines: klines.slice(0, dateIdx + 1),
+          fwdReturns: fwdReturns,
+        });
+      } catch (_) {}
+    }
+    if (klineSnapshot.length < 10) continue;
+
+    var dayResult = replayDay(date, klineSnapshot, {
+      computeHiddenSignals: computeHiddenSignals,
+      computeCompositeScore: computeCompositeScore,
+    });
+    dayResult.stocks.forEach(function(s) {
+      for (var ki = 0; ki < klineSnapshot.length; ki++) {
+        if (klineSnapshot[ki].code === s.code) { s.fwdReturns = klineSnapshot[ki].fwdReturns; break; }
+      }
+    });
+    dailyResults.push(dayResult);
+
+    if ((d + 1) % 50 === 0 || d === sampledDays.length - 1) {
+      process.stdout.write('\r  Replay: ' + (d + 1) + '/' + sampledDays.length + ' days...');
+    }
+  }
+  console.log('');
+  return dailyResults;
+}
+
 // ====== CLI ======
 
 if (require.main === module) {
@@ -1655,10 +2011,12 @@ if (require.main === module) {
     if (args[i] === '--skipDownload') opts.skipDownload = true;
     if (args[i] === '--universe' && i + 1 < args.length) opts.universe = args[++i];
     if (args[i] === '--startYear' && i + 1 < args.length) opts.startYear = parseInt(args[++i], 10);
-    if (args[i] === '--endYear' && i + 1 < args.length) opts.endYear = parseInt(args[++i], 10);
+    if (args[i] === "--endYear" && i + 1 < args.length) opts.endYear = parseInt(args[++i], 10);
+    if (args[i] === "--split") opts.splitMode = true;
   }
 
-  runBootstrap(opts).then(function(result) {
+  var runFn = opts.splitMode ? runBootstrapWithSplit : runBootstrap;
+  runFn(opts).then(function(result) {
     if (result.error) {
       console.error('Bootstrap failed:', result.error);
       process.exit(1);
@@ -1670,4 +2028,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runBootstrap, incrementalUpdate, generateAutoReport };
+module.exports = { runBootstrap, runBootstrapWithSplit, incrementalUpdate, generateAutoReport, splitTradingDays, runWalkForwardValidation };

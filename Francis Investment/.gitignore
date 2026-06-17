@@ -46,5 +46,14 @@ report-engine/data/simfolio/stop_loss_cooldowns.json
 report-engine/data/daily_reflections/
 report-engine/data/evolution/model_registry.json
 
+# v3.3.1: Walk-forward, IC decomposition, calibration, leakage audit
+report-engine/data/evolution/walk_forward_report.json
+report-engine/data/evolution/ic_decomposition.json
+report-engine/data/evolution/shadow_forward_samples.json
+report-engine/data/evolution/demotion_log.json
+report-engine/data/evolution/calibration.json
+report-engine/data/verification/leakage_audit.json
+report-engine/data/verification/calibration.json
+
 # Secrets
 .env

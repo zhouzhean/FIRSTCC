@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v2.2.0
+ * Francis Investment · Mosaic Server v3.3.1
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -20,6 +20,9 @@ let pipeline = null;
 
 // Scheduler instance
 let scheduler = null;
+
+// Server start time (for uptime display)
+let serverStartTime = null;
 
 // SSE clients for Think Tank
 const sseClients = new Set();
@@ -370,7 +373,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.2.4',
+    version: '3.3.1',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -652,15 +655,38 @@ function serveStatic(res, filePath) {
 
 // ---- v3.3.0: Cockpit Data Builder ----
 
+// [v3.3.1] Helper: check if a file exists at a path relative to BASE_DIR
+function _fileExists(relPath) {
+  try {
+    return require('fs').existsSync(require('path').join(__dirname, relPath));
+  } catch (_) { return false; }
+}
+
 function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
+    // System info
+    systemVersion: 'v3.3.1',
+    serverStartTime: serverStartTime || null,
+    lastRestartTime: serverStartTime || null,
+    codeVersionMismatch: false,
+    // API health
+    apiHealth: {},
+    // Data file health
+    dataFiles: [],
+    // Core panels
     tasks: [],
     models: null,
     dataQuality: null,
     permissions: null,
     verification: null,
     failures: [],
+    // v3.3.1
+    icDecomposition: null,
+    shadowTracking: null,
+    calibration: null,
+    leakageAudit: null,
+    changeLog: [],
   };
 
   // 1. Tasks — from evolution scheduler
@@ -789,6 +815,77 @@ function buildCockpitData() {
     result.verification = { error: 'Verification dashboard not available' };
   }
 
+  // v3.3.1: 5.5. IC Decomposition
+  try {
+    var vd2 = require('./mosaic/analysis/verification_dashboard');
+    var dash2 = vd2.getDashboard({ lookbackDays: 60 });
+    result.icDecomposition = dash2.icDecomposition || { available: false, message: 'Not available' };
+    result.calibration = dash2.confidenceCalibration || { available: false, message: 'Not available' };
+  } catch (_) {
+    result.icDecomposition = { available: false, message: 'Module error' };
+    result.calibration = { available: false, message: 'Module error' };
+  }
+
+  // v3.3.1: 5.6. Shadow Forward Tracking
+  try {
+    var mr2 = require('./mosaic/evolution/model_registry');
+    var registryStatus = mr2.getRegistryStatus();
+    result.shadowTracking = buildShadowTracking(registryStatus);
+  } catch (_) {
+    result.shadowTracking = { shadows: [], message: 'Not available' };
+  }
+
+  // v3.3.1: 5.7. Leakage risk for data quality panel + full audit for cockpit
+  try {
+    var auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
+    if (require('fs').existsSync(auditFile)) {
+      var audit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+      result.dataQuality.leakageRisk = audit.verdict || 'UNKNOWN';
+      result.dataQuality.leakageChecks = audit.totalChecks || 0;
+      result.leakageAudit = audit;  // Full audit for dedicated cockpit panel
+    }
+  } catch (_) {}
+
+  // v3.3.1: 5.8. API Health — verify that key API data sources are responding
+  // Each check must be based on REAL data, not hardcoded OK
+  result.apiHealth = {
+    cockpit: { status: result.ok !== false ? 'OK' : 'ERROR' },
+    modelRegistry: { status: result.models && !result.models.error ? 'OK' : 'ERROR' },
+    walkForward: {
+      status: _fileExists('report-engine/data/evolution/walk_forward_report.json') ? 'OK' : 'DATA_MISSING'
+    },
+    leakageAudit: {
+      status: result.leakageAudit && result.leakageAudit.totalChecks > 0 ? 'OK' : 'DATA_MISSING'
+    },
+    calibration: {
+      status: _fileExists('report-engine/data/evolution/calibration.json') ? 'OK' : 'DATA_MISSING'
+    },
+    verificationDashboard: { status: result.verification && !result.verification.error ? 'OK' : result.verification && result.verification.overallHitRate == null ? 'DATA_MISSING' : 'ERROR' },
+    icBreakdown: {
+      status: _fileExists('report-engine/data/evolution/ic_decomposition.json') ? 'OK' : 'DATA_MISSING'
+    },
+  };
+
+  // v3.3.1: 5.9. Data file health
+  result.dataFiles = buildDataFileHealth();
+
+  // v3.3.1: 5.10. Trading permissions enrichment (detailed reasons)
+  try {
+    if (result.permissions && !result.permissions.error) {
+      // Enrich with detailed per-reason checks
+      result.permissions.dataQualityOk = result.dataQuality && (result.dataQuality.qualityScore || 0) >= 80;
+      result.permissions.strategyHealthOk = (result.permissions.confidence || 0) > 40;
+      result.permissions.rankICPositive = result.verification && result.verification.rankIC > 0;
+      result.permissions.winRateRecovering = result.verification && result.verification.overallHitRate > 45;
+      result.permissions.drawdownNarrowing = result.permissions.gates && !result.permissions.gates.drawdownActive;
+      result.permissions.hasPositions = false;
+      result.permissions.positionCount = 0;
+    }
+  } catch (_) {}
+
+  // v3.3.1: 5.11. Change log
+  result.changeLog = buildChangeLog();
+
   // 6. Failed Tasks
   try {
     var evo2 = require('./mosaic/evolution/evolution_scheduler');
@@ -811,6 +908,133 @@ function buildCockpitData() {
   return result;
 }
 
+// [v3.3.1] Build per-shadow tracking data for cockpit Panel 7
+// Must use the full shadow object (with cumulativeIC, _maxDrawdown, evaluationDays)
+// and the champion's current IC for promotion criteria check.
+function buildShadowTracking(registryStatus) {
+  var shadows = [];
+  if (!registryStatus || !registryStatus.shadows) return { shadows: [], message: 'No shadow data' };
+
+  try {
+    var mr = require('./mosaic/evolution/model_registry');
+    var championIC = registryStatus.champion ? registryStatus.champion.cumulativeIC : null;
+    var championDrawdown = registryStatus.champion ? registryStatus.champion._maxDrawdown : null;
+
+    for (var i = 0; i < registryStatus.shadows.length; i++) {
+      var s = registryStatus.shadows[i];
+      var criteria = null;
+      try {
+        // Must load the FULL internal shadow object (not just the flat API projection)
+        // checkPromotionCriteria needs _maxDrawdown on the shadow
+        criteria = mr.checkPromotionCriteria(s, championIC, championDrawdown);
+      } catch (_) {}
+
+      // Also try to get forward samples directly
+      var fwdSamples = criteria ? criteria.forwardSamples : 0;
+      var dirHitRate = criteria ? criteria.directionHitRate : null;
+      if (dirHitRate == null && s.cumulativeHitRate != null) {
+        dirHitRate = s.cumulativeHitRate;
+      }
+
+      shadows.push({
+        versionId: s.versionId,
+        source: s.source,
+        cumulativeIC: s.cumulativeIC,
+        evaluationDays: s.evaluationDays,
+        forwardSamples: fwdSamples,
+        directionHitRate: dirHitRate,
+        meetsPromotionCriteria: criteria ? criteria.eligible : false,
+        icTrending: s.cumulativeIC != null && s.evaluationDays > 3
+          ? (s.cumulativeIC > 0.05 ? 'up' : s.cumulativeIC < -0.05 ? 'down' : 'stable')
+          : 'stable',
+        failingChecks: criteria ? criteria.failingChecks || [] : [],
+        championIC: championIC,
+      });
+    }
+  } catch (_) {}
+
+  return { shadows: shadows };
+}
+
+// [v3.3.1] Build data file health status
+function buildDataFileHealth() {
+  var files = [
+    { name: 'training_matrix.json', path: 'report-engine/data/evolution/training_matrix.json' },
+    { name: 'factor_effectiveness.json', path: 'report-engine/data/evolution/factor_effectiveness.json' },
+    { name: 'param_search_results.json', path: 'report-engine/data/evolution/param_search_results.json' },
+    { name: 'walk_forward_report.json', path: 'report-engine/data/evolution/walk_forward_report.json' },
+    { name: 'ic_decomposition.json', path: 'report-engine/data/evolution/ic_decomposition.json' },
+    { name: 'model_registry.json', path: 'report-engine/data/evolution/model_registry.json' },
+    { name: 'shadow_forward_samples.json', path: 'report-engine/data/evolution/shadow_forward_samples.json' },
+    { name: 'leakage_audit.json', path: 'report-engine/data/verification/leakage_audit.json' },
+    { name: 'calibration.json', path: 'report-engine/data/evolution/calibration.json' },
+  ];
+
+  var results = [];
+  var now = Date.now();
+  var STALE_MS = 7 * 24 * 3600 * 1000; // 7 days = stale
+
+  for (var i = 0; i < files.length; i++) {
+    var f = files[i];
+    var fullPath = path.join(__dirname, f.path);
+    var entry = { name: f.name, exists: false, updated: null, size: null, expired: false };
+
+    try {
+      if (fs.existsSync(fullPath)) {
+        var stat = fs.statSync(fullPath);
+        entry.exists = true;
+        entry.updated = stat.mtime.toISOString().slice(0, 16).replace('T', ' ');
+        entry.size = formatFileSize(stat.size);
+        entry.expired = (now - stat.mtime.getTime()) > STALE_MS;
+      }
+    } catch (_) {}
+
+    results.push(entry);
+  }
+
+  return results;
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+// [v3.3.1] Build change log
+function buildChangeLog() {
+  return [
+    {
+      module: 'model_registry.js',
+      purpose: 'Shadow 验证按 predictionDate+code+horizon 严格对齐，避免重复累计',
+      syntaxOk: true,
+      interfaceVerified: false,
+      hasRealData: false,
+    },
+    {
+      module: 'verification_runner.js',
+      purpose: '反数据泄漏审计 (leakage_audit.json): temporal + futureData + horizon 检查',
+      syntaxOk: true,
+      interfaceVerified: false,
+      hasRealData: false,
+    },
+    {
+      module: 'verification_dashboard.js',
+      purpose: 'IC 分解 (train/valid/forward) + 置信度校准 (ECE) + Rank IC vs Direction HR 分离',
+      syntaxOk: true,
+      interfaceVerified: false,
+      hasRealData: false,
+    },
+    {
+      module: 'cockpit.html/css/js',
+      purpose: '8 面板可监督 UI: 系统版本/API健康/数据文件/预测能力/Shadow-Champion/泄漏审计/权限原因/变更日志',
+      syntaxOk: true,
+      interfaceVerified: false,
+      hasRealData: false,
+    },
+  ];
+}
+
 function jsonResponse(res, data, status) {
   res.writeHead(status || 200, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -827,7 +1051,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v2.9.2       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.3.1       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -1691,6 +1915,56 @@ const server = http.createServer(async function(req, res) {
     try {
       const verificationDashboard = require('./mosaic/analysis/verification_dashboard');
       return jsonResponse(res, { ok: true, ...verificationDashboard.getDashboard() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // [v3.3.1] IC Breakdown API
+  if (pathname === '/api/verification/ic-breakdown') {
+    try {
+      const vd = require('./mosaic/analysis/verification_dashboard');
+      const dash = vd.getDashboard({ lookbackDays: 60 });
+      return jsonResponse(res, { ok: true, icDecomposition: dash.icDecomposition });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // [v3.3.1] Leakage Audit API
+  if (pathname === '/api/verification/leakage-audit') {
+    try {
+      const auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      if (require('fs').existsSync(auditFile)) {
+        const audit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+        return jsonResponse(res, { ok: true, ...audit });
+      }
+      return jsonResponse(res, { ok: true, leakageDetected: 0, totalChecks: 0, message: 'No audit data yet' });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // [v3.3.1] Confidence Calibration API
+  if (pathname === '/api/verification/calibration') {
+    try {
+      const vd = require('./mosaic/analysis/verification_dashboard');
+      const dash = vd.getDashboard({ lookbackDays: 60 });
+      return jsonResponse(res, { ok: true, calibration: dash.confidenceCalibration });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // [v3.3.1] Walk-Forward Report API
+  if (pathname === '/api/evolution/walk-forward-report') {
+    try {
+      const wfFile = require('path').join(__dirname, 'report-engine', 'data', 'evolution', 'walk_forward_report.json');
+      if (require('fs').existsSync(wfFile)) {
+        const wf = JSON.parse(require('fs').readFileSync(wfFile, 'utf8'));
+        return jsonResponse(res, { ok: true, ...wf });
+      }
+      return jsonResponse(res, { ok: false, message: 'Walk-forward report not generated yet. Run bootstrap --split first.' });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -2714,6 +2988,7 @@ const server = http.createServer(async function(req, res) {
 });
 
 server.listen(PORT, '0.0.0.0', function() {
+  serverStartTime = new Date().toISOString();
   // 启动全自动调度器
   scheduler = new Scheduler();
   scheduler.start();

@@ -1098,27 +1098,47 @@ function _drawSectorHeatmap(canvas) {
 
     var row = matrix[i] || [];
     for (var j = 0; j < Math.min(row.length, cols); j++) {
-      var val = row[j];
+      var cell = row[j];
       var x = pad.left + j * cellW + 1;
       var y = pad.top + i * cellH + 1;
       var cw = cellW - 2;
       var ch = cellH - 2;
 
-      // Color: negative=red, positive=green, intensity by abs(value)
-      var intensity = Math.min(Math.abs(val || 0) / 5, 1);
-      if ((val || 0) >= 0) {
-        ctx.fillStyle = 'rgba(22, 163, 74, ' + (0.2 + intensity * 0.7) + ')';
+      // Extract score from cell object {rel, score} or plain number
+      var cellScore, cellLabel;
+      if (typeof cell === 'object' && cell !== null) {
+        cellScore = cell.score || 0;
+        cellLabel = cell.rel || '-';
       } else {
-        ctx.fillStyle = 'rgba(220, 38, 38, ' + (0.2 + intensity * 0.7) + ')';
+        cellScore = cell || 0;
+        cellLabel = cellScore > 0 ? '+' + cellScore.toFixed(1) + '%' : (cellScore < 0 ? cellScore.toFixed(1) + '%' : '-');
+      }
+
+      // Color based on relationship type: leading=green, lagging=red, synced=yellow
+      if (cellLabel === '领先') {
+        ctx.fillStyle = 'rgba(22, 163, 74, ' + (0.3 + Math.min(cellScore/100, 1) * 0.6) + ')';
+      } else if (cellLabel === '滞后') {
+        ctx.fillStyle = 'rgba(220, 38, 38, ' + (0.3 + Math.min(cellScore/100, 1) * 0.6) + ')';
+      } else if (cellLabel === '同步') {
+        ctx.fillStyle = 'rgba(184, 148, 44, ' + (0.2 + Math.min(cellScore/100, 1) * 0.5) + ')';
+      } else {
+        // Diagonal '-' or fallback
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.15)';
       }
       ctx.fillRect(x, y, cw, ch);
 
-      // Show value in cell
-      if (cellW > 40) {
+      // Diagonal cells get gray background
+      if (i === j) {
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.08)';
+        ctx.fillRect(x, y, cw, ch);
+      }
+
+      // Show label in cell if wide enough
+      if (cellW > 40 && i !== j) {
         ctx.fillStyle = '#1e293b';
-        ctx.font = '9px -apple-system, "Microsoft YaHei", sans-serif';
+        ctx.font = '10px -apple-system, "Microsoft YaHei", sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText((val || 0).toFixed(1) + '%', x + cw / 2, y + ch / 2 + 3);
+        ctx.fillText(cellLabel, x + cw / 2, y + ch / 2 + 3);
       }
     }
   }

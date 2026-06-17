@@ -409,6 +409,12 @@ module.exports = {
     trackSectors: true,                             // 是否跟踪板块级别的 shadow 表现
     minEvaluationDays: 5,                           // Shadow 至少运行 5 天才能晋升
     minVerificationSamples: 30,                     // 最少验证样本数才评估
+    // v3.3.1: Additional promotion checks
+    minForwardSamplesPerShadow: 100,                // Per-shadow forward samples (not total)
+    minDirectionHitRate: 0.52,                      // >52% direction accuracy required
+    requirePostCostPositive: true,                  // Avg return after costs > 0
+    maxDrawdownNotWorse: true,                      // Shadow drawdown <= champion drawdown
+    requireCalibrationCheck: true,                  // High-conf predictions must be more accurate
   },
 
   MODEL_REGISTRY: {
@@ -416,6 +422,8 @@ module.exports = {
     maxVersions: 20,                                // 最多保留 20 个历史版本
     minSampleWindow: 10,                            // 最少 10 个交易日样本才考虑升级
     archiveDir: 'report-engine/data/evolution/versions/',
+    forwardSamplesFile: 'report-engine/data/evolution/shadow_forward_samples.json',
+    demotionLogFile: 'report-engine/data/evolution/demotion_log.json',
   },
 
   // ---- v3.3.0: Auto-Pause (Risk Self-Discipline) ----
@@ -443,4 +451,57 @@ module.exports = {
 
   // ---- v3.3.0: Stop-Loss Cooldown ----
   STOP_LOSS_COOLDOWN_DAYS: 4,                       // 止损后 4 个交易日内不买回同一只股票
+
+  // ---- v3.3.1: Walk-Forward Validation (Out-of-Sample) ----
+  WALK_FORWARD: {
+    enabled: true,
+    trainStart: 2021,
+    trainEnd: 2024,
+    validateStart: 2025,
+    validateEnd: 2025,
+    forwardStart: 2026,
+    forwardEnd: 2026,
+    minTrainDays: 200,
+    minValidateDays: 60,
+    expandingWindow: true,          // true=expanding, false=rolling-window
+    windowSizeYears: 3,             // for rolling window only
+    outputFile: 'report-engine/data/evolution/walk_forward_report.json',
+  },
+
+  // ---- v3.3.1: IC Decomposition (Train/Validate/Forward) ----
+  IC_DECOMPOSITION: {
+    enabled: true,
+    rollingICWindow: 30,            // days for rolling IC stability
+    overfitWarningRatio: 0.3,       // (trainIC - forwardIC) / trainIC > 0.3 → overfit
+    outputFile: 'report-engine/data/evolution/ic_decomposition.json',
+  },
+
+  // ---- v3.3.1: Verification Audit Trail (Anti-Data-Leakage) ----
+  VERIFICATION_AUDIT: {
+    enabled: true,
+    trackPredictionDate: true,
+    trackTargetDate: true,
+    enforceTemporalOrder: true,
+    maxLookbackGap: 5,              // max days to search backward for kline date match
+    auditFile: 'report-engine/data/verification/leakage_audit.json',
+  },
+
+  // ---- v3.3.1: Confidence Calibration ----
+  CONFIDENCE_CALIBRATION: {
+    enabled: true,
+    bins: [
+      { name: 'low', minScore: 0, maxScore: 55 },
+      { name: 'medium', minScore: 55, maxScore: 70 },
+      { name: 'high', minScore: 70, maxScore: 100 },
+    ],
+    minSamplesPerBin: 30,
+    calibrationFile: 'report-engine/data/verification/calibration.json',
+  },
+
+  // ---- v3.3.1: Regime-Aware Verification ----
+  REGIME_VERIFICATION: {
+    enabled: true,
+    regimeSource: 'report-engine/data/evolution/factor_effectiveness.json',
+    minSamplesPerRegime: 10,
+  },
 };

@@ -3,42 +3,70 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Autonomy Cockpit — Francis Investment v3.3</title>
+<title>Autonomy Cockpit — Francis Investment v3.3.1</title>
 <link rel="stylesheet" href="cockpit.css">
 </head>
 <body>
 
 <div id="cockpit">
   <header>
-    <h1>Autonomy Cockpit</h1>
+    <h1>Autonomy Cockpit <span class="version-tag" id="sys-version">v3.3.1</span></h1>
     <div class="status-bar">
       <span id="connection-status" class="badge">CONNECTING</span>
       <span id="last-update">--</span>
+      <span id="server-uptime" class="uptime"></span>
     </div>
   </header>
 
+  <!-- ── System Supervision Row ── -->
+  <div class="supervision-row">
+    <!-- Box A: System Version + Health -->
+    <div class="panel panel-super" id="panel-system">
+      <h2>System Status</h2>
+      <div class="panel-body" id="system-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Box B: API Health -->
+    <div class="panel panel-super" id="panel-api-health">
+      <h2>API Health</h2>
+      <div class="panel-body" id="api-health-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Box C: Data Files Health -->
+    <div class="panel panel-super panel-wide" id="panel-data-files">
+      <h2>Data Files</h2>
+      <div class="panel-body" id="data-files-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+  </div>
+
   <div class="grid">
 
-    <!-- Panel 1: Today's Tasks -->
-    <div class="panel" id="panel-tasks">
-      <h2>Today's Tasks</h2>
-      <div class="panel-body" id="tasks-body">
+    <!-- Panel 1: Prediction Capability -->
+    <div class="panel panel-wide" id="panel-prediction">
+      <h2>Prediction Capability</h2>
+      <div class="panel-body" id="prediction-body">
         <div class="loading">Loading...</div>
       </div>
     </div>
 
-    <!-- Panel 2: Model Registry -->
-    <div class="panel" id="panel-models">
-      <h2>Model Registry</h2>
-      <div class="panel-body" id="models-body">
+    <!-- Panel 2: Shadow / Champion -->
+    <div class="panel panel-wide" id="panel-shadow-champion">
+      <h2>Shadow / Champion</h2>
+      <div class="panel-body" id="shadow-champion-body">
         <div class="loading">Loading...</div>
       </div>
     </div>
 
-    <!-- Panel 3: Data Quality -->
-    <div class="panel" id="panel-data">
-      <h2>Data Quality</h2>
-      <div class="panel-body" id="data-body">
+    <!-- Panel 3: Leakage Audit -->
+    <div class="panel" id="panel-leakage">
+      <h2>Leakage Audit</h2>
+      <div class="panel-body" id="leakage-body">
         <div class="loading">Loading...</div>
       </div>
     </div>
@@ -51,15 +79,39 @@
       </div>
     </div>
 
-    <!-- Panel 5: Verification -->
+    <!-- Panel 5: Today's Tasks -->
+    <div class="panel" id="panel-tasks">
+      <h2>Today's Tasks</h2>
+      <div class="panel-body" id="tasks-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 6: Verification Summary -->
     <div class="panel" id="panel-verify">
-      <h2>Recent Verification</h2>
+      <h2>Verification Summary</h2>
       <div class="panel-body" id="verify-body">
         <div class="loading">Loading...</div>
       </div>
     </div>
 
-    <!-- Panel 6: Failed Tasks -->
+    <!-- Panel 7: Confidence Calibration -->
+    <div class="panel" id="panel-calibration">
+      <h2>Confidence Calibration</h2>
+      <div class="panel-body" id="calibration-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 8: Change Log -->
+    <div class="panel" id="panel-changelog">
+      <h2>Change Log</h2>
+      <div class="panel-body" id="changelog-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 9: Failed Tasks -->
     <div class="panel" id="panel-failures">
       <h2>Failed Tasks</h2>
       <div class="panel-body" id="failures-body">

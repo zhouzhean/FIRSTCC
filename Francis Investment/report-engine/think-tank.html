@@ -74,6 +74,13 @@ body {
 .header-clock { font-size: 18px; font-weight: 700; color: var(--text-bright); margin-left: auto; font-variant-numeric: tabular-nums; }
 .header-date { color: var(--text-muted); font-size: 10px; }
 .header-scan-info { font-size: 10px; color: var(--text-muted); margin-left: 8px; }
+.header-nav-link {
+  margin-left: 12px; padding: 3px 12px; border-radius: 4px;
+  font-size: 11px; font-weight: 600; text-decoration: none; letter-spacing: 0.5px;
+  background: rgba(184,148,44,0.12); color: var(--accent);
+  border: 1px solid rgba(184,148,44,0.25); transition: all 0.15s;
+}
+.header-nav-link:hover { background: rgba(184,148,44,0.25); color: var(--gold-light); }
 
 /* ======= CARD ======= */
 .card {
@@ -448,6 +455,7 @@ body {
     </div>
     <span class="header-state closed" id="stateBadge">离市</span>
     <span class="header-scan-info" id="scanInfo"></span>
+    <a href="cockpit.html" class="header-nav-link" title="系统可监督仪表盘">Cockpit</a>
     <div class="header-clock" id="clock">--:--:--</div>
     <div class="header-date" id="dateDisplay">----.--.--</div>
   </div>
