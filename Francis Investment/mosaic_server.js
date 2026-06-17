@@ -370,7 +370,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.2.2',
+    version: '3.2.3',
     pipeline: pStatus,
     scheduler: sStatus,
   };
