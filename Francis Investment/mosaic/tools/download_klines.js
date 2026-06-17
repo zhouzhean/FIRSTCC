@@ -106,11 +106,56 @@ function cleanKlines(klines) {
   return cleaned;
 }
 
+/**
+ * Check whether cached K-line data is still valid.
+ * Returns false (needs redownload) if:
+ *   1. File doesn't exist
+ *   2. Data is older than 24 hours (stale)
+ *   3. K-line count < 100 bars (too few)
+ *   4. Gap between any adjacent dates > 5 trading days (discontinuity)
+ */
+function cacheValid(cacheFile) {
+  try {
+    if (!fs.existsSync(cacheFile)) return false;
+    var raw = fs.readFileSync(cacheFile, 'utf8');
+    var cached = JSON.parse(raw);
+    var klines = cached.klines;
+    if (!klines || !Array.isArray(klines) || klines.length === 0) return false;
+
+    // 1. Freshness: expire after 24 hours
+    var ageMs = Date.now() - (cached.ts || 0);
+    if (ageMs > 24 * 60 * 60 * 1000) return false;
+
+    // 2. Length: at least 100 bars
+    if (klines.length < 100) return false;
+
+    // 3. Continuity: no gaps > 5 trading days between adjacent dates
+    for (var i = 1; i < klines.length; i++) {
+      var prev = klines[i - 1].date;
+      var curr = klines[i].date;
+      if (!prev || !curr) continue;
+      var prevDate = new Date(prev);
+      var currDate = new Date(curr);
+      // Simple calendar day diff (not trading-day, but >5 calendar days indicates a real gap)
+      var dayDiff = Math.abs((currDate - prevDate) / (24 * 60 * 60 * 1000));
+      if (dayDiff > 7) return false; // > 7 calendar days likely means missing trading week
+    }
+
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 function downloadOne(target, stats) {
   var cacheFile = path.join(KLINES_DIR, target.code + '.json');
-  if (fs.existsSync(cacheFile)) {
+  if (cacheValid(cacheFile)) {
     stats.skipped++;
     return Promise.resolve();
+  }
+  // If cache exists but invalid, increment re-download counter instead of skipped
+  if (fs.existsSync(cacheFile)) {
+    stats.revalidated = (stats.revalidated || 0) + 1;
   }
   return fetchKlines(target.code).then(function(klines) {
     if (klines.length > 0) {

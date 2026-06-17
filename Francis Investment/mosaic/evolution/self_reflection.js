@@ -69,6 +69,11 @@ function runSelfReflection(portfolio, dateStr) {
     // Save results
     saveReflectionResult(result);
 
+    // v3.3.0: Generate daily reflection report
+    try {
+      generateDailyReport(result, portfolio, dateStr);
+    } catch (_) { /* report generation is non-critical */ }
+
     _state.running = false;
     _state.lastRun = new Date().toISOString();
     _state.lastResult = result;
@@ -417,6 +422,129 @@ function findFalseSignalPatterns(minSamples) {
   };
 }
 
+// ==================== v3.3.0: 每日自我复盘报告 ====================
+
+var REFLECTIONS_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'daily_reflections');
+
+function generateDailyReport(reflectionResult, portfolio, dateStr) {
+  try {
+    if (!fs.existsSync(REFLECTIONS_DIR)) fs.mkdirSync(REFLECTIONS_DIR, { recursive: true });
+
+    var report = {
+      date: dateStr,
+      generatedAt: new Date().toISOString(),
+      questions: [],
+    };
+
+    // Q1: Why did we trade or not trade today?
+    var totalTrades = (portfolio && portfolio.tradeHistory)
+      ? portfolio.tradeHistory.filter(function(t) { return t.date === dateStr; }).length
+      : 0;
+    if (totalTrades > 0) {
+      var trades = portfolio.tradeHistory.filter(function(t) { return t.date === dateStr; });
+      var buys = trades.filter(function(t) { return t.action === 'buy'; });
+      var sells = trades.filter(function(t) { return t.action === 'sell'; });
+      report.questions.push({
+        question: '今天为什么交易？',
+        answer: '共 ' + totalTrades + ' 笔交易',
+        details: {
+          buys: buys.map(function(b) {
+            return { code: b.code, name: b.name, reason: b.reason, price: b.price };
+          }),
+          sells: sells.map(function(s) {
+            return { code: s.code, name: s.name, reason: s.reason, pnl: s.pnl, pnlPct: s.pnlPct };
+          }),
+        },
+      });
+    } else {
+      report.questions.push({
+        question: '今天为什么没有交易？',
+        answer: '没有符合条件的买入或卖出信号触发交易',
+      });
+    }
+
+    // Q2: Were the predictions right?
+    var diag = reflectionResult && reflectionResult.positionDiagnosis;
+    if (diag && diag.positions) {
+      var correctPredictions = diag.positions.filter(function(p) { return p.buyReasonStatus === 'confirmed'; });
+      var wrongPredictions = diag.positions.filter(function(p) { return p.buyReasonStatus === 'invalidated'; });
+      report.questions.push({
+        question: '预测对了吗？',
+        answer: 'Confirmed: ' + correctPredictions.length + ', Invalidated: ' + wrongPredictions.length,
+        details: {
+          correct: correctPredictions.map(function(p) { return { code: p.code, name: p.name, pnlPct: p.pnlPct }; }),
+          wrong: wrongPredictions.map(function(p) { return { code: p.code, name: p.name, pnlPct: p.pnlPct, warnings: p.warnings }; }),
+        },
+      });
+    } else {
+      report.questions.push({
+        question: '预测对了吗？',
+        answer: '无持仓，无法评估预测准确度',
+      });
+    }
+
+    // Q3: Did risk control fire?
+    var falsePatterns = reflectionResult && reflectionResult.falseSignalPatterns;
+    var panicSells = (portfolio && portfolio.tradeHistory)
+      ? portfolio.tradeHistory.filter(function(t) {
+          return t.date === dateStr && t.action === 'sell' && t.reason && t.reason.indexOf('止损') !== -1;
+        })
+      : [];
+    report.questions.push({
+      question: '风控有没有触发？',
+      answer: panicSells.length > 0
+        ? '触发: ' + panicSells.length + ' 笔止损卖出'
+        : '今日未触发风控止损',
+      details: {
+        panicSells: panicSells.map(function(s) { return { code: s.code, name: s.name, pnl: s.pnl }; }),
+        falsePatterns: falsePatterns ? (falsePatterns.summary || falsePatterns.patterns && falsePatterns.patterns.length + ' patterns') : null,
+      },
+    });
+
+    // Q4: What adjustments for tomorrow?
+    var adjustments = [];
+    if (panicSells.length > 0) {
+      adjustments.push('今日有止损卖出，明天重点关注板块轮动和止损票恢复情况');
+    }
+    if (diag && diag.alerts && diag.alerts.length > 0) {
+      adjustments.push('持仓健康度告警: ' + diag.alerts.join('; '));
+    }
+    if (falsePatterns && falsePatterns.avoidSignalIds && falsePatterns.avoidSignalIds.length > 0) {
+      adjustments.push('建议过滤冷门因子: ' + falsePatterns.avoidSignalIds.join(', '));
+    }
+    var positions = (portfolio && portfolio.positions) || [];
+    if (positions.length >= 5) {
+      adjustments.push('持仓已满(' + positions.length + '/5)，明天以管理现有仓位为主');
+    } else if (positions.length === 0) {
+      adjustments.push('空仓状态，明天积极关注优质信号');
+    }
+
+    report.questions.push({
+      question: '明天准备怎么调整？',
+      answer: adjustments.length > 0 ? adjustments.join('。') : '维持当前策略不变',
+      adjustments: adjustments,
+    });
+
+    // Write report
+    var reportFile = path.join(REFLECTIONS_DIR, dateStr + '.json');
+    fs.writeFileSync(reportFile, JSON.stringify(report, null, 2), 'utf8');
+    console.log('[SelfReflection] 每日复盘报告已保存: ' + dateStr + '.json');
+  } catch (e) {
+    console.error('[SelfReflection] 复盘报告生成失败:', e.message);
+  }
+}
+
+/**
+ * Load the daily reflection report for a given date.
+ */
+function loadDailyReport(dateStr) {
+  try {
+    var reportFile = path.join(REFLECTIONS_DIR, dateStr + '.json');
+    if (!fs.existsSync(reportFile)) return null;
+    return JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+  } catch (_) { return null; }
+}
+
 // ==================== 工具函数 ====================
 
 function getRecentTradingDates(daysBack) {
@@ -469,4 +597,5 @@ module.exports = {
   runSelfReflection,
   getStatus,
   loadReflectionResult,
+  loadDailyReport,
 };

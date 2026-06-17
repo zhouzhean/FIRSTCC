@@ -399,4 +399,48 @@ module.exports = {
     },
     taskTimeoutMinutes: 30,                          // 单任务超时（分钟）
   },
+
+  // ---- v3.3.0: Shadow Mode + Model Registry ----
+  SHADOW_MODE: {
+    enabled: true,
+    promotionThreshold: 0.05,                       // Shadow IC 超过 champion 5% → 自动晋升
+    demotionThreshold: -0.10,                       // Champion IC 低于最佳 shadow 10% → 标记审查
+    shadowLogMaxEntries: 500,                       // Shadow 预测日志最大条目数
+    trackSectors: true,                             // 是否跟踪板块级别的 shadow 表现
+    minEvaluationDays: 5,                           // Shadow 至少运行 5 天才能晋升
+    minVerificationSamples: 30,                     // 最少验证样本数才评估
+  },
+
+  MODEL_REGISTRY: {
+    dataFile: 'report-engine/data/evolution/model_registry.json',
+    maxVersions: 20,                                // 最多保留 20 个历史版本
+    minSampleWindow: 10,                            // 最少 10 个交易日样本才考虑升级
+    archiveDir: 'report-engine/data/evolution/versions/',
+  },
+
+  // ---- v3.3.0: Auto-Pause (Risk Self-Discipline) ----
+  AUTO_PAUSE: {
+    enabled: true,
+    triggers: {
+      dataQualityBelow: 85,                         // 数据质量 < 85 分
+      consecutiveTrainingFailures: 3,               // 连续训练失败 ≥ 3 次
+      consecutiveVerificationDecline: 3,            // 验证指标连续恶化 ≥ 3 天
+      consecutiveLosses: 5,                         // 连续亏损 ≥ 5 笔
+      apiExceptions: 3,                             // API 异常 ≥ 3 次
+    },
+    recovery: {
+      dataQualityAbove: 85,
+      rankICAbove: 0,
+      recentWinRateAbove: 40,                       // 百分比
+      drawdownNarrowing: true,
+      consecutiveProfits: 2,
+    },
+    cooldown: {
+      minHoursBetweenPauses: 24,                    // 两次暂停之间最少间隔 24 小时
+      recoveryStabilityHours: 4,                    // 恢复条件满足后稳定 4 小时再解除
+    },
+  },
+
+  // ---- v3.3.0: Stop-Loss Cooldown ----
+  STOP_LOSS_COOLDOWN_DAYS: 4,                       // 止损后 4 个交易日内不买回同一只股票
 };

@@ -41,5 +41,10 @@ report-engine/data/simfolio/index_history_*.json
 report-engine/data/verification/
 report-engine/data/evolution/
 
+# v3.3.0: New runtime data files
+report-engine/data/simfolio/stop_loss_cooldowns.json
+report-engine/data/daily_reflections/
+report-engine/data/evolution/model_registry.json
+
 # Secrets
 .env

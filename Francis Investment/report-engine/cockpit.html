@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Autonomy Cockpit — Francis Investment v3.3</title>
+<link rel="stylesheet" href="cockpit.css">
+</head>
+<body>
+
+<div id="cockpit">
+  <header>
+    <h1>Autonomy Cockpit</h1>
+    <div class="status-bar">
+      <span id="connection-status" class="badge">CONNECTING</span>
+      <span id="last-update">--</span>
+    </div>
+  </header>
+
+  <div class="grid">
+
+    <!-- Panel 1: Today's Tasks -->
+    <div class="panel" id="panel-tasks">
+      <h2>Today's Tasks</h2>
+      <div class="panel-body" id="tasks-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 2: Model Registry -->
+    <div class="panel" id="panel-models">
+      <h2>Model Registry</h2>
+      <div class="panel-body" id="models-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 3: Data Quality -->
+    <div class="panel" id="panel-data">
+      <h2>Data Quality</h2>
+      <div class="panel-body" id="data-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 4: Trading Permissions -->
+    <div class="panel" id="panel-permissions">
+      <h2>Trading Permissions</h2>
+      <div class="panel-body" id="permissions-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 5: Verification -->
+    <div class="panel" id="panel-verify">
+      <h2>Recent Verification</h2>
+      <div class="panel-body" id="verify-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+    <!-- Panel 6: Failed Tasks -->
+    <div class="panel" id="panel-failures">
+      <h2>Failed Tasks</h2>
+      <div class="panel-body" id="failures-body">
+        <div class="loading">Loading...</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="cockpit.js"></script>
+</body>
+</html>

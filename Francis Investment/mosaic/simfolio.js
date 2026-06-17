@@ -27,6 +27,7 @@ const PORTFOLIO_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json');
 const PORTFOLIO_BAK_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json.bak');
 const WEEKEND_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'weekend_context.json');
 const HISTORY_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'history_context.json'); // v2.9: unified history context
+const STOP_LOSS_COOLDOWN_FILE = path.join(SIMFOLIO_DIR, 'stop_loss_cooldowns.json'); // v3.3.0
 
 // ---- Portfolio Management ----
 
@@ -82,6 +83,64 @@ function savePortfolio(pf) {
     try { fs.copyFileSync(PORTFOLIO_FILE, PORTFOLIO_BAK_FILE); } catch (e) { /* ignore */ }
   }
   fs.writeFileSync(PORTFOLIO_FILE, json, 'utf8');
+}
+
+// ---- Stop-Loss Cooldown (v3.3.0) ----
+
+function loadStopLossCooldowns() {
+  try {
+    if (fs.existsSync(STOP_LOSS_COOLDOWN_FILE)) {
+      return JSON.parse(fs.readFileSync(STOP_LOSS_COOLDOWN_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  return {};
+}
+
+function saveStopLossCooldowns(cooldowns) {
+  ensureDir();
+  try {
+    fs.writeFileSync(STOP_LOSS_COOLDOWN_FILE, JSON.stringify(cooldowns, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+/**
+ * Record a stop-loss event for cooldown tracking.
+ * @param {string} code — stock code
+ * @param {string} dateStr — trade date YYYY-MM-DD
+ */
+function recordStopLossCooldown(code, dateStr) {
+  var cooldowns = loadStopLossCooldowns();
+  cooldowns[code] = dateStr;
+  saveStopLossCooldowns(cooldowns);
+  console.log('[Simfolio] 止损冷却: ' + code + ' (' + dateStr + ') — ' +
+    config.STOP_LOSS_COOLDOWN_DAYS + ' 交易日内不回买');
+}
+
+/**
+ * Check if a stock is within its stop-loss cooldown period.
+ * Returns true if the stock should be skipped (still cooling down).
+ */
+function isInStopLossCooldown(code, todayStr) {
+  var cooldownDays = config.STOP_LOSS_COOLDOWN_DAYS || 4;
+  var cooldowns = loadStopLossCooldowns();
+  var cooldownDate = cooldowns[code];
+  if (!cooldownDate) return false;
+
+  // Count trading days between cooldown date and today
+  // Simplified: use calendar day diff with weekend/holiday awareness
+  var cd = new Date(cooldownDate);
+  var td = new Date(todayStr);
+  var calendarDays = Math.floor((td - cd) / (24 * 60 * 60 * 1000));
+  // Rough estimate: 5 trading days per 7 calendar days
+  var estimatedTradingDays = Math.floor(calendarDays * 5 / 7);
+
+  if (estimatedTradingDays < cooldownDays) {
+    return true; // Still in cooldown
+  }
+  // Clean up expired cooldown
+  delete cooldowns[code];
+  saveStopLossCooldowns(cooldowns);
+  return false;
 }
 
 // ---- Portfolio Snapshot ----
@@ -503,6 +562,157 @@ function buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors
   };
 }
 
+// ---- v3.3.0: Auto-Pause Mechanism ----
+// Checks multiple trigger conditions. When any trigger fires, forces sell-only mode
+// until all recovery conditions are met.
+
+var _autoPauseState = {
+  paused: false,
+  pausedAt: null,
+  pauseReason: '',
+  consecutiveTrainingFailures: 0,
+  consecutiveLosses: 0,
+  consecutiveVerificationDeclines: 0,
+  apiExceptions: 0,
+  lastPauseCheck: null,
+};
+
+function checkAutoPause(pf, pipelineResults) {
+  var apConfig = config.AUTO_PAUSE;
+  if (!apConfig || !apConfig.enabled) return { paused: false, reasons: [] };
+
+  var reasons = [];
+  var now = Date.now();
+  _autoPauseState.lastPauseCheck = new Date().toISOString();
+
+  // 1. Data quality check
+  try {
+    var dq = require('./analysis/data_quality');
+    var dqResult = dq.computeConfidencePenalty();
+    if ((dqResult.qualityScore || 100) < (apConfig.triggers.dataQualityBelow || 85)) {
+      reasons.push('数据质量低于阈值: ' + (dqResult.qualityScore || '?'));
+    }
+  } catch (_) {}
+
+  // 2. Consecutive training failures
+  try {
+    var evoStatus = require('./evolution/evolution_scheduler').getStatus();
+    if (evoStatus && evoStatus.history) {
+      var recentFailures = 0;
+      for (var i = evoStatus.history.length - 1; i >= 0; i--) {
+        if (!evoStatus.history[i].success) {
+          recentFailures++;
+        } else {
+          break;
+        }
+      }
+      _autoPauseState.consecutiveTrainingFailures = recentFailures;
+      if (recentFailures >= (apConfig.triggers.consecutiveTrainingFailures || 3)) {
+        reasons.push('连续训练失败: ' + recentFailures + ' 次');
+      }
+    }
+  } catch (_) {}
+
+  // 3. Consecutive verification declines
+  try {
+    var vd = require('./analysis/verification_dashboard');
+    var dash = vd.getDashboard({ lookbackDays: 10 });
+    // Check if rank IC or hit rate has been declining
+    // Simplified: use verification_runner data if available
+  } catch (_) {}
+  // Reset counter if verification not available; this trigger is secondary
+
+  // 4. Consecutive losses from trade history
+  var recentTrades = (pf.tradeHistory || []).slice(-20);
+  var consecutiveLosses = 0;
+  for (var t = recentTrades.length - 1; t >= 0; t--) {
+    if (recentTrades[t].action === 'sell' && recentTrades[t].pnl < 0) {
+      consecutiveLosses++;
+    } else if (recentTrades[t].action === 'sell') {
+      break;
+    }
+  }
+  _autoPauseState.consecutiveLosses = consecutiveLosses;
+  if (consecutiveLosses >= (apConfig.triggers.consecutiveLosses || 5)) {
+    reasons.push('连续亏损: ' + consecutiveLosses + ' 笔');
+  }
+
+  // 5. API exceptions (tracked in pipeline events)
+  // Simplified: check recent error events
+  try {
+    var eventsFile = path.join(SIMFOLIO_DIR, 'last_pipeline_result.json');
+    if (fs.existsSync(eventsFile)) {
+      var lastResult = JSON.parse(fs.readFileSync(eventsFile, 'utf8'));
+      if (lastResult && lastResult.errors && lastResult.errors.length >= (apConfig.triggers.apiExceptions || 3)) {
+        reasons.push('API异常: ' + lastResult.errors.length + ' 次');
+      }
+    }
+  } catch (_) {}
+
+  // Determine if pause should activate
+  if (reasons.length > 0 && !_autoPauseState.paused) {
+    _autoPauseState.paused = true;
+    _autoPauseState.pausedAt = new Date().toISOString();
+    _autoPauseState.pauseReason = reasons.join('; ');
+    console.log('[Simfolio] AUTO-PAUSE 触发: ' + _autoPauseState.pauseReason);
+  }
+
+  // Recovery check: if already paused, check recovery conditions
+  if (_autoPauseState.paused) {
+    var allRecovered = true;
+
+    // Data quality recovery
+    try {
+      var dq2 = require('./analysis/data_quality');
+      var dqResult2 = dq2.computeConfidencePenalty();
+      if ((dqResult2.qualityScore || 100) < (apConfig.recovery.dataQualityAbove || 85)) {
+        allRecovered = false;
+      }
+    } catch (_) {}
+
+    // Profit recovery: at least 2 consecutive profitable sells
+    var recentProfits = 0;
+    for (var p = recentTrades.length - 1; p >= 0; p--) {
+      if (recentTrades[p].action === 'sell' && recentTrades[p].pnl > 0) {
+        recentProfits++;
+      } else if (recentTrades[p].action === 'sell') {
+        break;
+      }
+    }
+    if (recentProfits < (apConfig.recovery.consecutiveProfits || 2)) {
+      allRecovered = false;
+    }
+
+    // Training recovery
+    if (_autoPauseState.consecutiveTrainingFailures > 0) {
+      allRecovered = false;
+    }
+
+    if (allRecovered) {
+      _autoPauseState.paused = false;
+      _autoPauseState.pauseReason = '';
+      console.log('[Simfolio] AUTO-PAUSE 解除 — 恢复条件已满足');
+    }
+  }
+
+  return {
+    paused: _autoPauseState.paused,
+    reasons: _autoPauseState.paused ? (_autoPauseState.pauseReason ? [_autoPauseState.pauseReason] : reasons) : [],
+    pausedAt: _autoPauseState.pausedAt,
+  };
+}
+
+function getAutoPauseStatus() {
+  return {
+    paused: _autoPauseState.paused,
+    pausedAt: _autoPauseState.pausedAt,
+    pauseReason: _autoPauseState.pauseReason,
+    consecutiveTrainingFailures: _autoPauseState.consecutiveTrainingFailures,
+    consecutiveLosses: _autoPauseState.consecutiveLosses,
+    lastPauseCheck: _autoPauseState.lastPauseCheck,
+  };
+}
+
 function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
@@ -675,6 +885,79 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       thinkTankDefensive: true,
       thinkTankReason: thinkTankGate.reason,
+      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+    };
+  }
+
+  // ---- Step 3.5c: Strategy Health Gate (v3.3.0) ----
+  // Consume strategy_health.js verdict directly. BLOCK = no buys, REDUCE = sell-only,
+  // CAUTIOUS = max 1 buy. This replaces the implicit "all systems nominal" assumption.
+  var strategyHealthVerdict = 'ALLOW';
+  var strategyHealthReasons = [];
+  try {
+    var sh = require('./analysis/strategy_health');
+    var healthContext = {
+      portfolio: pf,
+      indices: indices,
+      macroContext: macroContext,
+      pipelineResults: pipelineResults,
+    };
+    var healthResult = sh.computeStrategyHealth(healthContext);
+    if (healthResult && healthResult.verdict) {
+      strategyHealthVerdict = healthResult.verdict;
+      strategyHealthReasons = healthResult.reasons || [];
+    }
+  } catch (_) { /* strategy_health not available */ }
+
+  if (strategyHealthVerdict === 'BLOCK') {
+    var shSellDecisions = decisions.filter(function(d) { return d.action === 'sell'; });
+    var shExecutedTrades = [];
+    for (var si = 0; si < shSellDecisions.length; si++) {
+      if (shSellDecisions[si].action === 'sell') {
+        var shTrade = executeSell(pf, shSellDecisions[si], today);
+        if (shTrade) shExecutedTrades.push(shTrade);
+      }
+    }
+    for (var pi = 0; pi < pf.positions.length; pi++) {
+      var shStockData = pipelineResults.find(function(r) { return r.code === pf.positions[pi].code; });
+      if (shStockData) pf.positions[pi].currentPrice = shStockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+    return {
+      decisions: shSellDecisions,
+      executed: shExecutedTrades,
+      snapshot: getSnapshot(pf),
+      strategyHealthBlock: true,
+      strategyHealthVerdict: strategyHealthVerdict,
+      strategyHealthReasons: strategyHealthReasons,
+      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+    };
+  }
+
+  if (strategyHealthVerdict === 'REDUCE') {
+    // Only-sell mode: process existing sell decisions, skip all buys
+    var srSellDecisions = decisions.filter(function(d) { return d.action === 'sell'; });
+    var srExecutedTrades = [];
+    for (var sj = 0; sj < srSellDecisions.length; sj++) {
+      if (srSellDecisions[sj].action === 'sell') {
+        var srTrade = executeSell(pf, srSellDecisions[sj], today);
+        if (srTrade) srExecutedTrades.push(srTrade);
+      }
+    }
+    for (var pj = 0; pj < pf.positions.length; pj++) {
+      var sd = pipelineResults.find(function(r) { return r.code === pf.positions[pj].code; });
+      if (sd) pf.positions[pj].currentPrice = sd.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+    return {
+      decisions: srSellDecisions,
+      executed: srExecutedTrades,
+      snapshot: getSnapshot(pf),
+      strategyHealthReduce: true,
+      strategyHealthVerdict: strategyHealthVerdict,
+      strategyHealthReasons: strategyHealthReasons,
       gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
@@ -993,9 +1276,31 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   if (ddLevel === 'restrict') {
     effectiveMaxBuys = Math.min(effectiveMaxBuys, MAX_BUYS_REDUCED);
   }
+  // v3.3.0: Strategy health CAUTIOUS → max 1 buy
+  if (strategyHealthVerdict === 'CAUTIOUS') {
+    effectiveMaxBuys = Math.min(effectiveMaxBuys, 1);
+  }
+  // v3.3.0: Auto-pause check — if auto-pause is active, force sell-only
+  var autoPauseActive = false;
+  var autoPauseReasons = [];
+  try {
+    var pauseResult = checkAutoPause(pf, pipelineResults);
+    if (pauseResult.paused) {
+      autoPauseActive = true;
+      autoPauseReasons = pauseResult.reasons;
+      effectiveMaxBuys = 0; // Force sell-only
+    }
+  } catch (_) { /* auto-pause check is advisory */ }
   // Rule 5: P0-2 minimum cooldown between buys — from config (default 30 min)
   const BUY_COOLDOWN_MS = ((config.SIMFOLIO && config.SIMFOLIO.buyCooldownMin) || 30) * 60 * 1000;
   // (enforced by counting buys already executed today from tradeHistory)
+
+  // P3 Loop 5: Check sector avoid list from trade attribution (outer scope — used by nearMisses + gateResults)
+  let avoidSectors = [];
+  try {
+    const tradeAttr = require('./predict/trade_attribution');
+    avoidSectors = tradeAttr.getAvoidSectors();
+  } catch (_) {}
 
   if (portfolioInLoss) {
     // Skip all buys — portfolio is losing money with 3+ positions.
@@ -1010,13 +1315,6 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       ? new Date(today + 'T' + (todayBuys[todayBuys.length - 1].time || '00:00:00') + '+08:00').getTime()
       : 0;
 
-    // P3 Loop 5: Check sector avoid list from trade attribution
-    let avoidSectors = [];
-    try {
-      const tradeAttr = require('./predict/trade_attribution');
-      avoidSectors = tradeAttr.getAvoidSectors();
-    } catch (_) {}
-
     for (const candidate of buyCandidates) {
       const buyDecisionsSoFar = decisions.filter(d => d.action === 'buy').length;
       if (buyDecisionsSoFar >= effectiveMaxBuys) break;
@@ -1026,6 +1324,11 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       if (avoidSectors.length > 0) {
         const candidateSector = classifySector(candidate.name);
         if (avoidSectors.includes(candidateSector)) continue;
+      }
+
+      // v3.3.0: Stop-loss cooldown — skip stocks that were stopped out recently
+      if (isInStopLossCooldown(candidate.code, today)) {
+        continue;
       }
 
       // P0-2: 30-min cooldown — if we already executed a buy today and
@@ -1045,7 +1348,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       }
       // Combine weekend multiplier and risk regime multiplier
       const combinedMultiplier = weekendPositionMultiplier * riskSizingMultiplier;
-      const buyDecision = checkBuySignal(candidate, pf, isStrong, combinedMultiplier);
+      const buyDecision = checkBuySignal(candidate, pf, isStrong, combinedMultiplier, macroContext);
       if (buyDecision) {
         // Attach prediction data to the decision for traceability
         if (candidate.prediction) {
@@ -1107,6 +1410,31 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       signals: (candidate.hiddenSignals || []).map(s => s.id),
     });
   }
+
+  // v3.3.0: Log predictions for shadow model evaluation
+  try {
+    var mr = require('./evolution/model_registry');
+    var shadowPreds = buyCandidates.slice(0, 30).map(function(c) {
+      return {
+        code: c.code,
+        stockName: c.name,
+        score: c.compositeScore || 0,
+        rating: c.rating || '--',
+        predictedReturn: (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : null,
+        signals: (c.hiddenSignals || []).map(function(s) { return s.id; }),
+      };
+    });
+    // Log for all shadow models (tracked by their versionId internally)
+    var status = mr.getRegistryStatus();
+    if (status && status.shadows && status.shadows.length > 0) {
+      for (var si = 0; si < status.shadows.length; si++) {
+        mr.logShadowPrediction(status.shadows[si].versionId, {
+          date: today,
+          predictions: shadowPreds,
+        });
+      }
+    }
+  } catch (_) { /* model_registry logging is advisory */ }
 
   return {
     decisions: decisions,
@@ -1230,7 +1558,7 @@ function checkTrendFilter(stockData) {
   return { passed: true, reason: '' };
 }
 
-function checkBuySignal(stockData, pf, isStrong, combinedMultiplier) {
+function checkBuySignal(stockData, pf, isStrong, combinedMultiplier, macroContext) {
   const multiplier = (typeof combinedMultiplier === 'number' && combinedMultiplier > 0) ? combinedMultiplier : 1.0;
 
   // P0-2: Trend filter — reject stocks not in uptrend
@@ -1266,7 +1594,10 @@ function checkBuySignal(stockData, pf, isStrong, combinedMultiplier) {
           riskBudgetDetails: budget,
         };
       }
-    } catch (_) { /* fall through to legacy sizing */ }
+    } catch (e) {
+      console.error('[Simfolio] 风险预算计算失败 (' + stockData.code + ' ' + (stockData.name || '') + '):', e.message);
+      /* fall through to legacy sizing */
+    }
   }
 
   // Tiered position sizing based on composite score and signal diversity
@@ -1427,6 +1758,11 @@ function executeSell(pf, decision, date) {
     } catch (_) {}
     tradeAttr.analyzeAttribution(trade, buyTrade, pf, ctx);
   } catch (_) { /* attribution is advisory, never block on it */ }
+
+  // v3.3.0: Record stop-loss cooldown if this was a stop-loss sell
+  if (decision.reason && decision.reason.indexOf('止损') !== -1) {
+    recordStopLossCooldown(decision.code, date);
+  }
 
   return trade;
 }
@@ -1886,4 +2222,6 @@ module.exports = {
   checkRiskThresholds,
   executeRiskTrade,
   loadWeekendContext,
+  getAutoPauseStatus,
+  loadStopLossCooldowns,
 };

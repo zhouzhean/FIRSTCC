@@ -1,10 +1,19 @@
-A股量化交易系统 v3.2.4 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
+A股量化交易系统 v3.3.0 + 报告引擎 + 24/7 自主学习进化引擎。Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。
 
 ## 核心理念
 
 全部服务端计算，零 Claude tokens 消耗。数据下载→清洗→因子回测→有效性矩阵→参数搜索→跨市场相关性→自动报告，全部 Node.js 本地跑。
 
 ## 版本历史
+
+### v3.3.0 (2026-06-17) — 自主学习交易员闭环优化
+- **P0 Bug 修复**: `checkBuySignal` macroContext 作用域修复（+第5参数）、`history_review` marketProfile 持久化
+- **P0 调度增强**: `evolution_scheduler` catch-up 覆盖全部10个任务、超时保护+重试（`_executeWithRetry`）
+- **P1 数据+训练**: `download_klines` 新增 `cacheValid()` 三重检查（新鲜度/长度/连续性）
+- **P1 学习闭环**: 新建 `model_registry.js`（shadow mode → champion 自动晋升）
+- **P1 风控自我约束**: 策略健康门禁集成（BLOCK/REDUCE/CAUTIOUS→交易限制）、止损冷却期（4交易日不回买）、自动暂停机制
+- **P2 驾驶舱**: `cockpit.html` 6面板自主监控（30秒轮询）、每日自我复盘报告 `daily_reflections/`
+- **Config**: 新增 `SHADOW_MODE`, `MODEL_REGISTRY`, `AUTO_PAUSE`, `STOP_LOSS_COOLDOWN_DAYS`
 
 ### v3.2.4 (2026-06-17) — 验证仪表板工程Bug修复
 - `verification_dashboard.js`：`_computeStockPredictorVerification()` 适配 `dailyRecords` 对象结构，新增 `verified` 状态标记
@@ -165,6 +174,11 @@ curl -s http://8.153.101.112:8765/api/verification/dashboard
 | `safeFixed()` | simfolio.js 所有 `.toFixed()` 必须用它包装 |
 | stock_factor_performance 结构 | `dailyRecords`（对象 key=日期）不是 `records`（数组）；factorSignals 无 hit 字段时=待验证 |
 | scan_records 路径+格式 | 在 `SIMFOLIO_DIR`（非 DATA_DIR）；纯数组，非 `{results:...}` 对象 |
+| macroContext 作用域 | `checkBuySignal` 是模块级函数，无法闭包访问 `makeTradingDecisions` 局部变量，必须显式传入 [v3.3] |
+| 策略健康门禁 | `strategy_health` 返回 BLOCK/REDUCE/CAUTIOUS/ALLOW，`simfolio.js` 必须消费此裁决，否则无效 |
+| 止损冷却期 | `STOP_LOSS_COOLDOWN_DAYS=4`，`executeSell` 中触发止损时记录，`makeTradingDecisions` 候选遍历中检查冷却 |
+| 任务超时 | `evolution_scheduler` 30分钟超时 + 1次重试，`_executeWithRetry` 防止 `_state.running` 永久卡住 |
+| model_registry 数据 | `model_registry.json` 在 `report-engine/data/evolution/`，运行时数据不提交 git |
 
 ### 绝不提交的运行时数据
 `portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`, `weekend_archive/*.json`, `margin_cache.json`, `dynamic_weights.json`, `stock_factor_performance.json`, `cycle_factor_matrix.json`, `sector_leadlag.json`, `trade_attribution.json`, `klines/*.json`, `klines_short/*.json`, `night_backtest_result.json`, `self_reflection_result.json`, `us_as_predictions.json`, `us_as_verification_history.json`, `factor_combinations.json`, `weight_grid_result.json`, `full_backtest_result*.json`, `data_quality_report.json`, `strategy_health_snapshot.json`, `*_snapshot.json`, `bootstrap_state.json`, `training_matrix.json`, `factor_effectiveness.json`, `param_search_results.json`, `cross_market_linkage.json`, `expected_return_verification.json`, `history_context.json`, `verification/`, `evolution/`

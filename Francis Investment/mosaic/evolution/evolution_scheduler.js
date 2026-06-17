@@ -93,13 +93,36 @@ function checkAndRun(now, dateStr) {
       var trainingFile = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'training_matrix.json');
       var hasExisting = false;
       try { hasExisting = fs.existsSync(trainingFile); } catch (e) {}
+      var result;
       if (hasExisting) {
         console.log('[EvolutionScheduler] bootstrap: 增量模式 (已有训练矩阵)');
-        return bh.incrementalUpdate(20);
+        result = bh.incrementalUpdate(20);
       } else {
         console.log('[EvolutionScheduler] bootstrap: 首次全量模式');
-        return bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
+        result = bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
       }
+      // v3.3.0: Register bootstrap results as shadow model version
+      if (result && result.paramSearch) {
+        try {
+          var mr = require('./model_registry');
+          var bestParam = (result.paramSearch.topConfigs && result.paramSearch.topConfigs[0]) || {};
+          mr.registerVersion({
+            params: {
+              stopLoss: bestParam.stopLoss,
+              buyMinScore: bestParam.buyMinScore,
+              positionSize: bestParam.positionSize,
+              maxPositions: bestParam.maxPositions,
+              source: 'bootstrap',
+            },
+            source: 'bootstrap',
+            trainHitRate: bestParam.hitRate != null ? bestParam.hitRate / 100 : null,
+            trainIC: null,
+            sampleSize: bestParam.qualifiedCount || 0,
+            date: dateStr,
+          });
+        } catch (_) { /* model_registry is advisory */ }
+      }
+      return result;
     });
   }
 
@@ -115,7 +138,22 @@ function checkAndRun(now, dateStr) {
   if (h === 3 && m >= 0 && m < 30) {
     tryRunTask('weight_grid_search', dateStr, function() {
       var gs = require('./weight_grid_search');
-      return gs.runGridSearch();
+      var result = gs.runGridSearch();
+      // v3.3.0: Register result as a shadow model version
+      if (result && result.bestParams) {
+        try {
+          var mr = require('./model_registry');
+          mr.registerVersion({
+            params: result.bestParams,
+            source: 'grid_search',
+            trainHitRate: result.best ? result.best.testHitRate : null,
+            trainIC: null, // OLS regression doesn't compute IC directly
+            sampleSize: result.best ? result.best.testSamples : 0,
+            date: dateStr,
+          });
+        } catch (_) { /* model_registry is advisory */ }
+      }
+      return result;
     });
   }
 
@@ -180,50 +218,111 @@ function checkAndRun(now, dateStr) {
  * Catch-up mechanism: if the server restart missed a task's time window,
  * check if the task hasn't run today and the window has passed → run immediately.
  * Only activates once per task per boot (dedup prevents double-runs).
+ *
+ * v3.3.0: Full 10-task coverage with day-of-week checks for weekend tasks.
  */
 function tryRunCatchup(now, dateStr) {
   var h = now.getHours();
   var m = now.getMinutes();
-  var day = now.getDay();
+  var day = now.getDay(); // 0=Sun, 6=Sat
 
-  // Only check for catch-up if enough time has passed after a possible window
-  // Schedule: night_backtest (2:00+), weight_grid_search (3:00+), parameter_push (4:00+),
-  //           us_predict_generate (5:30+), us_predict_verify (16:10+), self_reflection (20:00+)
-  var isCatchupTick = (m % 10 === 0); // Every 10 minutes, try catch-up
-
+  // Every 10 minutes, try catch-up
+  var isCatchupTick = (m % 10 === 0);
   if (!isCatchupTick) return;
 
-  // Check each task: if the window has passed AND task hasn't run today, try it
+  var nowMin = h * 60 + m;
+
+  // All 10 tasks with schedule and day-of-week filter
   var taskSchedules = [
-    { id: 'bootstrap_history', hour: 1, minute: 0 },
-    { id: 'night_backtest', hour: 2, minute: 0 },
-    { id: 'weight_grid_search', hour: 3, minute: 0 },
-    { id: 'parameter_push', hour: 4, minute: 0 },
-    { id: 'us_predict_generate', hour: 5, minute: 30 },
-    { id: 'us_predict_verify', hour: 16, minute: 10 },
-    { id: 'self_reflection', hour: 20, minute: 0 },
+    { id: 'bootstrap_history',       hour: 1, minute: 0,  days: [0] },          // Sun only
+    { id: 'full_backtest',           hour: 2, minute: 0,  days: [0] },          // Sun only
+    { id: 'night_backtest',          hour: 2, minute: 0,  days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'weight_grid_search',      hour: 3, minute: 0,  days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'parameter_push',          hour: 4, minute: 0,  days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'us_predict_generate',     hour: 5, minute: 30, days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'us_predict_verify',       hour: 16, minute: 10,days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'self_reflection',         hour: 20, minute: 0, days: [0,1,2,3,4,5,6] }, // Daily
+    { id: 'weekend_factor_mining',   hour: 10, minute: 0, days: [6] },          // Sat only
+    { id: 'weekly_report',           hour: 14, minute: 0, days: [0] },          // Sun only
   ];
 
   for (var i = 0; i < taskSchedules.length; i++) {
     var ts = taskSchedules[i];
+    // Day-of-week filter
+    if (ts.days && ts.days.indexOf(day) === -1) continue;
     var windowStart = ts.hour * 60 + ts.minute;
-    var nowMin = h * 60 + m;
     // If current time is at least 15 min after window start, attempt catch-up
-    if (nowMin >= windowStart + 15) {
-      // Dedup check handled by tryRunTask
-      if (ts.id === 'us_predict_generate') {
-        tryRunTask('us_predict_generate', dateStr, function() {
+    if (nowMin < windowStart + 15) continue;
+
+    // Dispatch each task with its run function
+    var taskId = ts.id;
+    switch (taskId) {
+      case 'bootstrap_history':
+        tryRunTask(taskId, dateStr, function() {
+          var bh = require('./bootstrap_history');
+          var fs = require('fs');
+          var path = require('path');
+          var trainingFile = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'training_matrix.json');
+          var hasExisting = false;
+          try { hasExisting = fs.existsSync(trainingFile); } catch (e) {}
+          if (hasExisting) {
+            return bh.incrementalUpdate(20);
+          } else {
+            return bh.runBootstrap({ skipDownload: false, universe: 'hs300' });
+          }
+        });
+        break;
+      case 'full_backtest':
+        tryRunTask(taskId, dateStr, function() {
+          return require('./full_backtest').runWeeklyBacktest();
+        });
+        break;
+      case 'night_backtest':
+        tryRunTask(taskId, dateStr, function() {
+          return require('./night_backtest').runNightlyBacktest({ maxStocks: 200, lookbackDays: 60 });
+        });
+        break;
+      case 'weight_grid_search':
+        tryRunTask(taskId, dateStr, function() {
+          return require('./weight_grid_search').runGridSearch();
+        });
+        break;
+      case 'parameter_push':
+        tryRunTask(taskId, dateStr, function() {
+          return runParameterPush(dateStr);
+        });
+        break;
+      case 'us_predict_generate':
+        tryRunTask(taskId, dateStr, function() {
           return require('./us_as_predict').generateOvernightPrediction(dateStr);
         });
-      } else if (ts.id === 'us_predict_verify') {
-        tryRunTask('us_predict_verify', dateStr, function() {
+        break;
+      case 'us_predict_verify':
+        tryRunTask(taskId, dateStr, function() {
           return require('./us_as_predict').verifyPrediction(dateStr);
         });
-      }
-      // Other tasks use the same require pattern; dedup prevents double-run
-      // The tryRunTask already checks the history so we can skip explicit re-run here
-      // (the catch-up logic is intentionally lightweight — the main time-window
-      //  checks already widened to 30 minutes, so catch-up is a last resort)
+        break;
+      case 'self_reflection':
+        tryRunTask(taskId, dateStr, function() {
+          var sr = require('./self_reflection');
+          var pf;
+          try {
+            var simfolio = require('../simfolio');
+            pf = simfolio.loadPortfolio();
+          } catch (_) { pf = { positions: [], tradeHistory: [] }; }
+          return sr.runSelfReflection(pf, dateStr);
+        });
+        break;
+      case 'weekend_factor_mining':
+        tryRunTask(taskId, dateStr, function() {
+          return require('./weekend_factor_mining').runWeekendMining();
+        });
+        break;
+      case 'weekly_report':
+        tryRunTask(taskId, dateStr, function() {
+          return runWeeklyReport(dateStr);
+        });
+        break;
     }
   }
 }
@@ -449,22 +548,95 @@ function tryRunTask(taskId, dateStr, runFn) {
 
   console.log('[EvolutionScheduler] 开始: ' + taskId + ' (' + dateStr + ')');
 
-  try {
-    var result = runFn();
+  // v3.3.0: Timeout + retry wrapper
+  var TASK_TIMEOUT_MS = (function() {
+    try {
+      var config = require('../config');
+      return ((config.EVOLUTION && config.EVOLUTION.taskTimeoutMinutes) || 30) * 60 * 1000;
+    } catch (_) { return 30 * 60 * 1000; }
+  })();
+  var MAX_RETRIES = 1; // 1 retry = 2 total attempts
 
-    // Handle both sync and async returns
-    if (result && typeof result.then === 'function') {
-      result.then(function(res) {
-        recordTaskResult(taskId, dateStr, res, null);
-      }).catch(function(err) {
-        recordTaskResult(taskId, dateStr, null, err.message || String(err));
-      });
-    } else {
-      recordTaskResult(taskId, dateStr, result, null);
-    }
+  _executeWithRetry(taskId, dateStr, runFn, TASK_TIMEOUT_MS, 0, MAX_RETRIES);
+}
+
+/**
+ * Execute a task with timeout wrapping and retry on failure.
+ * v3.3.0: Prevents _state.running from getting stuck permanently.
+ */
+function _executeWithRetry(taskId, dateStr, runFn, timeoutMs, attempt, maxRetries) {
+  var timedOut = false;
+
+  var timeoutPromise = new Promise(function(resolve) {
+    setTimeout(function() {
+      timedOut = true;
+      resolve({ _timeout: true });
+    }, timeoutMs);
+  });
+
+  var taskResult;
+  try {
+    taskResult = runFn();
   } catch (e) {
-    console.error('[EvolutionScheduler] ' + taskId + ' 异常:', e.message);
+    console.error('[EvolutionScheduler] ' + taskId + ' 异常 (attempt ' + (attempt + 1) + '):', e.message);
+    if (attempt < maxRetries) {
+      console.log('[EvolutionScheduler] ' + taskId + ' 第 ' + (attempt + 1) + ' 次尝试失败，30秒后重试...');
+      setTimeout(function() {
+        _executeWithRetry(taskId, dateStr, runFn, timeoutMs, attempt + 1, maxRetries);
+      }, 30000);
+      return;
+    }
     recordTaskResult(taskId, dateStr, null, e.message);
+    return;
+  }
+
+  // Handle Promise (async tasks)
+  if (taskResult && typeof taskResult.then === 'function') {
+    Promise.race([taskResult, timeoutPromise]).then(function(res) {
+      if (timedOut || (res && res._timeout)) {
+        console.error('[EvolutionScheduler] ' + taskId + ' 超时 (' + (timeoutMs / 60000) + '分钟)');
+        if (attempt < maxRetries) {
+          console.log('[EvolutionScheduler] ' + taskId + ' 第 ' + (attempt + 1) + ' 次尝试超时，30秒后重试...');
+          setTimeout(function() {
+            _executeWithRetry(taskId, dateStr, runFn, timeoutMs, attempt + 1, maxRetries);
+          }, 30000);
+        } else {
+          recordTaskResult(taskId, dateStr, null, 'TIMEOUT after ' + (attempt + 1) + ' attempts');
+        }
+      } else {
+        recordTaskResult(taskId, dateStr, res, null);
+      }
+    }).catch(function(err) {
+      console.error('[EvolutionScheduler] ' + taskId + ' 错误 (attempt ' + (attempt + 1) + '):', err.message || String(err));
+      if (attempt < maxRetries) {
+        console.log('[EvolutionScheduler] ' + taskId + ' 第 ' + (attempt + 1) + ' 次尝试失败，30秒后重试...');
+        setTimeout(function() {
+          _executeWithRetry(taskId, dateStr, runFn, timeoutMs, attempt + 1, maxRetries);
+        }, 30000);
+      } else {
+        recordTaskResult(taskId, dateStr, null, err.message || String(err));
+      }
+    });
+  } else {
+    // Synchronous result
+    Promise.race([
+      Promise.resolve(taskResult),
+      timeoutPromise
+    ]).then(function(res) {
+      if (timedOut || (res && res._timeout)) {
+        console.error('[EvolutionScheduler] ' + taskId + ' 超时 (' + (timeoutMs / 60000) + '分钟)');
+        if (attempt < maxRetries) {
+          console.log('[EvolutionScheduler] ' + taskId + ' 第 ' + (attempt + 1) + ' 次尝试超时，30秒后重试...');
+          setTimeout(function() {
+            _executeWithRetry(taskId, dateStr, runFn, timeoutMs, attempt + 1, maxRetries);
+          }, 30000);
+        } else {
+          recordTaskResult(taskId, dateStr, null, 'TIMEOUT after ' + (attempt + 1) + ' attempts');
+        }
+      } else {
+        recordTaskResult(taskId, dateStr, res, null);
+      }
+    });
   }
 }
 

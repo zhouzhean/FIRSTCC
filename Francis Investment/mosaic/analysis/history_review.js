@@ -85,6 +85,9 @@ var _state = {
       if (ctx.verificationContext) {
         _state.lastVerification = ctx.verificationContext;
       }
+      if (ctx.marketProfile) {
+        _state.marketProfile = ctx.marketProfile;
+      }
       console.log('[HistoryReview] Restored state from history_context.json (lastDeep=' + _state.lastDeep + ')');
     }
   } catch (e) {
@@ -1628,6 +1631,7 @@ function _writeHistoryContext(verificationContext) {
     },
     verificationContext: verificationContext || null,
     discoveries: _state.discoveries,
+    marketProfile: _state.marketProfile,
   };
 
   _ensureDir(SIMFOLIO_DIR);

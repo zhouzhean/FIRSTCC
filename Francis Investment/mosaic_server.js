@@ -650,6 +650,167 @@ function serveStatic(res, filePath) {
   }
 }
 
+// ---- v3.3.0: Cockpit Data Builder ----
+
+function buildCockpitData() {
+  var result = {
+    timestamp: new Date().toISOString(),
+    tasks: [],
+    models: null,
+    dataQuality: null,
+    permissions: null,
+    verification: null,
+    failures: [],
+  };
+
+  // 1. Tasks — from evolution scheduler
+  try {
+    var evo = require('./mosaic/evolution/evolution_scheduler');
+    var evoStatus = evo.getStatus();
+    var taskNames = {
+      bootstrap_history: 'Bootstrap Training',
+      full_backtest: 'Full Backtest',
+      night_backtest: 'Night Backtest',
+      weight_grid_search: 'Weight Grid Search',
+      parameter_push: 'Parameter Push',
+      us_predict_generate: 'US Predict Generate',
+      us_predict_verify: 'US Predict Verify',
+      self_reflection: 'Self Reflection',
+      weekend_factor_mining: 'Weekend Factor Mining',
+      weekly_report: 'Weekly Report',
+    };
+    var today = new Date().toISOString().slice(0, 10);
+    var seenTasks = {};
+    if (evoStatus.history) {
+      for (var i = evoStatus.history.length - 1; i >= 0; i--) {
+        var h = evoStatus.history[i];
+        if (h.date === today && !seenTasks[h.task]) {
+          seenTasks[h.task] = true;
+          result.tasks.push({
+            name: taskNames[h.task] || h.task,
+            id: h.task,
+            status: h.success ? 'ok' : 'failed',
+            summary: h.summary || '',
+          });
+        }
+      }
+    }
+    // Add tasks not yet run today
+    for (var tid in taskNames) {
+      if (!seenTasks[tid]) {
+        result.tasks.push({ name: taskNames[tid], id: tid, status: 'waiting', summary: '' });
+      }
+    }
+  } catch (e) {
+    result.tasks = [{ name: 'Scheduler offline', id: 'error', status: 'failed', summary: e.message }];
+  }
+
+  // 2. Models — from model registry
+  try {
+    var mr = require('./mosaic/evolution/model_registry');
+    result.models = mr.getRegistryStatus();
+  } catch (_) {
+    result.models = { error: 'Model registry not available' };
+  }
+
+  // 3. Data Quality
+  try {
+    var dq = require('./mosaic/analysis/data_quality');
+    var dqResult = dq.computeConfidencePenalty();
+    result.dataQuality = {
+      qualityScore: dqResult.qualityScore || null,
+      penalty: dqResult.penalty || 0,
+      reasons: dqResult.reasons || [],
+    };
+    // Auto-pause status
+    try {
+      var simfolio = require('./mosaic/simfolio');
+      result.dataQuality.autoPause = simfolio.getAutoPauseStatus();
+    } catch (_) {}
+  } catch (_) {
+    result.dataQuality = { error: 'Data quality module not available' };
+  }
+
+  // 4. Trading Permissions
+  try {
+    var sh = require('./mosaic/analysis/strategy_health');
+    var pf;
+    try {
+      var sf = require('./mosaic/simfolio');
+      pf = sf.loadPortfolio();
+    } catch (_) {
+      pf = { positions: [], tradeHistory: [], _stats: {} };
+    }
+    var healthContext = {
+      portfolio: pf,
+      indices: null,
+      macroContext: null,
+      pipelineResults: [],
+    };
+    var health = sh.computeStrategyHealth(healthContext);
+    result.permissions = {
+      verdict: health.verdict || 'ALLOW',
+      verdictLabel: health.verdictLabel || '允许开仓',
+      maxBuysPerDay: null,
+      reasons: health.reasons || [],
+      confidence: health.confidence || null,
+    };
+    // Add gate states from last pipeline result
+    try {
+      var lastResultFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
+      if (require('fs').existsSync(lastResultFile)) {
+        var lastResult = JSON.parse(require('fs').readFileSync(lastResultFile, 'utf8'));
+        result.permissions.gates = {
+          drawdownActive: !!(lastResult.drawdownGateActive),
+          marketGateActive: !!(lastResult.marketGateActive),
+          circuitBreakerActive: !!(lastResult.circuitBreakerActive),
+        };
+        if (lastResult.effectiveMaxBuys != null) {
+          result.permissions.maxBuysPerDay = lastResult.effectiveMaxBuys;
+        }
+      }
+    } catch (_) {}
+  } catch (_) {
+    result.permissions = { error: 'Strategy health not available' };
+  }
+
+  // 5. Verification
+  try {
+    var vd = require('./mosaic/analysis/verification_dashboard');
+    var dash = vd.getDashboard({ lookbackDays: 60 });
+    result.verification = {
+      overallHitRate: dash.summary && dash.summary.overallHitRate,
+      totalPredictions: dash.summary && dash.summary.totalPredictions,
+      rankIC: dash.summary && dash.summary.rankIC,
+      dataQuality: dash.summary && dash.summary.dataQuality,
+      factors: dash.stockPredictor && dash.stockPredictor.factors || [],
+    };
+  } catch (_) {
+    result.verification = { error: 'Verification dashboard not available' };
+  }
+
+  // 6. Failed Tasks
+  try {
+    var evo2 = require('./mosaic/evolution/evolution_scheduler');
+    var evoStatus2 = evo2.getStatus();
+    if (evoStatus2.history) {
+      for (var j = evoStatus2.history.length - 1; j >= 0 && result.failures.length < 10; j--) {
+        var entry = evoStatus2.history[j];
+        if (!entry.success) {
+          result.failures.push({
+            task: entry.task,
+            date: entry.date,
+            time: entry.time,
+            error: entry.error || entry.summary || 'Unknown error',
+          });
+        }
+      }
+    }
+  } catch (_) {}
+
+  return result;
+}
+
 function jsonResponse(res, data, status) {
   res.writeHead(status || 200, {
     'Content-Type': 'application/json; charset=utf-8',
@@ -1486,6 +1647,46 @@ const server = http.createServer(async function(req, res) {
   }
 
   // [v3.2] Post-game verification dashboard
+  // === [v3.3.0]: Autonomy Cockpit API ===
+  if (pathname === '/api/cockpit') {
+    try {
+      return jsonResponse(res, { ok: true, ...buildCockpitData() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // === [v3.3.0]: Model Registry API ===
+  if (pathname === '/api/model-registry/status') {
+    try {
+      const modelRegistry = require('./mosaic/evolution/model_registry');
+      return jsonResponse(res, { ok: true, ...modelRegistry.getRegistryStatus() });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/model-registry/champion') {
+    try {
+      const modelRegistry = require('./mosaic/evolution/model_registry');
+      const champion = modelRegistry.getChampionParams();
+      return jsonResponse(res, { ok: true, champion });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  if (pathname === '/api/model-registry/evaluate' && req.method === 'POST') {
+    try {
+      const modelRegistry = require('./mosaic/evolution/model_registry');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      const result = modelRegistry.evaluateShadow(dateStr);
+      return jsonResponse(res, { ok: true, ...result });
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   if (pathname === '/api/verification/dashboard') {
     try {
       const verificationDashboard = require('./mosaic/analysis/verification_dashboard');

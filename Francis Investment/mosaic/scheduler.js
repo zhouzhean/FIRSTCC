@@ -1410,6 +1410,16 @@ class Scheduler extends EventEmitter {
         overallHitRate: summary ? summary.overallHitRate : null,
         avgRankIC: summary ? summary.avgRankIC : null,
       });
+      // v3.3.0: Evaluate shadow models against verification results
+      try {
+        var mr = require('./evolution/model_registry');
+        var evalResult = mr.evaluateShadow(dateStr);
+        if (evalResult && !evalResult.skipped) {
+          console.log('[Scheduler] Shadow评估: ' +
+            (evalResult.evaluated ? evalResult.evaluated.length : 0) + ' 个模型, ' +
+            (evalResult.promoted ? 'PROMOTED!' : '无晋级'));
+        }
+      } catch (_) { /* model_registry is advisory */ }
     } catch (e) {
       console.error('[Scheduler] 赛后验证失败:', e.message);
       this._logEvent('daily_verification_error', { date: dateStr, error: e.message });
