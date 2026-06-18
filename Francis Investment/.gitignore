@@ -24,6 +24,8 @@ report-engine/data/simfolio/false_signal_patterns.json
 report-engine/data/simfolio/missed_opportunities.json
 report-engine/data/simfolio/expected_return_verification.json
 report-engine/data/simfolio/evo_task_history.json
+# v3.4.0: Decision audit logs (daily per-scan decision context)
+report-engine/data/simfolio/decision_audit_*.jsonl
 report-engine/data/simfolio/full_backtest_result*.json
 report-engine/data/simfolio/data_quality_report.json
 report-engine/data/simfolio/strategy_health_snapshot.json

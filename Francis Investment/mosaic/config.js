@@ -137,9 +137,9 @@ module.exports = {
     midDayScanTimeoutMs: 300_000,     // Mid-Day Scan 5分钟超时
     positionMonitorTimeoutMs: 30_000, // 持仓检查 30秒超时
 
-    // Mid-Day Scan 参数
-    midScanTopCount: 250,   // 按成交额取前250只（云端优化）
-    midScanDeepAnalyze: 20, // 深析前20只（云端优化）
+    // Mid-Day Scan 参数 (v3.4.0: increased coverage)
+    midScanTopCount: 300,   // 按成交额取前300只
+    midScanDeepAnalyze: 50, // 深析前50只（提高覆盖，减少漏选强机会）
 
     // 移动止盈
     trailingStop: {

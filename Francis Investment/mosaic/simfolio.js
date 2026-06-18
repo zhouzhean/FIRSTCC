@@ -732,6 +732,74 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     };
   }
 
+  // [v3.4.0] ---- Unified Decision Kernel ----
+  // Single source of truth for ALL gates. All consumers (cockpit, think-tank, simfolio)
+  // now use the same kernel. The existing gate chain below inspects kernelDecision.gateStates
+  // instead of doing independent checks.
+  var kernelDecision = null;
+  try {
+    var kernel = require('./decision_kernel');
+
+    var dqReport = null;
+    try { dqReport = require('./analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
+
+    var leakageAudit = null;
+    try {
+      var laPath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      if (require('fs').existsSync(laPath)) {
+        leakageAudit = JSON.parse(require('fs').readFileSync(laPath, 'utf8'));
+      }
+    } catch (_) {}
+
+    var shResult = null;
+    try {
+      shResult = require('./analysis/strategy_health').computeStrategyHealth({
+        portfolio: pf, indices: indices, macroContext: macroContext, pipelineResults: pipelineResults,
+      });
+    } catch (_) {}
+
+    kernelDecision = kernel.computeDecision({
+      portfolio: pf,
+      indices: indices,
+      macroContext: macroContext,
+      pipelineResults: pipelineResults,
+      dataQualityReport: dqReport,
+      leakageAudit: leakageAudit,
+      strategyHealth: shResult,
+    });
+  } catch (_) { /* kernel unavailable — fall through to legacy gate chain */ }
+
+  // --- Helper: map kernel gateStates back to buildGateResults()-style return ---
+  function _kernelGateResults(kd, pf, indices, macroContext) {
+    if (kd && kd.gateStates) {
+      // Use kernel's gateStates directly — they're already in the same format
+      // but need the thinkTankDefense and attributionAvoid fields from legacy
+      var thinkTankGate = { defensive: false, score: 0, breakdown: {}, reason: '' };
+      try {
+        var kgs = kd.gateStates;
+        thinkTankGate.defensive = kgs.circuitBreaker.status === 'block';
+        if (thinkTankGate.defensive) {
+          thinkTankGate.score = 4;
+          thinkTankGate.reason = kgs.circuitBreaker.description;
+          thinkTankGate.breakdown = { circuitBreaker: 4 };
+        }
+      } catch (_) {}
+      try {
+        var legacy = buildGateResults(pf, indices, macroContext, thinkTankGate, []);
+        if (kd.gateStates.drawdown) legacy.drawdown = kd.gateStates.drawdown;
+        if (kd.gateStates.marketDirection) legacy.marketDirection = kd.gateStates.marketDirection;
+        if (kd.gateStates.circuitBreaker) legacy.circuitBreaker = kd.gateStates.circuitBreaker;
+        if (kd.gateStates.leakageAudit) legacy.leakageAudit = kd.gateStates.leakageAudit;
+        if (kd.gateStates.strategyHealth) legacy.strategyHealth = kd.gateStates.strategyHealth;
+        if (kd.gateStates.dataQuality) legacy.dataQuality = kd.gateStates.dataQuality;
+        return legacy;
+      } catch (_) {
+        if (kd.gateStates) return kd.gateStates;
+      }
+    }
+    return buildGateResults(pf, indices, macroContext, null, []);
+  }
+
   // ---- Step 1: Update benchmark ----
   updateBenchmark(pf, indices, today);
 
@@ -758,11 +826,10 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   }
 
   // ---- Step 3: Drawdown gate ----
-  // P0-1: Check portfolio drawdown level. At -10% halt, at -8% restrict, at -5% warn.
-  // This protects against continued bleeding — when the account is down significantly,
-  // stop adding new positions until conditions improve.
+  // [v3.4.0] Enhanced with kernel — blocks when kernel reports drawdown block OR legacy ddLevel halt
   const ddLevel = (pf._drawdownLevel && pf._drawdownLevel.level) || 'normal';
-  if (ddLevel === 'halt') {
+  var kernelDdBlock = kernelDecision && kernelDecision.gateStates.drawdown.status === 'block';
+  if (ddLevel === 'halt' || kernelDdBlock) {
     const sellDecisions = decisions.filter(d => d.action === 'sell');
     const executedTrades = [];
     for (const dec of sellDecisions) {
@@ -777,13 +844,14 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
+    var ddReason = kernelDdBlock ? kernelDecision.gateStates.drawdown.description : (pf._drawdownLevel && pf._drawdownLevel.message);
     return {
       decisions: sellDecisions,
       executed: executedTrades,
       snapshot: getSnapshot(pf),
       drawdownGateActive: true,
-      drawdownGateReason: pf._drawdownLevel.message,
-      gateResults: buildGateResults(pf, indices, macroContext, null, []),
+      drawdownGateReason: ddReason || '回撤熔断',
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
     };
   }
 
@@ -824,13 +892,12 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   }
 
   // ---- Step 3.5a: Cross-market risk CIRCUIT BREAKER ----
-  // Panic or risk_off regime = HARD BLOCK on all buys. Sells only.
-  // This is NOT a scoring penalty — it's a complete buy prohibition.
-  // When macro risk is "panic" or "risk_off", no individual stock score
-  // can justify buying. We simply stop buying until conditions improve.
-  if (macroContext && macroContext.riskState) {
-    const regime = macroContext.riskState.regime;
-    if (regime === 'panic' || regime === 'risk_off') {
+  // [v3.4.0] Enhanced with kernel — uses unified gate state from decision kernel
+  // Fallback to legacy macroContext check when kernel unavailable.
+  var kernelCbBlock = kernelDecision && kernelDecision.gateStates.circuitBreaker.status === 'block';
+  var legacyCbBlock = macroContext && macroContext.riskState && (macroContext.riskState.regime === 'panic' || macroContext.riskState.regime === 'risk_off');
+  if (kernelCbBlock || legacyCbBlock) {
+    var regime = macroContext && macroContext.riskState ? macroContext.riskState.regime : (kernelCbBlock ? 'risk_off' : 'unknown');
       const sellDecisions = decisions.filter(d => d.action === 'sell');
       const executedTrades = [];
       for (const dec of sellDecisions) {
@@ -850,12 +917,11 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         executed: executedTrades,
         snapshot: getSnapshot(pf),
         circuitBreakerActive: true,
-        circuitBreakerReason: '跨市场风险熔断：' +
-          (regime === 'panic' ? '恐慌状态，禁止所有买入（仅允许卖出）' : '避险状态，禁止所有买入（仅允许卖出）'),
-        gateResults: buildGateResults(pf, indices, macroContext, null, []),
+        circuitBreakerReason: kernelCbBlock ? kernelDecision.gateStates.circuitBreaker.description :
+          '跨市场风险熔断：' + (regime === 'panic' ? '恐慌状态，禁止所有买入（仅允许卖出）' : '避险状态，禁止所有买入（仅允许卖出）'),
+        gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
       };
     }
-  }
 
   // ---- Step 3.5b: Think-Tank defensive gate ----
   // Synthesizes factor health, portfolio status, and cross-market risk
@@ -885,12 +951,12 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       thinkTankDefensive: true,
       thinkTankReason: thinkTankGate.reason,
-      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
 
-  // ---- Step 3.5c: Leakage Audit Gate (v3.3.2) ----
-  // Read leakage_audit.json directly in the real trading path.
+  // ---- Step 3.5c: Leakage Audit Gate (v3.3.2, enhanced v3.4.0) ----
+  // [v3.4.0] Primary: kernel gateState. Fallback: direct file read.
   // This is a HARD risk control: NO_SAMPLES / INSUFFICIENT_DATA / CRITICAL /
   // DATA_LEAKAGE_RISK all block real buys. MINOR_ISSUES → CAUTIOUS (max 1 buy).
   // Only CLEAN with totalChecks>0 allows normal trading.
@@ -901,30 +967,45 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   var leakageReduceActive = false;
   var leakageReasons = [];
   var laVerdict = 'NO_SAMPLES';
-  try {
-    var leakagePath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
-    var leakageAudit = null;
-    if (require('fs').existsSync(leakagePath)) {
-      leakageAudit = JSON.parse(require('fs').readFileSync(leakagePath, 'utf8'));
-    }
-    var laTotalChecks = leakageAudit ? (leakageAudit.totalChecks || 0) : 0;
-    laVerdict = leakageAudit ? (leakageAudit.verdict || 'NO_SAMPLES') : 'NO_SAMPLES';
+  var laTotalChecks = 0;
 
-    if (laVerdict === 'CRITICAL_DATA_LEAKAGE' || laVerdict === 'DATA_LEAKAGE_RISK') {
+  // [v3.4.0] Prefer kernel gate state when available — same as cockpit + think-tank
+  if (kernelDecision && kernelDecision.gateStates.leakageAudit) {
+    var kla = kernelDecision.gateStates.leakageAudit;
+    laVerdict = kla.verdict || 'NO_SAMPLES';
+    laTotalChecks = kla.totalChecks || 0;
+    if (kla.status === 'block') {
       leakageBlockActive = true;
-      leakageReasons.push('Leakage audit: ' + laVerdict + ' — 发现数据泄漏风险，禁止所有买入');
-    } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA' || laTotalChecks === 0) {
-      leakageBlockActive = true;
-      leakageReasons.push('Leakage audit: NO_SAMPLES — 审计样本不足，禁止实盘开仓 (' + laTotalChecks + ' 条检查)');
-    } else if (laVerdict === 'MINOR_ISSUES') {
+      leakageReasons.push(kla.description);
+    } else if (kla.status === 'cautious') {
       leakageReduceActive = true;
-      leakageReasons.push('Leakage audit: MINOR_ISSUES — 有小问题需人工复核，限制买入数量');
+      leakageReasons.push(kla.description);
     }
-    // CLEAN → no block, no reduce
-  } catch (_) {
-    // Leakage audit read failure → conservative: block buys
-    leakageBlockActive = true;
-    leakageReasons.push('Leakage audit: 无法读取审计文件，保守禁止买入');
+  } else {
+    // Legacy: direct file read
+    try {
+      var leakagePath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      var leakageAuditFile = null;
+      if (require('fs').existsSync(leakagePath)) {
+        leakageAuditFile = JSON.parse(require('fs').readFileSync(leakagePath, 'utf8'));
+      }
+      laTotalChecks = leakageAuditFile ? (leakageAuditFile.totalChecks || 0) : 0;
+      laVerdict = leakageAuditFile ? (leakageAuditFile.verdict || 'NO_SAMPLES') : 'NO_SAMPLES';
+
+      if (laVerdict === 'CRITICAL_DATA_LEAKAGE' || laVerdict === 'DATA_LEAKAGE_RISK') {
+        leakageBlockActive = true;
+        leakageReasons.push('Leakage audit: ' + laVerdict + ' — 发现数据泄漏风险，禁止所有买入');
+      } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA' || laTotalChecks === 0) {
+        leakageBlockActive = true;
+        leakageReasons.push('Leakage audit: NO_SAMPLES — 审计样本不足，禁止实盘开仓 (' + laTotalChecks + ' 条检查)');
+      } else if (laVerdict === 'MINOR_ISSUES') {
+        leakageReduceActive = true;
+        leakageReasons.push('Leakage audit: MINOR_ISSUES — 有小问题需人工复核，限制买入数量');
+      }
+    } catch (_) {
+      leakageBlockActive = true;
+      leakageReasons.push('Leakage audit: 无法读取审计文件，保守禁止买入');
+    }
   }
 
   if (leakageBlockActive) {
@@ -949,29 +1030,31 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       leakageAuditBlock: true,
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
-      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
 
-  // ---- Step 3.5d: Strategy Health Gate (v3.3.0) ----
-  // Consume strategy_health.js verdict directly. BLOCK = no buys, REDUCE = sell-only,
-  // CAUTIOUS = max 1 buy. This replaces the implicit "all systems nominal" assumption.
+  // ---- Step 3.5d: Strategy Health Gate (v3.3.0, enhanced v3.4.0) ----
+  // [v3.4.0] Prefer kernel gate state (same kernel called at top of this function).
+  // Fallback: direct strategy_health call.
   var strategyHealthVerdict = 'ALLOW';
   var strategyHealthReasons = [];
-  try {
-    var sh = require('./analysis/strategy_health');
-    var healthContext = {
-      portfolio: pf,
-      indices: indices,
-      macroContext: macroContext,
-      pipelineResults: pipelineResults,
-    };
-    var healthResult = sh.computeStrategyHealth(healthContext);
-    if (healthResult && healthResult.verdict) {
-      strategyHealthVerdict = healthResult.verdict;
-      strategyHealthReasons = healthResult.reasons || [];
-    }
-  } catch (_) { /* strategy_health not available */ }
+  if (kernelDecision && kernelDecision.gateStates.strategyHealth) {
+    strategyHealthVerdict = kernelDecision.gateStates.strategyHealth.verdict || 'ALLOW';
+    strategyHealthReasons = kernelDecision.gateStates.strategyHealth.reasons || [];
+  } else {
+    try {
+      var sh = require('./analysis/strategy_health');
+      var healthContext = {
+        portfolio: pf, indices: indices, macroContext: macroContext, pipelineResults: pipelineResults,
+      };
+      var healthResult = sh.computeStrategyHealth(healthContext);
+      if (healthResult && healthResult.verdict) {
+        strategyHealthVerdict = healthResult.verdict;
+        strategyHealthReasons = healthResult.reasons || [];
+      }
+    } catch (_) { /* strategy_health not available */ }
+  }
 
   if (strategyHealthVerdict === 'BLOCK') {
     var shSellDecisions = decisions.filter(function(d) { return d.action === 'sell'; });
@@ -997,7 +1080,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       strategyHealthReasons: strategyHealthReasons,
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
-      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
 
@@ -1026,7 +1109,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       strategyHealthReasons: strategyHealthReasons,
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
-      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
 

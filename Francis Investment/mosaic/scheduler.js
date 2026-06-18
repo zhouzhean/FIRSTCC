@@ -682,6 +682,57 @@ class Scheduler extends EventEmitter {
               decisions: (tradeResult.decisions || []).length,
             };
             fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
+
+            // [v3.4.0] Decision audit log — record why the system did or didn't buy
+            try {
+              var buyCandidates = tradeResult.buyCandidates || [];
+              var executedBuys = (tradeResult.executed || []).filter(function(t) { return t.action === 'buy'; });
+              var isBlocked = tradeResult.drawdownGateActive || tradeResult.marketGateActive ||
+                tradeResult.circuitBreakerActive || tradeResult.thinkTankDefensive ||
+                tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock;
+              var isReduce = tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive;
+              var blockReasons = [];
+              if (tradeResult.drawdownGateActive) blockReasons.push('drawdown');
+              if (tradeResult.marketGateActive) blockReasons.push('marketDirection');
+              if (tradeResult.circuitBreakerActive) blockReasons.push('circuitBreaker');
+              if (tradeResult.thinkTankDefensive) blockReasons.push('thinkTankDefense');
+              if (tradeResult.leakageAuditBlock) blockReasons.push('leakageAudit');
+              if (tradeResult.strategyHealthBlock) blockReasons.push('strategyHealth');
+              if (tradeResult.strategyHealthReduce) blockReasons.push('strategyHealthReduce');
+              if (tradeResult.leakageReduceActive) blockReasons.push('leakageReduce');
+
+              var verdict = isBlocked ? 'BLOCK' : (isReduce ? 'REDUCE' : (executedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS'));
+              var note = '';
+              if (isBlocked) {
+                note = '今天不买入：' + blockReasons.join('+');
+              } else if (isReduce) {
+                note = '今天限制买入：' + blockReasons.join('+');
+              } else if (executedBuys.length === 0 && buyCandidates.length === 0) {
+                note = '今天无候选股达标（评分/预期收益不足）';
+              } else if (executedBuys.length === 0 && buyCandidates.length > 0) {
+                note = '有' + buyCandidates.length + '只候选但因风控未执行';
+              } else {
+                note = '今天买入' + executedBuys.length + '只' + (buyCandidates.length > executedBuys.length ? '（共' + buyCandidates.length + '只候选）' : '');
+              }
+
+              var auditEntry = {
+                timestamp: new Date().toISOString(),
+                scanType: 'full',
+                totalStocks: result.totalStocks || 0,
+                candidates: result.candidates || 0,
+                analyzed: result.analyzed || 0,
+                topScore: result.allResults ? Math.max.apply(null, result.allResults.map(function(r) { return r.compositeScore || 0; })) : 0,
+                avgScore: result.allResults ? Math.round(result.allResults.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / result.allResults.length) : 0,
+                buyCandidates: buyCandidates.length,
+                executedBuyCount: executedBuys.length,
+                blockReasons: blockReasons,
+                verdict: verdict,
+                canBuy: !isBlocked && !isReduce,
+                maxBuysPerDay: tradeResult.gateResults && tradeResult.gateResults.effectiveMaxBuys != null ? tradeResult.gateResults.effectiveMaxBuys : null,
+                note: note,
+              };
+              _appendDecisionAudit(auditEntry);
+            } catch (_) {}
           } catch (_) {}
           this.emit('think_decision', {
             type: 'decision_update',
@@ -887,6 +938,45 @@ class Scheduler extends EventEmitter {
                 decisions: (tradeResult.decisions || []).length,
               };
               fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
+
+            // [v3.4.0] Decision audit log for mid scan
+            try {
+              var midBuyCandidates = tradeResult.buyCandidates || [];
+              var midExecutedBuys = (tradeResult.executed || []).filter(function(t) { return t.action === 'buy'; });
+              var midBlocked = tradeResult.drawdownGateActive || tradeResult.marketGateActive ||
+                tradeResult.circuitBreakerActive || tradeResult.thinkTankDefensive ||
+                tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock;
+              var midReduce = tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive;
+              var midBlockReasons = [];
+              if (tradeResult.drawdownGateActive) midBlockReasons.push('drawdown');
+              if (tradeResult.marketGateActive) midBlockReasons.push('marketDirection');
+              if (tradeResult.circuitBreakerActive) midBlockReasons.push('circuitBreaker');
+              if (tradeResult.thinkTankDefensive) midBlockReasons.push('thinkTankDefense');
+              if (tradeResult.leakageAuditBlock) midBlockReasons.push('leakageAudit');
+              if (tradeResult.strategyHealthBlock) midBlockReasons.push('strategyHealth');
+
+              var midVerdict = midBlocked ? 'BLOCK' : (midReduce ? 'REDUCE' : (midExecutedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS'));
+              var midNote = midBlocked ? 'mid-scan不买入：' + midBlockReasons.join('+')
+                : (midReduce ? 'mid-scan限制买入：' + midBlockReasons.join('+')
+                  : (midExecutedBuys.length === 0 ? 'mid-scan无候选达标' : 'mid-scan买入' + midExecutedBuys.length + '只'));
+
+              _appendDecisionAudit({
+                timestamp: new Date().toISOString(),
+                scanType: 'mid',
+                totalStocks: results.length > 0 ? candidates.length : 0,
+                candidates: candidates.length,
+                analyzed: results.length,
+                topScore: results.length > 0 ? Math.max.apply(null, results.map(function(r) { return r.compositeScore || 0; })) : 0,
+                avgScore: results.length > 0 ? Math.round(results.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / results.length) : 0,
+                buyCandidates: midBuyCandidates.length,
+                executedBuyCount: midExecutedBuys.length,
+                blockReasons: midBlockReasons,
+                verdict: midVerdict,
+                canBuy: !midBlocked && !midReduce,
+                maxBuysPerDay: tradeResult.gateResults && tradeResult.gateResults.effectiveMaxBuys != null ? tradeResult.gateResults.effectiveMaxBuys : null,
+                note: midNote,
+              });
+            } catch (_) {}
             } catch (_) {}
             this.emit('think_decision', {
               type: 'decision_update',
@@ -1728,6 +1818,20 @@ class Scheduler extends EventEmitter {
   _sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
   }
+}
+
+// [v3.4.0] Decision audit log helper — append one JSONL line per scan decision.
+// Called from the Scheduler from full and mid scan execution paths.
+// Each line captures the complete decision context for post-hoc review:
+//   - totalStocks / candidates / analyzed (funnel)
+//   - topScore / avgScore (signal quality)
+//   - buyCandidates / executedBuyCount (decision result)
+//   - blockReasons (WHY the system didn't buy, if applicable)
+function _appendDecisionAudit(entry) {
+  var dir = require('path').join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+  if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
+  var filePath = require('path').join(dir, 'decision_audit_' + new Date().toISOString().slice(0, 10) + '.jsonl');
+  require('fs').appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf8');
 }
 
 module.exports = { Scheduler };

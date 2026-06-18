@@ -1,5 +1,5 @@
-/**
- * Autonomy Cockpit — v3.3.2
+﻿/**
+ * Autonomy Cockpit — v3.4.0
  * 30-second polling dashboard for autonomous trading status.
  *
  * Design principle: "可监督状态" (supervisable status) — not pretty cards.
@@ -68,7 +68,94 @@ function setConnectionStatus(text, cls) {
 
 // ══════ Render All ══════
 
+// ══════ Why Not Buying Banner (v3.4.0) ══════
+// Top-level decision summary — shows WHY the system isn't buying
+// before any detailed panels. Unified kernel verdict.
+
+function renderWhyNotBuying(perms, pipelineSummary) {
+  var el = document.getElementById('wnb-body');
+  if (!el) return;
+
+  if (!perms) {
+    el.innerHTML = '<div class="wnb-loading">Decision data not available</div>';
+    return;
+  }
+
+  var canBuy = perms.verdict === 'ALLOW';
+  var isBlock = perms.verdict === 'BLOCK';
+  var isReduce = perms.verdict === 'REDUCE';
+  var hasCaveats = perms.verdict === 'CAUTIOUS';
+  var reasons = perms.reasons || [];
+
+  var html = '';
+  var bannerClass = isBlock ? 'wnb-block' : (isReduce ? 'wnb-reduce' : (hasCaveats ? 'wnb-cautious' : 'wnb-clear'));
+
+  if (isBlock) {
+    html += '<div class="wnb-header ' + bannerClass + '">';
+    html += '<span class="wnb-icon">&#9888;</span>';
+    html += '<span class="wnb-title">系统当前不买入</span>';
+    html += '<span class="wnb-verdict">(BLOCK)</span>';
+    html += '</div>';
+    html += '<ul class="wnb-reasons">';
+    if (reasons.length > 0) {
+      for (var i = 0; i < Math.min(5, reasons.length); i++) {
+        html += '<li>' + esc(reasons[i]) + '</li>';
+      }
+    }
+    if (perms.maxBuysPerDay != null) {
+      html += '<li>每日最大买入: <strong>' + perms.maxBuysPerDay + '</strong></li>';
+    }
+    html += '</ul>';
+  } else if (isReduce) {
+    html += '<div class="wnb-header ' + bannerClass + '">';
+    html += '<span class="wnb-icon">&#9888;</span>';
+    html += '<span class="wnb-title">仅允许卖出，禁止买入</span>';
+    html += '<span class="wnb-verdict">(REDUCE)</span>';
+    html += '</div>';
+    if (reasons.length > 0) {
+      html += '<ul class="wnb-reasons">';
+      for (var j = 0; j < Math.min(5, reasons.length); j++) {
+        html += '<li>' + esc(reasons[j]) + '</li>';
+      }
+      html += '</ul>';
+    }
+  } else if (hasCaveats) {
+    html += '<div class="wnb-header ' + bannerClass + '">';
+    html += '<span class="wnb-icon">&#9888;</span>';
+    html += '<span class="wnb-title">谨慎交易模式</span>';
+    html += '<span class="wnb-verdict">(CAUTIOUS)</span>';
+    html += '</div>';
+    if (reasons.length > 0) {
+      html += '<ul class="wnb-reasons">';
+      for (var k = 0; k < reasons.length; k++) {
+        html += '<li>' + esc(reasons[k]) + '</li>';
+      }
+      html += '</ul>';
+    }
+  } else {
+    html += '<div class="wnb-header ' + bannerClass + '">';
+    html += '<span class="wnb-icon">&#10003;</span>';
+    html += '<span class="wnb-title">系统正常，允许交易</span>';
+    html += '</div>';
+  }
+
+  // v3.4.0: Pipeline funnel display (if data available)
+  if (pipelineSummary) {
+    html += '<div class="wnb-funnel">Pipeline: ';
+    html += '<strong>' + esc(pipelineSummary.totalStocks || '?') + '</strong> total' + ' → ';
+    html += '<strong>' + esc(pipelineSummary.candidates || '?') + '</strong> candidates' + ' → ';
+    html += '<strong>' + esc(pipelineSummary.analyzed || '?') + '</strong> analyzed';
+    if (pipelineSummary.topScore != null) {
+      html += ' → top score <strong>' + pipelineSummary.topScore + '</strong>';
+    }
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
 function renderAll(data) {
+  renderWhyNotBuying(data.permissions, data.pipelineSummary);
   renderSystemStatus(data);
   renderApiHealth(data);
   renderDataFiles(data.dataFiles);
@@ -88,7 +175,7 @@ function renderAll(data) {
  */
 function renderAllError(msg) {
   var panelIds = [
-    'api-health-body', 'data-files-body', 'prediction-body',
+    'wnb-body', 'api-health-body', 'data-files-body', 'prediction-body',
     'shadow-champion-body', 'leakage-body', 'permissions-body',
     'tasks-body', 'verify-body', 'calibration-body',
     'changelog-body', 'failures-body'
@@ -114,7 +201,7 @@ function renderSystemStatus(data) {
   var html = '';
 
   // Version
-  var version = data.systemVersion || 'v3.3.2';
+  var version = data.systemVersion || 'v3.4.0';
   html += '<div class="sys-row">' +
     '<span class="sys-label">Version</span>' +
     '<span class="sys-value">' + esc(version) + '</span>' +
@@ -515,7 +602,7 @@ function renderPermissions(perms) {
     '<span class="' + (perms.drawdownNarrowing ? 'metric-good' : 'metric-warn') + '">' +
     (perms.drawdownNarrowing ? 'NARROWING' : 'ACTIVE') + '</span></div>';
 
-  // Leakage audit (v3.3.2 — permissive→strict)
+  // Leakage audit (v3.4.0 — permissive→strict)
   var leakageLabel, leakageClass;
   if (perms.leakageAuditClean) {
     leakageLabel = 'CLEAN';

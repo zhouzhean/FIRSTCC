@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.3.2
+ * Francis Investment · Mosaic Server v3.4.0
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -207,19 +207,18 @@ function _buildLoopImpact(data) {
   return loopImpact;
 }
 
+// [v3.4.0] Unified Decision Kernel — single source of truth for ALL trading decisions.
+// Replaces the old independent logic (factor HOT/COLD + portfolio P&L + cross-market regime)
+// with the same kernel that cockpit and simfolio use. No more contradictory verdicts.
 function generateTodaysVerdict(data) {
-  const parts = [];
-  let action = 'normal';
-  let actionLabel = '正常交易';
-  let actionColor = '#00e676';
-
-  // 1. Market state
-  const state = (data.scheduler && data.scheduler.state) || 'closed';
-  const tradingStates = ['morning_session', 'afternoon_session'];
-  const isTrading = tradingStates.includes(state);
+  // Non-trading hours: quick return with wait status
+  var state = (data.scheduler && data.scheduler.state) || 'closed';
+  var tradingStates = ['morning_session', 'afternoon_session'];
+  var isTrading = tradingStates.indexOf(state) >= 0;
 
   if (!isTrading) {
-    const stateLabel = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后' }[state] || state;
+    var stateLabelMap = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后' };
+    var stateLabel = stateLabelMap[state] || state;
     return {
       summary: '当前' + stateLabel + '，等待开盘',
       action: 'wait',
@@ -230,94 +229,90 @@ function generateTodaysVerdict(data) {
     };
   }
 
-  // 2. Factor health: count HOT vs COLD, plus NB performance
-  let hotCount = 0, coldCount = 0;
-  const factorDetails = [];
-  if (data.factorPerformance && data.factorPerformance.factors) {
-    for (const f of data.factorPerformance.factors) {
-      if (f.status === 'hot') hotCount++;
-      else if (f.status === 'cold') coldCount++;
+  // ===== v3.4.0: Use unified Decision Kernel for trading-hours verdict =====
+  try {
+    var kernel = require('./mosaic/decision_kernel');
+
+    var pf = null;
+    try { pf = require('./mosaic/simfolio').loadPortfolio(); } catch (_) {}
+
+    var dqReport = null;
+    try { dqReport = require('./mosaic/analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
+
+    var leakageAudit = null;
+    try {
+      var laPath = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      if (require('fs').existsSync(laPath)) {
+        leakageAudit = JSON.parse(require('fs').readFileSync(laPath, 'utf8'));
+      }
+    } catch (_) {}
+
+    var shResult = null;
+    try {
+      var sh = require('./mosaic/analysis/strategy_health');
+      shResult = sh.computeStrategyHealth({
+        portfolio: pf, indices: null, macroContext: null, pipelineResults: null,
+      });
+    } catch (_) {}
+
+    var macroContext = null;
+    try {
+      var cm = require('./mosaic/analysis/cross_market');
+      var riskState = cm.getCachedRiskState();
+      if (riskState) macroContext = { riskState: riskState };
+    } catch (_) {}
+
+    var decision = kernel.computeDecision({
+      portfolio: pf,
+      indices: null,
+      macroContext: macroContext,
+      pipelineResults: null,
+      dataQualityReport: dqReport,
+      leakageAudit: leakageAudit,
+      strategyHealth: shResult,
+    });
+
+    // Map kernel verdict → think-tank action format (backward compatible)
+    var actionMap = { ALLOW: 'normal', CAUTIOUS: 'cautious', REDUCE: 'cautious', BLOCK: 'defensive' };
+    var action = actionMap[decision.finalVerdict] || 'normal';
+
+    var actionLabels = { normal: '可正常交易', cautious: '谨慎交易', defensive: '建议减仓观望' };
+    var actionLabel = actionLabels[action] || '未知';
+
+    var actionColors = { normal: '#00e676', cautious: '#ffb800', defensive: '#ff3b4a' };
+    var actionColor = actionColors[action] || '#4a5568';
+
+    // Build messages from kernel reasons + advisory signals
+    var parts = [];
+    for (var h = 0; h < decision.hardBlockers.length; h++) {
+      parts.push(decision.hardBlockers[h].reason);
     }
-  }
-
-  // Include north-bound performance in verdict
-  if (data.factorPerformance && data.factorPerformance.nbPerformance && data.factorPerformance.nbPerformance.available) {
-    const nb = data.factorPerformance.nbPerformance;
-    if (nb.status === 'cold') {
-      parts.push('北向信号偏冷(命中率' + (nb.hitRate * 100).toFixed(0) + '%)');
-      action = action === 'normal' ? 'cautious' : action;
+    for (var s = 0; s < decision.softReducers.length; s++) {
+      parts.push(decision.softReducers[s].reason);
     }
-  }
-
-  if (coldCount >= 3) {
-    parts.push('因子信号大面积偏冷(' + coldCount + '/9)');
-    action = 'defensive';
-  } else if (hotCount >= 2) {
-    parts.push('因子信号活跃(HOT: ' + hotCount + '/9)');
-  } else {
-    parts.push('因子信号中性');
-  }
-
-  // 3. Portfolio status
-  if (data.positions) {
-    const totalReturn = data.positions.totalReturn || 0;
-    const posCount = (data.positions.positions || []).length;
-    if (posCount === 0) {
-      parts.push('空仓');
-    } else if (totalReturn < -3) {
-      parts.push('持仓浮亏' + totalReturn.toFixed(1) + '%');
-      action = action === 'normal' ? 'cautious' : action;
-    } else if (totalReturn > 2) {
-      parts.push('持仓盈利' + totalReturn.toFixed(1) + '%');
-    } else {
-      parts.push('持仓' + posCount + '只(±' + Math.abs(totalReturn).toFixed(1) + '%)');
+    if (parts.length === 0) {
+      parts.push('各项指标正常，可正常交易');
     }
-  }
 
-  // 4. Last scan info
-  if (data.lastResult) {
-    const lr = data.lastResult;
-    if (lr.maxScore != null) {
-      const maxLabel = lr.maxScore >= 70 ? '高' : lr.maxScore >= 55 ? '中' : '低';
-      parts.push('最近扫描最高' + lr.maxScore + '分(' + maxLabel + '质量)');
-    }
+    return {
+      summary: parts.join(' · '),
+      action: action,
+      actionLabel: actionLabel,
+      color: actionColor,
+      details: decision.hardBlockers.concat(decision.softReducers).concat(decision.advisorySignals),
+      loopImpact: _buildLoopImpact(data),
+    };
+  } catch (_) {
+    // Kernel unavailable — fallback: display unknown state
+    return {
+      summary: '决策内核不可用，建议人工判断',
+      action: 'cautious',
+      actionLabel: '谨慎交易（内核异常）',
+      color: '#ffb800',
+      details: [{ gate: 'kernel', reason: 'Decision kernel unavailable: ' + (_.message || 'unknown error') }],
+      loopImpact: _buildLoopImpact(data),
+    };
   }
-
-  // 5. Cross-market risk
-  if (data.scheduler && data.scheduler.riskState) {
-    const regime = data.scheduler.riskState;
-    if (regime === 'panic' || regime === 'risk_off') {
-      parts.push('跨市场风险偏高');
-      action = 'defensive';
-    }
-  }
-
-  // Determine final action
-  switch (action) {
-    case 'defensive':
-      actionLabel = '建议减仓观望';
-      actionColor = '#ff3b4a';
-      parts.push('→ 减少新买入，关注止损');
-      break;
-    case 'cautious':
-      actionLabel = '谨慎交易';
-      actionColor = '#ffb800';
-      parts.push('→ 控制仓位，优选质量');
-      break;
-    default:
-      actionLabel = '可正常交易';
-      actionColor = '#00e676';
-      parts.push('→ 按信号执行，注意风控');
-  }
-
-  return {
-    summary: parts.join(' · '),
-    action: action,
-    actionLabel: actionLabel,
-    color: actionColor,
-    details: [],
-    loopImpact: _buildLoopImpact(data),
-  };
 }
 
 setInterval(() => {
@@ -373,7 +368,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.3.2',
+    version: '3.4.0',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -679,7 +674,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.3.2',
+    systemVersion: 'v3.4.0',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -770,9 +765,13 @@ function buildCockpitData() {
     result.dataQuality = { error: 'Data quality module not available' };
   }
 
-  // 4. Trading Permissions
+  // [v3.4.0] 4. Trading Permissions — Unified Decision Kernel
+  // Single call replaces 200+ lines of multi-step cascade (strategy_health + leakage + dq + mc).
+  // All three consumers (cockpit, think-tank, simfolio) now use the same kernel.
   try {
-    var sh = require('./mosaic/analysis/strategy_health');
+    var kernel = require('./mosaic/decision_kernel');
+
+    // --- Pre-load all context data for the kernel ---
     var pf;
     try {
       var sf = require('./mosaic/simfolio');
@@ -780,37 +779,125 @@ function buildCockpitData() {
     } catch (_) {
       pf = { positions: [], tradeHistory: [], _stats: {} };
     }
-    var healthContext = {
+
+    var dqReport = null;
+    try { dqReport = require('./mosaic/analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
+
+    var leakageAudit = null;
+    try {
+      var auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      if (require('fs').existsSync(auditFile)) {
+        leakageAudit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+        leakageAudit = normalizeLeakageAudit(leakageAudit);
+        result.dataQuality.leakageRisk = leakageAudit.verdict || 'UNKNOWN';
+        result.dataQuality.leakageChecks = leakageAudit.totalChecks || 0;
+        result.leakageAudit = leakageAudit;
+      }
+    } catch (_) {}
+
+    var shResult = null;
+    try {
+      var sh = require('./mosaic/analysis/strategy_health');
+      shResult = sh.computeStrategyHealth({
+        portfolio: pf, indices: null, macroContext: null, pipelineResults: null,
+      });
+      if (shResult && shResult.masterControl) {
+        result.masterControl = shResult.masterControl;
+      }
+    } catch (_) {}
+
+    var macroContext = null;
+    try {
+      var cm = require('./mosaic/analysis/cross_market');
+      var riskState = cm.getCachedRiskState();
+      if (riskState) macroContext = { riskState: riskState };
+    } catch (_) {}
+
+    // Load pipeline summary for funnel display (v3.4.0)
+    var pipelineSummary = null;
+    try {
+      var lrFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
+      if (require('fs').existsSync(lrFile)) {
+        var lrData = JSON.parse(require('fs').readFileSync(lrFile, 'utf8'));
+        pipelineSummary = {
+          totalStocks: lrData.totalStocks || 0,
+          candidates: lrData.candidates || 0,
+          analyzed: lrData.analyzed || 0,
+          topScore: lrData.maxScore,
+          avgScore: lrData.avgScore,
+          type: lrData.type,
+          time: lrData.time,
+        };
+        result.pipelineSummary = pipelineSummary;
+      }
+    } catch (_) {}
+
+    // --- Call the unified kernel ---
+    var decision = kernel.computeDecision({
       portfolio: pf,
       indices: null,
-      macroContext: null,
-      pipelineResults: [],
-    };
-    var health = sh.computeStrategyHealth(healthContext);
+      macroContext: macroContext,
+      pipelineResults: null,
+      dataQualityReport: dqReport,
+      leakageAudit: leakageAudit,
+      strategyHealth: shResult,
+    });
+
+    // --- Build backward-compatible permissions object ---
+    var gs = decision.gateStates;
     result.permissions = {
-      verdict: health.verdict || 'ALLOW',
-      verdictLabel: health.verdictLabel || '允许开仓',
-      maxBuysPerDay: null,
-      reasons: health.reasons || [],
-      confidence: health.confidence || null,
+      verdict: decision.finalVerdict,
+      verdictLabel: decision.finalVerdictLabel,
+      maxBuysPerDay: decision.maxBuysPerDay,
+      reasons: [],
+      confidence: shResult && shResult.masterControl ? shResult.masterControl.confidence : null,
+      // Flat gate states for backward compat
+      gates: {
+        drawdownActive: gs.drawdown.status === 'block' || gs.drawdown.status === 'restrict',
+        marketGateActive: gs.marketDirection.status === 'block',
+        circuitBreakerActive: gs.circuitBreaker.status === 'block',
+      },
+      // Diagnostic booleans
+      dataQualityOk: gs.dataQuality.status === 'pass' || gs.dataQuality.status === 'warn',
+      strategyHealthOk: gs.strategyHealth.status === 'pass',
+      strategyHealthVerdict: gs.strategyHealth.verdict || 'ALLOW',
+      rankICPositive: result.verification && result.verification.rankIC != null && result.verification.rankIC > 0,
+      winRateRecovering: result.verification && result.verification.overallHitRate > 45,
+      drawdownNarrowing: gs.drawdown.status !== 'block' && gs.drawdown.status !== 'restrict',
+      leakageAuditClean: gs.leakageAudit.status === 'pass',
+      leakageAuditCaution: gs.leakageAudit.status === 'cautious',
+      leakageAuditVerdict: gs.leakageAudit.verdict || 'NO_SAMPLES',
+      leakageAuditChecks: gs.leakageAudit.totalChecks || 0,
+      hasPositions: pf.positions && pf.positions.length > 0,
+      positionCount: pf.positions ? pf.positions.length : 0,
     };
-    // Add gate states from last pipeline result
+
+    // Collect reasons from both hard blockers and soft reducers
+    for (var h = 0; h < decision.hardBlockers.length; h++) {
+      result.permissions.reasons.push(decision.hardBlockers[h].reason);
+    }
+    for (var s = 0; s < decision.softReducers.length; s++) {
+      result.permissions.reasons.push(decision.softReducers[s].reason);
+    }
+
+    // If kernel says BLOCK but we didn't find any reasons, add generic
+    if (result.permissions.reasons.length === 0 && decision.finalVerdict !== 'ALLOW') {
+      result.permissions.reasons.push('Decision kernel: ' + decision.finalVerdict + ' — no specific reason recorded');
+    }
+
+    // Preserve effectiveMaxBuys from pipeline result if available
     try {
-      var lastResultFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
-      if (require('fs').existsSync(lastResultFile)) {
-        var lastResult = JSON.parse(require('fs').readFileSync(lastResultFile, 'utf8'));
-        result.permissions.gates = {
-          drawdownActive: !!(lastResult.drawdownGateActive),
-          marketGateActive: !!(lastResult.marketGateActive),
-          circuitBreakerActive: !!(lastResult.circuitBreakerActive),
-        };
-        if (lastResult.effectiveMaxBuys != null) {
-          result.permissions.maxBuysPerDay = lastResult.effectiveMaxBuys;
+      var lrFile2 = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
+      if (require('fs').existsSync(lrFile2)) {
+        var lrData2 = JSON.parse(require('fs').readFileSync(lrFile2, 'utf8'));
+        if (lrData2.effectiveMaxBuys != null && result.permissions.maxBuysPerDay == null) {
+          result.permissions.maxBuysPerDay = lrData2.effectiveMaxBuys;
         }
       }
     } catch (_) {}
+
   } catch (_) {
-    result.permissions = { error: 'Strategy health not available' };
+    result.permissions = { error: 'Decision kernel not available: ' + (_.message || '') };
   }
 
   // 5. Verification
@@ -848,20 +935,7 @@ function buildCockpitData() {
     result.shadowTracking = { shadows: [], message: 'Not available' };
   }
 
-  // v3.3.1: 5.7. Leakage risk for data quality panel + full audit for cockpit
-  try {
-    var auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
-    if (require('fs').existsSync(auditFile)) {
-      var audit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
-      audit = normalizeLeakageAudit(audit);  // v3.3.1: enforce NO_SAMPLES when totalChecks===0
-      result.dataQuality.leakageRisk = audit.verdict || 'UNKNOWN';
-      result.dataQuality.leakageChecks = audit.totalChecks || 0;
-      result.leakageAudit = audit;  // Full audit for dedicated cockpit panel
-    }
-  } catch (_) {}
-
   // v3.3.1: 5.8. API Health — verify that key API data sources are responding
-  // Each check must be based on REAL data, not hardcoded OK
   result.apiHealth = {
     cockpit: { status: result.ok !== false ? 'OK' : 'ERROR' },
     modelRegistry: { status: result.models && !result.models.error ? 'OK' : 'ERROR' },
@@ -878,143 +952,11 @@ function buildCockpitData() {
     icBreakdown: {
       status: _fileExists('report-engine/data/evolution/ic_decomposition.json') ? 'OK' : 'DATA_MISSING'
     },
+    decisionKernel: { status: result.permissions && !result.permissions.error ? 'OK' : 'ERROR' },
   };
 
   // v3.3.1: 5.9. Data file health
   result.dataFiles = buildDataFileHealth();
-
-  // [v3.3.2] 5.9b. Strategy Health Master Control — inject into cockpit for permissions enrichment
-  try {
-    var sh = require('./mosaic/analysis/strategy_health');
-    var shResult = sh.computeStrategyHealth({
-      portfolio: null,   // strategy_health will try to read portfolio.json
-      indices: null,
-      macroContext: null,
-      pipelineResults: null,
-    });
-    if (shResult && shResult.masterControl) {
-      result.masterControl = shResult.masterControl;
-    }
-  } catch (_) { /* strategy_health unavailable — permissions will fall back to confidence */ }
-
-  // v3.3.1: 5.10. Trading permissions enrichment (detailed reasons)
-  try {
-    if (result.permissions && !result.permissions.error) {
-      // Enrich with detailed per-reason checks
-      // [v3.3.2] dataQualityOk: qualityScore from computeConfidencePenalty, fallback to penalty-based score
-      var dqScore = result.dataQuality && result.dataQuality.qualityScore;
-      if (dqScore == null && result.dataQuality && result.dataQuality.penalty != null) {
-        dqScore = Math.round((1 - result.dataQuality.penalty / 10) * 100);
-      }
-      result.permissions.dataQualityOk = dqScore != null && dqScore >= 80;
-      // [v3.3.2] strategyHealthOk: use strategy_health.js masterControl verdict, fallback to confidence
-      var shVerdict = (result.masterControl && result.masterControl.verdict) || '';
-      if (shVerdict) {
-        result.permissions.strategyHealthOk = shVerdict === 'ALLOW';
-        result.permissions.strategyHealthVerdict = shVerdict;
-      } else {
-        result.permissions.strategyHealthOk = (result.permissions.confidence || 0) > 40;
-      }
-      result.permissions.rankICPositive = result.verification && result.verification.rankIC != null && result.verification.rankIC > 0;
-      result.permissions.winRateRecovering = result.verification && result.verification.overallHitRate > 45;
-      result.permissions.drawdownNarrowing = result.permissions.gates && !result.permissions.gates.drawdownActive;
-      // [v3.3.1] Leakage audit strict checks:
-      // - leakageAuditClean: only CLEAN verdict with real checks → auto-trading allowed
-      // - leakageAuditCaution: MINOR_ISSUES with real checks → manual review, NO auto-trading
-      // - Neither set → NO_SAMPLES / INSUFFICIENT_DATA / CRITICAL / missing file → BLOCK
-      var la = result.leakageAudit || {};
-      var laChecks = la.totalChecks || 0;
-      var laVerdict = la.verdict || 'NO_SAMPLES';
-      result.permissions.leakageAuditClean = laChecks > 0 && laVerdict === 'CLEAN';
-      result.permissions.leakageAuditCaution = laChecks > 0 && laVerdict === 'MINOR_ISSUES';
-      result.permissions.leakageAuditVerdict = laVerdict;
-      result.permissions.leakageAuditChecks = laChecks;
-      result.permissions.hasPositions = false;
-      result.permissions.positionCount = 0;
-
-      // [v3.3.2] Leakage audit downgrade for trading permissions
-      // If leakage is not CLEAN, trading must be restricted — this is a hard risk control.
-      if (!result.permissions.leakageAuditClean) {
-        var laReasons = [];
-        if (laChecks === 0) {
-          laReasons.push('Leakage audit has no valid samples — insufficient data to certify no data leakage');
-        } else if (laVerdict === 'MINOR_ISSUES') {
-          laReasons.push('Leakage audit: MINOR_ISSUES detected — manual review required, auto-trading disabled');
-        } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA') {
-          laReasons.push('Leakage audit: NO_SAMPLES — not enough verification records to certify clean');
-        } else if (laVerdict === 'CRITICAL_DATA_LEAKAGE') {
-          laReasons.push('Leakage audit: CRITICAL_DATA_LEAKAGE — future data leakage detected, trading blocked');
-        } else if (laVerdict === 'DATA_LEAKAGE_RISK') {
-          laReasons.push('Leakage audit: DATA_LEAKAGE_RISK — potential data leakage, trading blocked');
-        } else {
-          laReasons.push('Leakage audit has no valid samples or is not clean');
-        }
-
-        // Downgrade verdict based on severity
-        if (laVerdict === 'CRITICAL_DATA_LEAKAGE' || laVerdict === 'DATA_LEAKAGE_RISK') {
-          // Hard block for actual leakage
-          result.permissions.verdict = 'BLOCK';
-          result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
-        } else if (laVerdict === 'MINOR_ISSUES') {
-          // MINOR_ISSUES → at least CAUTIOUS
-          if (result.permissions.verdict === 'ALLOW') {
-            result.permissions.verdict = 'CAUTIOUS';
-            result.permissions.verdictLabel = '审计有小问题/需人工复核';
-          }
-        } else {
-          // NO_SAMPLES / INSUFFICIENT_DATA / missing file → at least CAUTIOUS, escalate to BLOCK if was already not ALLOW
-          if (result.permissions.verdict === 'ALLOW') {
-            result.permissions.verdict = 'CAUTIOUS';
-            result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
-          } else {
-            result.permissions.verdict = 'BLOCK';
-            result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
-          }
-        }
-
-        // Force maxBuysPerDay to 0 — no real buys without clean leakage audit
-        result.permissions.maxBuysPerDay = 0;
-
-        // Append reasons
-        if (!result.permissions.reasons) result.permissions.reasons = [];
-        for (var lr = 0; lr < laReasons.length; lr++) {
-          result.permissions.reasons.push(laReasons[lr]);
-        }
-      }
-
-      // [v3.3.2] Strategy Health downgrade for trading permissions
-      // If strategy_health says BLOCK or REDUCE but leakage audit passes (CLEAN),
-      // still show CAUTIOUS — the strategy itself is struggling.
-      // CAUTIOUS → reduce maxBuysToDay to 1.
-      if (!result.permissions.strategyHealthOk && shVerdict) {
-        if (shVerdict === 'BLOCK' || shVerdict === 'REDUCE') {
-          if (!result.permissions.reasons) result.permissions.reasons = [];
-          result.permissions.reasons.push('Strategy health: ' + shVerdict + ' — 策略健康状况不佳，建议减仓观察');
-          if (result.permissions.verdict === 'ALLOW') {
-            result.permissions.verdict = 'CAUTIOUS';
-            result.permissions.verdictLabel = '策略健康不佳/建议减仓观察';
-          }
-          if (result.permissions.maxBuysPerDay == null || result.permissions.maxBuysPerDay > 1) {
-            result.permissions.maxBuysPerDay = 1;
-          }
-        }
-      }
-
-      // [v3.3.2] Data quality downgrade for trading permissions
-      // If dataQuality is poor (score < 80), force at least CAUTIOUS.
-      if (!result.permissions.dataQualityOk && result.dataQuality && result.dataQuality.penalty > 3) {
-        if (!result.permissions.reasons) result.permissions.reasons = [];
-        result.permissions.reasons.push('数据质量评分偏低: ' + (dqScore || 0) + ' (penalty: ' + (result.dataQuality.penalty || 0) + ')，数据源存在过期/异常');
-        if (result.permissions.verdict === 'ALLOW') {
-          result.permissions.verdict = 'CAUTIOUS';
-          result.permissions.verdictLabel = '数据质量不足/建议人工复核';
-        }
-        if (result.permissions.maxBuysPerDay == null || result.permissions.maxBuysPerDay > 2) {
-          result.permissions.maxBuysPerDay = 2;
-        }
-      }
-    }
-  } catch (_) {}
 
   // v3.3.1: 5.11. Change log
   result.changeLog = buildChangeLog();
@@ -1184,7 +1126,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.3.2       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.0       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -2612,24 +2554,72 @@ const server = http.createServer(async function(req, res) {
       data.scheduler = { state: s.state };
     }
 
-    // 2. Decision gates (from last persisted gate state)
+    // 2. Decision gates — from unified Decision Kernel (v3.4.0)
     try {
-      const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
-      if (fs.existsSync(gateStatePath)) {
-        const gs = JSON.parse(fs.readFileSync(gateStatePath, 'utf8'));
-        data.decisionGates = {
-          drawdown: gs.drawdown,
-          marketDirection: gs.marketDirection,
-          circuitBreaker: gs.circuitBreaker,
-          thinkTankDefense: gs.thinkTankDefense,
-          attributionAvoid: gs.attributionAvoid,
-        };
+      // Pre-load context for kernel
+      var ttKernel = require('./mosaic/decision_kernel');
+      var ttDqReport = null;
+      try { ttDqReport = require('./mosaic/analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
+      var ttLeakageAudit = null;
+      try {
+        var ttLaPath = path.join(DATA_DIR, 'verification', 'leakage_audit.json');
+        if (fs.existsSync(ttLaPath)) ttLeakageAudit = JSON.parse(fs.readFileSync(ttLaPath, 'utf8'));
+      } catch (_) {}
+      var ttShResult = null;
+      try {
+        var ttSh = require('./mosaic/analysis/strategy_health');
+        ttShResult = ttSh.computeStrategyHealth({ portfolio: null, indices: null, macroContext: null, pipelineResults: null });
+      } catch (_) {}
+      var ttMacroCtx = null;
+      try {
+        var ttCm = require('./mosaic/analysis/cross_market');
+        var ttRiskState = ttCm.getCachedRiskState();
+        if (ttRiskState) ttMacroCtx = { riskState: ttRiskState };
+      } catch (_) {}
+
+      var ttDecision = ttKernel.computeDecision({
+        portfolio: null, indices: null, macroContext: ttMacroCtx,
+        pipelineResults: null, dataQualityReport: ttDqReport,
+        leakageAudit: ttLeakageAudit, strategyHealth: ttShResult,
+      });
+
+      data.decisionGates = ttDecision.gateStates;
+      data.kernelVerdict = {
+        canBuy: ttDecision.canBuy,
+        finalVerdict: ttDecision.finalVerdict,
+        finalVerdictLabel: ttDecision.finalVerdictLabel,
+        maxBuysPerDay: ttDecision.maxBuysPerDay,
+        hardBlockers: ttDecision.hardBlockers,
+        softReducers: ttDecision.softReducers,
+      };
+    } catch (_) {
+      // Fallback: try old gate state file
+      try {
+        const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
+        if (fs.existsSync(gateStatePath)) {
+          const gs = JSON.parse(fs.readFileSync(gateStatePath, 'utf8'));
+          data.decisionGates = {
+            drawdown: gs.drawdown,
+            marketDirection: gs.marketDirection,
+            circuitBreaker: gs.circuitBreaker,
+            thinkTankDefense: gs.thinkTankDefense,
+            attributionAvoid: gs.attributionAvoid,
+          };
+        }
+      } catch (_2) {}
+    }
+
+    // Also load last decision metadata from persisted gate state
+    try {
+      const gateStatePath2 = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
+      if (fs.existsSync(gateStatePath2)) {
+        const gs2 = JSON.parse(fs.readFileSync(gateStatePath2, 'utf8'));
         data.lastDecision = {
-          timestamp: gs.timestamp,
-          scanType: gs.scanType,
-          executed: gs.executed || [],
-          nearMisses: gs.nearMisses || [],
-          decisions: gs.decisions || 0,
+          timestamp: gs2.timestamp,
+          scanType: gs2.scanType,
+          executed: gs2.executed || [],
+          nearMisses: gs2.nearMisses || [],
+          decisions: gs2.decisions || 0,
         };
       }
     } catch (_) {}
