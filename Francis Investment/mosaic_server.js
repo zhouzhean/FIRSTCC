@@ -883,13 +883,39 @@ function buildCockpitData() {
   // v3.3.1: 5.9. Data file health
   result.dataFiles = buildDataFileHealth();
 
+  // [v3.3.2] 5.9b. Strategy Health Master Control — inject into cockpit for permissions enrichment
+  try {
+    var sh = require('./mosaic/analysis/strategy_health');
+    var shResult = sh.computeStrategyHealth({
+      portfolio: null,   // strategy_health will try to read portfolio.json
+      indices: null,
+      macroContext: null,
+      pipelineResults: null,
+    });
+    if (shResult && shResult.masterControl) {
+      result.masterControl = shResult.masterControl;
+    }
+  } catch (_) { /* strategy_health unavailable — permissions will fall back to confidence */ }
+
   // v3.3.1: 5.10. Trading permissions enrichment (detailed reasons)
   try {
     if (result.permissions && !result.permissions.error) {
       // Enrich with detailed per-reason checks
-      result.permissions.dataQualityOk = result.dataQuality && (result.dataQuality.qualityScore || 0) >= 80;
-      result.permissions.strategyHealthOk = (result.permissions.confidence || 0) > 40;
-      result.permissions.rankICPositive = result.verification && result.verification.rankIC > 0;
+      // [v3.3.2] dataQualityOk: qualityScore from computeConfidencePenalty, fallback to penalty-based score
+      var dqScore = result.dataQuality && result.dataQuality.qualityScore;
+      if (dqScore == null && result.dataQuality && result.dataQuality.penalty != null) {
+        dqScore = Math.round((1 - result.dataQuality.penalty / 10) * 100);
+      }
+      result.permissions.dataQualityOk = dqScore != null && dqScore >= 80;
+      // [v3.3.2] strategyHealthOk: use strategy_health.js masterControl verdict, fallback to confidence
+      var shVerdict = (result.masterControl && result.masterControl.verdict) || '';
+      if (shVerdict) {
+        result.permissions.strategyHealthOk = shVerdict === 'ALLOW';
+        result.permissions.strategyHealthVerdict = shVerdict;
+      } else {
+        result.permissions.strategyHealthOk = (result.permissions.confidence || 0) > 40;
+      }
+      result.permissions.rankICPositive = result.verification && result.verification.rankIC != null && result.verification.rankIC > 0;
       result.permissions.winRateRecovering = result.verification && result.verification.overallHitRate > 45;
       result.permissions.drawdownNarrowing = result.permissions.gates && !result.permissions.gates.drawdownActive;
       // [v3.3.1] Leakage audit strict checks:
@@ -953,6 +979,38 @@ function buildCockpitData() {
         if (!result.permissions.reasons) result.permissions.reasons = [];
         for (var lr = 0; lr < laReasons.length; lr++) {
           result.permissions.reasons.push(laReasons[lr]);
+        }
+      }
+
+      // [v3.3.2] Strategy Health downgrade for trading permissions
+      // If strategy_health says BLOCK or REDUCE but leakage audit passes (CLEAN),
+      // still show CAUTIOUS — the strategy itself is struggling.
+      // CAUTIOUS → reduce maxBuysToDay to 1.
+      if (!result.permissions.strategyHealthOk && shVerdict) {
+        if (shVerdict === 'BLOCK' || shVerdict === 'REDUCE') {
+          if (!result.permissions.reasons) result.permissions.reasons = [];
+          result.permissions.reasons.push('Strategy health: ' + shVerdict + ' — 策略健康状况不佳，建议减仓观察');
+          if (result.permissions.verdict === 'ALLOW') {
+            result.permissions.verdict = 'CAUTIOUS';
+            result.permissions.verdictLabel = '策略健康不佳/建议减仓观察';
+          }
+          if (result.permissions.maxBuysPerDay == null || result.permissions.maxBuysPerDay > 1) {
+            result.permissions.maxBuysPerDay = 1;
+          }
+        }
+      }
+
+      // [v3.3.2] Data quality downgrade for trading permissions
+      // If dataQuality is poor (score < 80), force at least CAUTIOUS.
+      if (!result.permissions.dataQualityOk && result.dataQuality && result.dataQuality.penalty > 3) {
+        if (!result.permissions.reasons) result.permissions.reasons = [];
+        result.permissions.reasons.push('数据质量评分偏低: ' + (dqScore || 0) + ' (penalty: ' + (result.dataQuality.penalty || 0) + ')，数据源存在过期/异常');
+        if (result.permissions.verdict === 'ALLOW') {
+          result.permissions.verdict = 'CAUTIOUS';
+          result.permissions.verdictLabel = '数据质量不足/建议人工复核';
+        }
+        if (result.permissions.maxBuysPerDay == null || result.permissions.maxBuysPerDay > 2) {
+          result.permissions.maxBuysPerDay = 2;
         }
       }
     }

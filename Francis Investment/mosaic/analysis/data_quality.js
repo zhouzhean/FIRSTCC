@@ -456,8 +456,12 @@ function computeConfidencePenalty(report) {
     reasons.push('部分数据源(' + notOkCount + '个)状态异常');
   }
 
+  // [v3.3.2] Compute qualityScore from penalty: 0 penalty → 100, 10 penalty → 0
+  var qualityScore = Math.round((1 - Math.min(10, penalty) / 10) * 100);
+
   return {
     penalty: Math.min(10, penalty),
+    qualityScore: qualityScore,
     reasons: reasons,
     overallScore: report.overallScore || 0,
     report: report,
