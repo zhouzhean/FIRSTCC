@@ -158,8 +158,58 @@ function checkMarketData() {
 }
 
 function checkIndexData() {
-  var result = { label: '指数分钟线', key: 'indexData', status: 'OK', score: 100, lastUpdate: null, note: '' };
+  var result = { label: '指数数据', key: 'indexData', status: 'OK', score: 100, lastUpdate: null, note: '' };
 
+  // v3.4.4: Check live snapshot FIRST (same source as kernel/cockpit/think-tank)
+  var today = new Date().toISOString().slice(0, 10);
+  var snapDir = path.join(DATA_DIR, 'simfolio');
+
+  // Tier 1: IndexRecorder live file (intraday, during trading hours)
+  var recorderFile = path.join(snapDir, 'index_history_' + today + '.json');
+  if (fs.existsSync(recorderFile)) {
+    try {
+      var raw = JSON.parse(fs.readFileSync(recorderFile, 'utf8'));
+      if (Array.isArray(raw) && raw.length > 0) {
+        var latest = raw[raw.length - 1];
+        var liveCount = 0;
+        if (latest.sh != null) liveCount++;
+        if (latest.sz != null) liveCount++;
+        if (latest.bj != null) liveCount++;
+        result.indicesAvailable = liveCount;
+        result.lastUpdate = today + 'T' + (latest.time || '') + ':00+08:00';
+        result.status = 'OK';
+        result.score = 100;
+        result.note = 'IndexRecorder 实时: ' + liveCount + '/3 指数 (' + raw.length + '条记录)，数据源统一';
+        return result;
+      }
+    } catch (_) {}
+  }
+
+  // Tier 2: market_snapshot_latest.json (cached by loadLatestIndices)
+  var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
+  if (fs.existsSync(snapshotFile)) {
+    try {
+      var snap = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
+      if (snap.date === today && snap.indices && snap.indices.length > 0) {
+        var sstat = fs.statSync(snapshotFile);
+        var ageMin = (Date.now() - sstat.mtimeMs) / 60000;
+        result.indicesAvailable = snap.indices.length;
+        result.lastUpdate = snap.time || new Date(sstat.mtimeMs).toISOString();
+        if (ageMin < 15) {
+          result.status = 'OK';
+          result.score = 95;
+          result.note = '快照缓存: ' + snap.indices.length + '只指数, ' + Math.round(ageMin) + 'min前 (' + (snap.source || 'loadLatestIndices') + ')';
+        } else {
+          result.status = 'WARN';
+          result.score = 60;
+          result.note = '快照过期: ' + Math.round(ageMin) + 'min前 (' + (snap.source || 'loadLatestIndices') + ')';
+        }
+        return result;
+      }
+    } catch (_) {}
+  }
+
+  // Tier 3: Historical daily K-line files (fallback)
   var mhDir = path.join(DATA_DIR, 'market_history', 'indices');
   try {
     if (!fs.existsSync(mhDir)) {
@@ -178,8 +228,8 @@ function checkIndexData() {
       if (fs.existsSync(fp)) {
         available++;
         try {
-          var stat = fs.statSync(fp);
-          if (stat.mtimeMs > newestTime) newestTime = stat.mtimeMs;
+          var fstat = fs.statSync(fp);
+          if (fstat.mtimeMs > newestTime) newestTime = fstat.mtimeMs;
         } catch (_) {}
       }
     }
@@ -191,17 +241,17 @@ function checkIndexData() {
     if (available < 2) {
       result.status = 'DOWN';
       result.score = 20;
-      result.note = '仅' + available + '/3个指数有数据';
+      result.note = '仅' + available + '/3个指数有数据（历史日线）';
     } else if (ageHours > 48) {
       result.status = 'STALE';
       result.score = 30;
-      result.note = '指数数据超过48小时未更新';
+      result.note = '指数数据超过48小时未更新（历史日线）';
     } else if (ageHours > 6) {
       result.status = 'WARN';
       result.score = 70;
-      result.note = '指数数据非实时（' + Math.round(ageHours * 10) / 10 + '小时前）';
+      result.note = '指数数据非实时（' + Math.round(ageHours * 10) / 10 + '小时前，历史日线）';
     } else {
-      result.note = available + '/3个指数数据正常，' + Math.round(ageHours * 10) / 10 + '小时前';
+      result.note = available + '/3个指数数据正常，' + Math.round(ageHours * 10) / 10 + '小时前（历史日线）';
     }
   } catch (e) {
     result.status = 'DOWN';

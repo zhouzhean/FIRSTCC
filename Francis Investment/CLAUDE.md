@@ -1,17 +1,18 @@
-# Francis Investment · A股量化交易系统 v3.4.3
+# Francis Investment · A股量化交易系统 v3.4.4
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
 
-v3.4.3: **Kernel Closure** — 所有执行链路100%经过 decision_kernel。No-index 路径不再绕过 kernel，scheduler 事件日志完整记录 kernelVerdict/primaryBlocker/allActiveGates/displayReasons/buyCandidates，手动 trade endpoint 传 macroContext+marketState，Think-Tank 指数路径修正。
+v3.4.4: **Session Gate + Data Bus** — market session gate 作为第一个硬阻断 (closed/post_market/pre_market/lunch_break禁止买入)，数据总线统一 (loadLatestIndices三层优先级: IndexRecorder→快照→历史日线, data_quality同源检查)，pipeline summary 提取共享函数 (scheduler+server同路径保存pipelineResultsForKernel)，decision audit 增加 marketState/indexFreshness/buyThreshold 字段，strategy health 样本门控 (<8笔降级为CAUTIOUS)。
 
-v3.4.1: **Unified Decision Kernel 完全控制交易执行链** — 单一决策来源 (5 Hard Blockers + Soft Reducers)，simfolio 必须服从 `finalVerdict`，decision audit 直接记录 kernel 输出，所有消费者传一致上下文。
+v3.4.3: **Kernel Closure** — 所有执行链路100%经过 decision_kernel (05f9e38 deploy + 03f9e38 fix)。v3.4.1: **Unified Decision Kernel 完全控制交易执行链**。
 
 ## 核心架构
 
 ```
 mosaic_server.js (HTTP 主服务器, 98+ API)
-├── mosaic/decision_kernel.js    # ★ v3.4.0 统一决策内核 — single source of truth
-├── mosaic/scheduler.js          # 状态机调度器 (~1950行) — 全自动
+├── mosaic/decision_kernel.js    # ★ v3.4.4 统一决策内核 — 6 hard blockers + session gate
+├── mosaic/pipeline_summary.js   # ★ v3.4.4 Pipeline持久化共享函数 (scheduler+server同源)
+├── mosaic/scheduler.js          # 状态机调度器 (~1900行) — 全自动
 ├── mosaic/pipeline.js           # 主流程编排 (519行, EventEmitter+SSE)
 ├── mosaic/simfolio.js           # 模拟交易引擎 (~2550行) — 服从kernel裁决
 ├── mosaic/config.js             # ★ 唯一配置入口 (507行)
@@ -80,15 +81,16 @@ report-engine/                   # 前端 (纯静态)
 └── templates/                   #   报告模板 (18个)
 ```
 
-## Unified Decision Kernel (v3.4.1)
+## Unified Decision Kernel (v3.4.4)
 
 `mosaic/decision_kernel.js` — `computeDecision(context)` 是交易决策的单一真相来源。
 
-### 5 Hard Blockers (优先级顺序,first match wins 后阻断但继续收集):
+### 6 Hard Blockers (优先级顺序, first match wins):
 
 | 优先级 | 门禁 | 阻断条件 |
 |--------|------|----------|
-| 1 | **marketData/marketClosed** | 无指数行情数据 (区分离市 vs 数据错误) |
+| 0 | **marketSession** | ★ v3.4.4: 非交易时段 (closed/post_market/pre_market/lunch_break) 禁止买入 |
+| 1 | **marketData** | 交易时段无指数行情数据 |
 | 2 | **circuitBreaker** | regime = `panic` 或 `risk_off` |
 | 3 | **leakageAudit** | verdict = CRITICAL/DATA_LEAKAGE_RISK/NO_SAMPLES |
 | 4 | **strategyHealth** | masterControl.verdict = BLOCK |
@@ -445,6 +447,7 @@ LEAKAGE_AUDIT:  enforceTemporalOrder, maxLookbackGap=5
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v3.4.4 | 2026-06-18 | Session gate P0 (非交易时段禁止买入), 数据总线统一 (loadLatestIndices三层: Recorder→快照→历史日线, data_quality同源), pipeline_summary共享函数, decision_audit补全(marketState/indexFreshness/buyThreshold), strategy_health样本门控(<8笔→CAUTIOUS) |
 | v3.4.3 | 2026-06-18 | Kernel Closure: no-index路径过kernel, marketState贯穿全链路, 手动trade传macroContext, Think-Tank指数路径修正, scheduler事件完整kernel字段, simfolio返回buyCandidates/effectiveMaxBuys/skipReason |
 | v3.4.1 | 2026-06-18 | P0/P1修复: Kernel完全控制交易执行链 (finalVerdict→simfolio, kernel→audit, finalize()缓存, allActiveBlockers, marketClosed, 统一上下文) |
 | v3.4.0 | 2026-06-17 | Unified Decision Kernel (5 Hard Blockers), Decision Audit, Cockpit WNB Banner + Gate Matrix, MD scan 20→50 |

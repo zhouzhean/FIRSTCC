@@ -1,5 +1,5 @@
 ﻿/**
- * Autonomy Cockpit — v3.4.3
+ * Autonomy Cockpit — v3.4.4
  * 30-second polling dashboard for autonomous trading status.
  *
  * Design principle: "可监督状态" (supervisable status) — not pretty cards.
@@ -247,7 +247,7 @@ function renderSystemStatus(data) {
   var html = '';
 
   // Version
-  var version = data.systemVersion || 'v3.4.3';
+  var version = data.systemVersion || 'v3.4.4';
   html += '<div class="sys-row">' +
     '<span class="sys-label">Version</span>' +
     '<span class="sys-value">' + esc(version) + '</span>' +

@@ -748,6 +748,23 @@ function computeMasterControlJudgment(context) {
   }
 
   const verdictMap = ['ALLOW', 'CAUTIOUS', 'REDUCE', 'BLOCK'];
+
+  // v3.4.4: Sample gate — when trade count is too low, downgrade REDUCE/BLOCK
+  // to CAUTIOUS. Low-sample win/loss ratios are noisy and shouldn't cause
+  // long-term trading halts. The kernel's leakageAudit gate still BLOCKS on
+  // NO_SAMPLES anyway, so this only affects the strategy health label visible
+  // in cockpit/think-tank.
+  var MIN_SAMPLE_THRESHOLD = 8; // trades needed for reliable health assessment
+  var totalTradesForSample = tradeStats.totalTrades || 0;
+  if (totalTradesForSample < MIN_SAMPLE_THRESHOLD && worstVerdict >= 2) {
+    var origVerdict = verdictMap[Math.min(3, worstVerdict)];
+    worstVerdict = 1;
+    reasons.push('[样本门控] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），原评级' + origVerdict + '降为CAUTIOUS。低样本统计不可靠，观察为主。');
+    recoveryConditions.push('累计' + MIN_SAMPLE_THRESHOLD + '笔以上交易后再评估');
+  } else if (totalTradesForSample < MIN_SAMPLE_THRESHOLD && worstVerdict >= 1) {
+    reasons.push('[样本提示] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），当前评级仅供参考');
+  }
+
   const verdict = verdictMap[Math.min(3, worstVerdict)];
 
   const verdictLabels = {

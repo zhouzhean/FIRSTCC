@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.4.3
+ * Francis Investment · Mosaic Server v3.4.4
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -49,47 +49,58 @@ const SCAN_SCHEDULE = [
 ];
 
 function saveLastPipelineResult(result, type) {
+  // v3.4.4: Use shared pipeline_summary module — same as scheduler.
+  // This guarantees pipelineResultsForKernel is always saved,
+  // even after manual pipeline runs via the API.
   try {
-    const dir = path.join(DATA_DIR, 'simfolio');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const allResults = result.allResults || [];
-    const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
-    const signalCounts = {};
-    for (const r of allResults) {
-      const s = r.compositeScore || 0;
-      if (s < 50) dist.lt50++;
-      else if (s < 60) dist.r50_60++;
-      else if (s < 70) dist.r60_70++;
-      else if (s < 80) dist.r70_80++;
-      else dist.gt80++;
-      if (r.hiddenSignals) {
-        for (const sig of r.hiddenSignals) {
-          signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+    var psum = require('./mosaic/pipeline_summary');
+    psum.savePipelineSummary(result, type || 'full', new Date().toISOString().slice(0, 10), {
+      version: 'v3.4.4',
+    });
+  } catch (e) {
+    // Fallback: inline save (legacy — same as before v3.4.4)
+    try {
+      const dir = path.join(DATA_DIR, 'simfolio');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const allResults = result.allResults || [];
+      const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
+      const signalCounts = {};
+      for (const r of allResults) {
+        const s = r.compositeScore || 0;
+        if (s < 50) dist.lt50++;
+        else if (s < 60) dist.r50_60++;
+        else if (s < 70) dist.r60_70++;
+        else if (s < 80) dist.r70_80++;
+        else dist.gt80++;
+        if (r.hiddenSignals) {
+          for (const sig of r.hiddenSignals) {
+            signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+          }
         }
       }
-    }
-    const summary = {
-      type: type || 'full',
-      date: new Date().toISOString().slice(0, 10),
-      time: new Date().toISOString(),
-      totalStocks: result.totalStocks || 0,
-      candidates: result.candidates || 0,
-      analyzed: result.analyzed || 0,
-      duration: result.duration || 0,
-      top5: (result.top5 || []).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
-      scoreDistribution: dist,
-      signalCounts: signalCounts,
-      avgScore: allResults.length > 0 ? Math.round(allResults.reduce((a, r) => a + (r.compositeScore || 0), 0) / allResults.length) : 0,
-      maxScore: allResults.length > 0 ? Math.max(...allResults.map(r => r.compositeScore || 0)) : 0,
-    };
-    fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
-
-    // P3: Record stock-level signals for prediction engine
-    try {
-      const stockPredictor = require('./mosaic/predict/stock_predictor');
-      stockPredictor.recordDailyStockSignals(summary.date, allResults);
+      const summary = {
+        type: type || 'full',
+        date: new Date().toISOString().slice(0, 10),
+        time: new Date().toISOString(),
+        totalStocks: result.totalStocks || 0,
+        candidates: result.candidates || 0,
+        analyzed: result.analyzed || 0,
+        duration: result.duration || 0,
+        top5: (result.top5 || []).map(s => ({ code: s.code, name: s.name, score: s.compositeScore, rating: s.rating })),
+        scoreDistribution: dist,
+        signalCounts: signalCounts,
+        avgScore: allResults.length > 0 ? Math.round(allResults.reduce((a, r) => a + (r.compositeScore || 0), 0) / allResults.length) : 0,
+        maxScore: allResults.length > 0 ? Math.max(...allResults.map(r => r.compositeScore || 0)) : 0,
+        pipelineResultsForKernel: allResults.slice(0, 100).map(function(r) { return { code: r.code, name: r.name, compositeScore: r.compositeScore || 0, prediction: r.prediction ? { expectedReturn: r.prediction.expectedReturn, confidence: r.prediction.confidence, label: r.prediction.label } : null }; }),
+      };
+      fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
     } catch (_) {}
-  } catch (e) { /* silent */ }
+  }
+  // P3: Record stock-level signals for prediction engine
+  try {
+    const stockPredictor = require('./mosaic/predict/stock_predictor');
+    stockPredictor.recordDailyStockSignals(new Date().toISOString().slice(0, 10), result.allResults || []);
+  } catch (_) {}
 }
 
 // ---- Daily Events Log (persisted by date) ----
@@ -371,7 +382,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.4.3',
+    version: '3.4.4',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -712,7 +723,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.3',
+    systemVersion: 'v3.4.4',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -1187,7 +1198,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.3       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.4       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');

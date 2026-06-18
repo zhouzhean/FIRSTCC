@@ -1,5 +1,5 @@
 /**
- * scheduler.js — 全自动量化交易调度器 v3.4.3
+ * scheduler.js — 全自动量化交易调度器 v3.4.4
  *
  * A股交易时段状态机，驱动定时 Pipeline + 持仓监控 + 风控执行。
  * 纯 Node.js 内置模块，零外部依赖。
@@ -727,17 +727,40 @@ class Scheduler extends EventEmitter {
                 note = '今天无候选股达标';
               }
 
+              // v3.4.4: Load index freshness from loadLatestIndices for data freshness audit
+              var indexFreshness = 'unknown';
+              try {
+                var dk = require('./decision_kernel');
+                var liveIdxs = dk.loadLatestIndices();
+                if (liveIdxs && liveIdxs.length > 0) {
+                  var srcs = liveIdxs.map(function(ix) { return ix.source || 'unknown'; });
+                  var dates = liveIdxs.map(function(ix) { return ix.date || '?'; });
+                  indexFreshness = dates.join(',') + ' src:' + srcs.join(',');
+                }
+              } catch (_) {}
+
+              // v3.4.4: Load buy threshold from config
+              var buyThreshold = null;
+              try {
+                var cfg = require('./config');
+                buyThreshold = cfg.BUY_THRESHOLD ? cfg.BUY_THRESHOLD.minAbsoluteScore : null;
+              } catch (_) {}
+
               var auditEntry = {
                 timestamp: new Date().toISOString(),
                 scanType: 'full',
+                // Funnel
                 totalStocks: result.totalStocks || 0,
                 candidates: result.candidates || 0,
                 analyzed: result.analyzed || 0,
+                // Signal quality
                 topScore: result.allResults ? Math.max.apply(null, result.allResults.map(function(r) { return r.compositeScore || 0; })) : 0,
                 avgScore: result.allResults ? Math.round(result.allResults.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / result.allResults.length) : 0,
+                // Decision result
                 buyCandidates: buyCandidates.length,
+                buyThreshold: buyThreshold,
                 executedBuyCount: executedBuys.length,
-                // v3.4.1: Direct kernelDecision fields (replaces old flag-based blockReasons)
+                // Kernel decision (single source of truth)
                 kernelVerdict: kd ? kd.finalVerdict : verdict,
                 canBuy: kd ? kd.canBuy : (verdict === 'ALLOW'),
                 maxBuysPerDay: kd ? kd.maxBuysPerDay : null,
@@ -745,6 +768,10 @@ class Scheduler extends EventEmitter {
                 softReducers: kd ? kd.softReducers.map(function(r) { return r.gate; }) : [],
                 primaryBlocker: kd ? kd.primaryBlocker : null,
                 allActiveGates: kd ? kd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
+                // v3.4.4: Context metadata
+                marketState: this._state || 'unknown',
+                indexFreshness: indexFreshness,
+                indicesCount: result.indices ? result.indices.length : 0,
                 note: note,
               };
               _appendDecisionAudit(auditEntry);
@@ -1010,6 +1037,20 @@ class Scheduler extends EventEmitter {
                 midNote = 'mid-scan无候选达标';
               }
 
+              // v3.4.4: Load index freshness + buy threshold
+              var midIndexFreshness = 'unknown';
+              try {
+                var midDk = require('./decision_kernel');
+                var midLiveIdxs = midDk.loadLatestIndices();
+                if (midLiveIdxs && midLiveIdxs.length > 0) {
+                  var midSrcs = midLiveIdxs.map(function(ix) { return ix.source || 'unknown'; });
+                  var midDates = midLiveIdxs.map(function(ix) { return ix.date || '?'; });
+                  midIndexFreshness = midDates.join(',') + ' src:' + midSrcs.join(',');
+                }
+              } catch (_) {}
+              var midBuyThreshold = null;
+              try { var midCfg = require('./config'); midBuyThreshold = midCfg.BUY_THRESHOLD ? midCfg.BUY_THRESHOLD.minAbsoluteScore : null; } catch (_) {}
+
               _appendDecisionAudit({
                 timestamp: new Date().toISOString(),
                 scanType: 'mid',
@@ -1019,6 +1060,7 @@ class Scheduler extends EventEmitter {
                 topScore: results.length > 0 ? Math.max.apply(null, results.map(function(r) { return r.compositeScore || 0; })) : 0,
                 avgScore: results.length > 0 ? Math.round(results.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / results.length) : 0,
                 buyCandidates: midBuyCandidates.length,
+                buyThreshold: midBuyThreshold,
                 executedBuyCount: midExecutedBuys.length,
                 // v3.4.1: Direct kernelDecision fields
                 kernelVerdict: midKd ? midKd.finalVerdict : midVerdict,
@@ -1028,6 +1070,10 @@ class Scheduler extends EventEmitter {
                 softReducers: midKd ? midKd.softReducers.map(function(r) { return r.gate; }) : [],
                 primaryBlocker: midKd ? midKd.primaryBlocker : null,
                 allActiveGates: midKd ? midKd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
+                // v3.4.4: Context metadata
+                marketState: this._state || 'unknown',
+                indexFreshness: midIndexFreshness,
+                indicesCount: indices ? indices.length : 0,
                 note: midNote,
               });
             } catch (_) {}
@@ -1636,161 +1682,47 @@ class Scheduler extends EventEmitter {
   // ==================== 持久化 Pipeline 结果 ====================
 
   _saveLastPipelineResult(result, type) {
+    // v3.4.4: Delegate to shared pipeline_summary module.
+    // Both scheduler AND server manual runs use the same function now,
+    // guaranteeing pipelineResultsForKernel is always present.
     try {
-      const dir = path.join(config.DATA_DIR, 'simfolio');
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-      const allResults = result.allResults || [];
-      const dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
-      const signalCounts = {};
-      for (const r of allResults) {
-        const s = r.compositeScore || 0;
-        if (s < 50) dist.lt50++;
-        else if (s < 60) dist.r50_60++;
-        else if (s < 70) dist.r60_70++;
-        else if (s < 80) dist.r70_80++;
-        else dist.gt80++;
-
-        if (r.hiddenSignals) {
-          for (const sig of r.hiddenSignals) {
-            signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
-          }
-        } else if (r.signals) {
-          for (const sig of r.signals) {
-            signalCounts[sig.id] = (signalCounts[sig.id] || 0) + 1;
+      var psum = require('./pipeline_summary');
+      psum.savePipelineSummary(result, type, this._todayDate, {
+        version: 'v3.4.4',
+      });
+    } catch (e) {
+      // Fallback: inline save if shared module unavailable
+      try {
+        var dir = path.join(config.DATA_DIR, 'simfolio');
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        var allResults = result.allResults || [];
+        var dist = { lt50: 0, r50_60: 0, r60_70: 0, r70_80: 0, gt80: 0 };
+        var signalCounts = {};
+        for (var i = 0; i < allResults.length; i++) {
+          var r = allResults[i];
+          var s = r.compositeScore || 0;
+          if (s < 50) dist.lt50++;
+          else if (s < 60) dist.r50_60++;
+          else if (s < 70) dist.r60_70++;
+          else if (s < 80) dist.r70_80++;
+          else dist.gt80++;
+          var sigs = r.hiddenSignals || r.signals || [];
+          for (var j = 0; j < sigs.length; j++) {
+            signalCounts[sigs[j].id] = (signalCounts[sigs[j].id] || 0) + 1;
           }
         }
-      }
-
-      // Compute expected returns for top candidates (v2.8: feedback loop 6+7)
-      var expectedReturns = [];
-      try {
-        var er = require('./predict/expected_return');
-        var context = {};
-        // Load stock factor performance if available
-        try {
-          var spfPath = path.join(dir, 'stock_factor_performance.json');
-          if (fs.existsSync(spfPath)) {
-            context.stockFactorPerf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
-          }
-        } catch (_) {}
-        // Load market cycle if available
-        try {
-          var mc = require('./analysis/market_cycle');
-          context.marketCycle = mc.getMarketCycle ? mc.getMarketCycle() : null;
-        } catch (_) {}
-        // Load north-bound perf if available
-        try {
-          var fp = require('./analysis/factor_performance');
-          context.nbPerf = fp.getNBPerformance ? fp.getNBPerformance() : null;
-        } catch (_) {}
-        // Load sector flow map from pipeline result (for sectorFlow dimension)
-        try {
-          if (result.sectorFlowMap && Array.isArray(result.sectorFlowMap)) {
-            context.sectorFlowRank = { entries: result.sectorFlowMap };
-          }
-        } catch (_) {}
-        // Load weekend context if available (for stock similarity)
-        try {
-          var wcPath = path.join(dir, 'weekend_context.json');
-          if (fs.existsSync(wcPath)) {
-            context.weekendContext = JSON.parse(fs.readFileSync(wcPath, 'utf8'));
-          }
-        } catch (_) {}
-        var ranked = er.rankByExpectedReturn(allResults, context);
-        expectedReturns = ranked.slice(0, 10).map(function(r) {
-          // Extract breakdown summary for UI display
-          var breakdownSummary = null;
-          if (r.prediction && r.prediction.breakdown) {
-            breakdownSummary = {};
-            var bd = r.prediction.breakdown;
-            var dimKeys = ['factorCombo', 'sectorFlow', 'marketCycle', 'nbSentiment', 'stockSimilarity', 'scorePercentile'];
-            for (var dk = 0; dk < dimKeys.length; dk++) {
-              var key = dimKeys[dk];
-              if (bd[key] && bd[key].available) {
-                breakdownSummary[key] = {
-                  value: bd[key].value,
-                  label: bd[key].label,
-                  weight: bd[key].weight,
-                };
-              }
-            }
-          }
-          return {
-            code: r.code, name: r.name,
-            compositeScore: r.compositeScore,
-            rating: r.rating,
-            expectedReturn: r.prediction ? r.prediction.expectedReturn : null,
-            confidence: r.prediction ? r.prediction.confidence : null,
-            label: r.prediction ? r.prediction.label : null,
-            breakdown: breakdownSummary,
-          };
-        });
+        var summary = {
+          type: type || 'full', date: this._todayDate, time: new Date().toISOString(),
+          totalStocks: result.totalStocks || 0, candidates: result.candidates || 0,
+          analyzed: result.analyzed || 0, duration: result.duration || 0,
+          top5: (result.top5 || []).map(function(s) { return { code: s.code, name: s.name, score: s.compositeScore, rating: s.rating, signals: s.signals || (s.hiddenSignals || []).map(function(h) { return { id: h.id, name: h.name, level: h.level }; }), }; }),
+          scoreDistribution: dist, signalCounts: signalCounts,
+          avgScore: allResults.length > 0 ? Math.round(allResults.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / allResults.length) : 0,
+          maxScore: allResults.length > 0 ? Math.max.apply(null, allResults.map(function(r) { return r.compositeScore || 0; })) : 0,
+          pipelineResultsForKernel: allResults.slice(0, 100).map(function(rr) { return { code: rr.code, name: rr.name, compositeScore: rr.compositeScore || 0, prediction: rr.prediction ? { expectedReturn: rr.prediction.expectedReturn, confidence: rr.prediction.confidence, label: rr.prediction.label } : null }; }),
+        };
+        fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
       } catch (_) {}
-
-      const summary = {
-        type: type || 'full',
-        date: this._todayDate,
-        time: new Date().toISOString(),
-        totalStocks: result.totalStocks || 0,
-        candidates: result.candidates || 0,
-        analyzed: result.analyzed || 0,
-        duration: result.duration || 0,
-        top5: (result.top5 || []).map(s => ({
-          code: s.code, name: s.name, score: s.compositeScore, rating: s.rating,
-          signals: s.signals || (s.hiddenSignals || []).map(h => ({ id: h.id, name: h.name, level: h.level })),
-        })),
-        scoreDistribution: dist,
-        signalCounts: signalCounts,
-        avgScore: allResults.length > 0
-          ? Math.round(allResults.reduce((a, r) => a + (r.compositeScore || 0), 0) / allResults.length)
-          : 0,
-        maxScore: allResults.length > 0
-          ? Math.max(...allResults.map(r => r.compositeScore || 0))
-          : 0,
-        expectedReturns: expectedReturns,
-        // v3.4.3: Lightweight kernel context for cockpit/think-tank after restart.
-        // Top 100 scored stocks with just the fields decision_kernel consumers need.
-        pipelineResultsForKernel: allResults.slice(0, 100).map(function(r) {
-          return {
-            code: r.code, name: r.name,
-            compositeScore: r.compositeScore || 0,
-            prediction: r.prediction ? {
-              expectedReturn: r.prediction.expectedReturn,
-              confidence: r.prediction.confidence,
-              label: r.prediction.label,
-            } : null,
-          };
-        }),
-      };
-
-      const filePath = path.join(dir, 'last_pipeline_result.json');
-      fs.writeFileSync(filePath, JSON.stringify(summary, null, 2), 'utf8');
-
-      // Also append to today's scan records file for think-tank display
-      const scanRecordsDir = path.join(config.DATA_DIR, 'simfolio');
-      const scanFile = path.join(scanRecordsDir, 'scan_records_' + this._todayDate + '.json');
-      let records = [];
-      if (fs.existsSync(scanFile)) {
-        try { records = JSON.parse(fs.readFileSync(scanFile, 'utf8')); } catch (e2) {}
-      }
-      records.push({
-        time: new Date().toISOString(),
-        scanType: type || 'full',
-        totalStocks: result.totalStocks || 0,
-        candidates: result.candidates || 0,
-        analyzed: result.analyzed || 0,
-        top5: (result.top5 || []).slice(0, 5).map(s => ({
-          code: s.code, name: s.name, score: s.compositeScore || s.score, rating: s.rating,
-        })),
-        signalCounts: signalCounts,
-        avgScore: summary.avgScore,
-        maxScore: summary.maxScore,
-      });
-      if (records.length > 20) records = records.slice(-20);
-      fs.writeFileSync(scanFile, JSON.stringify(records, null, 2), 'utf8');
-    } catch (e) {
-      // 静默失败
     }
   }
 

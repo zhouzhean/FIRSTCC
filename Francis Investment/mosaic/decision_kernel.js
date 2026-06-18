@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Decision Kernel v3.4.3
+ * Francis Investment · Decision Kernel v3.4.4
  *
  * Unified trading permission engine. Single source of truth for ALL three consumers:
  *   1. Cockpit permissions (buildCockpitData)
@@ -85,10 +85,12 @@ function computeDecision(context) {
     if (gs.drawdown && gs.drawdown.status === 'block') activeBlocks.push({ gate: 'drawdown', status: 'block', label: '回撤熔断', detail: gs.drawdown.description });
     if (gs.drawdown && gs.drawdown.status === 'restrict') activeBlocks.push({ gate: 'drawdown', status: 'restrict', label: '回撤限仓', detail: gs.drawdown.description });
     if (gs.marketDirection && gs.marketDirection.status === 'block') activeBlocks.push({ gate: 'marketDirection', status: 'block', label: '市场方向不利', detail: gs.marketDirection.description });
-    // Add marketClosed/marketData status
-    if (ctx.marketState === 'closed' || ctx.marketState === 'post_market') {
+    // Add marketSession/marketData status
+    if (gs.marketSession && gs.marketSession.status === 'block') {
       res.marketClosed = true;
+      activeBlocks.push({ gate: 'marketSession', status: 'block', label: '非交易时段', detail: gs.marketSession.description });
     }
+    if (gs.marketData && gs.marketData.status === 'block') activeBlocks.push({ gate: 'marketData', status: 'block', label: '行情数据缺失', detail: gs.marketData.description });
     if (res.hardBlockers.length > 0) {
       res.primaryBlocker = res.hardBlockers[0].gate;
     }
@@ -110,22 +112,46 @@ function computeDecision(context) {
   var pipelineResults = ctx.pipelineResults || null;
 
   // ================================================================
+  // HARD BLOCKER 0: Market session gate (v3.4.4)
+  // ================================================================
+  // MUST be the first gate. Only real trading windows can proceed to
+  // buy evaluation. Sell/risk/position checks continue regardless.
+  // This prevents stale pipeline+index data from producing ALLOW
+  // during closed/post_market/pre_market/lunch_break.
+  var marketState = ctx.marketState || null;
+  var TRADING_STATES = ['morning_session', 'afternoon_session', 'trading'];
+  var isTradingSession = marketState && TRADING_STATES.indexOf(marketState) >= 0;
+
+  if (marketState && !isTradingSession) {
+    // Non-trading state explicitly set → BLOCK all new buys
+    var stateLabelMap = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后' };
+    var stateLabel = ctx.marketStateLabel || stateLabelMap[marketState] || marketState;
+    result.canBuy = false;
+    result.finalVerdict = 'BLOCK';
+    result.finalVerdictLabel = '非交易时段/禁止开仓';
+    result.maxBuysPerDay = 0;
+    result.hardBlockers.push({
+      gate: 'marketSession',
+      reason: '当前非交易时段（' + stateLabel + '），禁止新开仓。卖出、风控、持仓检查不受影响。等待进入上午/下午交易时段。',
+      severity: 'block',
+    });
+    return finalize(result);
+  }
+
+  // ================================================================
   // HARD BLOCKER 1: No market data
   // ================================================================
-  // v3.4.3: During trading hours, missing indices always BLOCK — even if
-  // pipelineResults exist from a past scan. The kernel must not approve buys
-  // on stale data. After-hours, missing indices is normal (marketClosed).
-  var marketState = ctx.marketState || null;
-  var isMarketClosed = marketState === 'closed' || marketState === 'post_market';
-  var isTrading = !isMarketClosed && marketState !== null;
+  // v3.4.4: By the time we reach here, marketState is either a trading session
+  // or null (caller didn't pass marketState — legacy path). The session gate above
+  // already blocked all non-trading states, so isTradingSession is our guard.
+  //
+  // During trading hours, missing indices always BLOCK — even if pipelineResults
+  // exist from a past scan. The kernel must not approve buys on stale data.
   var noMarketData = !indices || !Array.isArray(indices) || indices.length === 0;
   var noPipeline = !pipelineResults || !Array.isArray(pipelineResults) || pipelineResults.length === 0;
 
-  // v3.4.3: Two independent BLOCK paths:
-  //   (A) Trading hours + no indices → BLOCK marketData (even with pipeline)
-  //   (B) Market closed + no indices + no pipeline → BLOCK marketClosed
   if (noMarketData) {
-    if (isTrading) {
+    if (isTradingSession) {
       // Trading session with no index data = data feed failure, not normal
       result.canBuy = false;
       result.finalVerdict = 'BLOCK';
@@ -137,20 +163,21 @@ function computeDecision(context) {
       });
       return finalize(result);
     }
+    // No marketState set (legacy caller) + no indices + no pipeline:
+    // conservative BLOCK — we don't know if market is open
     if (noPipeline) {
-      // After-hours with no pipeline either — normal quiet state
       result.canBuy = false;
       result.finalVerdict = 'BLOCK';
-      result.finalVerdictLabel = '离市/等待下个交易窗口';
+      result.finalVerdictLabel = '无数据/等待交易窗口';
       result.hardBlockers.push({
-        gate: 'marketClosed',
-        reason: '当前非交易时段 — ' + (ctx.marketStateLabel || '离市') + '，等待下个交易窗口。系统状态正常，非数据异常。',
+        gate: 'marketData',
+        reason: '指数和管线数据均缺失，无法判断市场状态。等待下个交易窗口或手动运行管线。',
         severity: 'block',
       });
       return finalize(result);
     }
-    // After-hours with pipeline results (e.g. just deployed after a scan):
-    // let it fall through to remaining gate checks
+    // marketState unknown + has pipeline but no indices:
+    // let it fall through to remaining gate checks (legacy tolerance)
   }
 
   // ================================================================
@@ -434,7 +461,35 @@ function _buildAllGateStates(ctx, decision) {
   var dqOverallScore = dqReport ? (dqReport.overallScore || 0) : 100;
   var dqStatus = dqPenalty >= 7 ? 'block' : (dqPenalty >= 4 ? 'cautious' : (dqPenalty > 0 ? 'warn' : 'pass'));
 
+  // --- Market session ---
+  var msStatus = 'pass';
+  var msDescription = '交易时段，正常';
+  if (ctx.marketState) {
+    var TRADING_STATES_GS = ['morning_session', 'afternoon_session', 'trading'];
+    if (TRADING_STATES_GS.indexOf(ctx.marketState) < 0) {
+      msStatus = 'block';
+      var gsLabelMap = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后' };
+      msDescription = '非交易时段（' + (ctx.marketStateLabel || gsLabelMap[ctx.marketState] || ctx.marketState) + '），禁止新开仓';
+    }
+  }
+
+  // --- Market data ---
+  var mdStatus = (!indices || indices.length === 0) ? 'block' : 'pass';
+  var mdDescription = mdStatus === 'block'
+    ? '指数行情数据缺失，无法进行实时决策'
+    : '指数数据正常（' + indices.length + '只指数）';
+
   return {
+    marketSession: {
+      status: msStatus,
+      state: ctx.marketState || 'unknown',
+      description: msDescription,
+    },
+    marketData: {
+      status: mdStatus,
+      indexCount: indices ? indices.length : 0,
+      description: mdDescription,
+    },
     drawdown: {
       status: ddStatus,
       level: ddLevel,
@@ -519,28 +574,97 @@ function setCachedResult(result) {
 }
 
 /**
- * v3.4.3: Shared index loader. Reads the latest daily K-line from each of the
- * three index files and computes changePercent from the penultimate close.
+ * v3.4.4: Shared index loader — unified market snapshot pipeline.
  *
- * Index files are plain arrays of {date, open, close, high, low, volume, amount}
- * stored under report-engine/data/market_history/indices/{code}.json.
+ * Priority order:
+ *   1. Live intraday snapshot from IndexRecorder (index_history_YYYY-MM-DD.json)
+ *   2. Cached market_snapshot_latest.json (written by pipeline after each fetchIndices)
+ *   3. Historical daily K-line files (market_history/indices/*.json) — fallback
  *
- * Returns [{code, name, price: close, changePercent}] or null on failure.
- * Used by cockpit, think-tank, and kernel consumers so they all see the same data.
+ * IndexRecorder writes {time, sh, sz, bj} during trading hours to
+ *   report-engine/data/simfolio/index_history_YYYY-MM-DD.json
+ *
+ * Pipeline fetchIndices() returns [{code, name, price, changePercent}] from
+ *   Sina API in real time. This function now also writes market_snapshot_latest.json
+ *   so all consumers (kernel, cockpit, data_quality) read from the same source.
+ *
+ * Returns [{code, name, price, changePercent, date, source}] or null on failure.
+ * Used by cockpit, think-tank, kernel, data_quality, and strategy_health.
  */
 function loadLatestIndices() {
   try {
     var fs = require('fs');
     var path = require('path');
+    var today = new Date().toISOString().slice(0, 10);
     var idxDir = path.join(__dirname, '..', 'report-engine', 'data', 'market_history', 'indices');
+    var snapDir = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
     var defs = [
-      { file: 'sh000001.json', code: '000001', name: '上证指数' },
-      { file: 'sz399001.json', code: '399001', name: '深证成指' },
-      { file: 'sz399006.json', code: '399006', name: '创业板指' },
+      { file: 'sh000001.json', code: '000001', name: '上证指数', recorderKey: 'sh' },
+      { file: 'sz399001.json', code: '399001', name: '深证成指', recorderKey: 'sz' },
+      { file: 'sz399006.json', code: '399006', name: '创业板指', recorderKey: null }, // not in IndexRecorder
     ];
+
+    // === Tier 1: Live intraday snapshot from IndexRecorder ===
+    var recorderFile = path.join(snapDir, 'index_history_' + today + '.json');
+    var recorderData = null;
+    if (fs.existsSync(recorderFile)) {
+      try {
+        var raw = JSON.parse(fs.readFileSync(recorderFile, 'utf8'));
+        if (Array.isArray(raw) && raw.length > 0) {
+          recorderData = raw[raw.length - 1]; // latest record point
+        }
+      } catch (_) {}
+    }
+
+    // === Tier 2: Cached market snapshot (written by pipeline) ===
+    var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
+    var snapshotData = null;
+    if (fs.existsSync(snapshotFile)) {
+      try {
+        snapshotData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
+        // Only use if from today and not too stale
+        if (snapshotData.date !== today) snapshotData = null;
+      } catch (_) {}
+    }
+
+    // === Tier 3: Historical daily K-line files (fallback) ===
     var results = [];
     for (var i = 0; i < defs.length; i++) {
-      var fp = path.join(idxDir, defs[i].file);
+      var idxDef = defs[i];
+
+      // Try recorder first (only for sh/sz which have recorderKey)
+      if (recorderData && idxDef.recorderKey && recorderData[idxDef.recorderKey] != null) {
+        results.push({
+          code: idxDef.code,
+          name: idxDef.name,
+          price: recorderData[idxDef.recorderKey],
+          changePercent: null, // recorder doesn't compute change% from prev close
+          date: today,
+          source: 'index_recorder',
+        });
+        continue;
+      }
+
+      // Try snapshot cache
+      if (snapshotData && snapshotData.indices) {
+        var snapIdx = snapshotData.indices.find(function(ix) {
+          return ix.code === idxDef.code;
+        });
+        if (snapIdx) {
+          results.push({
+            code: idxDef.code,
+            name: idxDef.name,
+            price: snapIdx.price,
+            changePercent: snapIdx.changePercent != null ? snapIdx.changePercent : null,
+            date: snapshotData.date || today,
+            source: 'snapshot_cache',
+          });
+          continue;
+        }
+      }
+
+      // Fallback: historical daily K-line
+      var fp = path.join(idxDir, idxDef.file);
       if (!fs.existsSync(fp)) continue;
       var arr = JSON.parse(fs.readFileSync(fp, 'utf8'));
       if (!Array.isArray(arr) || arr.length === 0) continue;
@@ -550,13 +674,28 @@ function loadLatestIndices() {
         ? parseFloat(((last.close - prev.close) / prev.close * 100).toFixed(2))
         : null;
       results.push({
-        code: defs[i].code,
-        name: defs[i].name,
+        code: idxDef.code,
+        name: idxDef.name,
         price: last.close,
         changePercent: changePercent,
         date: last.date || null,
+        source: 'daily_kline',
       });
     }
+
+    // Save snapshot for next consumers (cross-module consistency)
+    if (results.length > 0) {
+      try {
+        if (!fs.existsSync(snapDir)) fs.mkdirSync(snapDir, { recursive: true });
+        fs.writeFileSync(snapshotFile, JSON.stringify({
+          date: today,
+          time: new Date().toISOString(),
+          indices: results,
+          source: results[0].source || 'composite',
+        }, null, 2), 'utf8');
+      } catch (_) {}
+    }
+
     return results.length > 0 ? results : null;
   } catch (_) {
     return null;
