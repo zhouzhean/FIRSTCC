@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Decision Kernel v3.4.2
+ * Francis Investment · Decision Kernel v3.4.3
  *
  * Unified trading permission engine. Single source of truth for ALL three consumers:
  *   1. Cockpit permissions (buildCockpitData)
@@ -112,31 +112,45 @@ function computeDecision(context) {
   // ================================================================
   // HARD BLOCKER 1: No market data
   // ================================================================
-  // v3.4.1: Distinguish marketClosed (normal after-hours) vs noMarketData (error during trading)
+  // v3.4.3: During trading hours, missing indices always BLOCK — even if
+  // pipelineResults exist from a past scan. The kernel must not approve buys
+  // on stale data. After-hours, missing indices is normal (marketClosed).
   var marketState = ctx.marketState || null;
   var isMarketClosed = marketState === 'closed' || marketState === 'post_market';
+  var isTrading = !isMarketClosed && marketState !== null;
   var noMarketData = !indices || !Array.isArray(indices) || indices.length === 0;
   var noPipeline = !pipelineResults || !Array.isArray(pipelineResults) || pipelineResults.length === 0;
 
-  if (noMarketData && noPipeline) {
-    result.canBuy = false;
-    result.finalVerdict = 'BLOCK';
-    if (isMarketClosed) {
+  // v3.4.3: Two independent BLOCK paths:
+  //   (A) Trading hours + no indices → BLOCK marketData (even with pipeline)
+  //   (B) Market closed + no indices + no pipeline → BLOCK marketClosed
+  if (noMarketData) {
+    if (isTrading) {
+      // Trading session with no index data = data feed failure, not normal
+      result.canBuy = false;
+      result.finalVerdict = 'BLOCK';
+      result.finalVerdictLabel = '无行情数据/禁止开仓';
+      result.hardBlockers.push({
+        gate: 'marketData',
+        reason: '交易时段指数行情数据缺失 — 可能数据源异常，禁止开仓。有管线结果(' + (noPipeline ? '无' : '有') + ')但指数是实时决策的必要条件。',
+        severity: 'block',
+      });
+      return finalize(result);
+    }
+    if (noPipeline) {
+      // After-hours with no pipeline either — normal quiet state
+      result.canBuy = false;
+      result.finalVerdict = 'BLOCK';
       result.finalVerdictLabel = '离市/等待下个交易窗口';
       result.hardBlockers.push({
         gate: 'marketClosed',
         reason: '当前非交易时段 — ' + (ctx.marketStateLabel || '离市') + '，等待下个交易窗口。系统状态正常，非数据异常。',
         severity: 'block',
       });
-    } else {
-      result.finalVerdictLabel = '无行情数据/禁止开仓';
-      result.hardBlockers.push({
-        gate: 'marketData',
-        reason: '无指数行情数据且无管线结果，无法做出交易决策（非交易时段或数据采集异常）',
-        severity: 'block',
-      });
+      return finalize(result);
     }
-    return finalize(result);
+    // After-hours with pipeline results (e.g. just deployed after a scan):
+    // let it fall through to remaining gate checks
   }
 
   // ================================================================
@@ -504,9 +518,55 @@ function setCachedResult(result) {
   _lastResultTime = Date.now();
 }
 
+/**
+ * v3.4.3: Shared index loader. Reads the latest daily K-line from each of the
+ * three index files and computes changePercent from the penultimate close.
+ *
+ * Index files are plain arrays of {date, open, close, high, low, volume, amount}
+ * stored under report-engine/data/market_history/indices/{code}.json.
+ *
+ * Returns [{code, name, price: close, changePercent}] or null on failure.
+ * Used by cockpit, think-tank, and kernel consumers so they all see the same data.
+ */
+function loadLatestIndices() {
+  try {
+    var fs = require('fs');
+    var path = require('path');
+    var idxDir = path.join(__dirname, '..', 'report-engine', 'data', 'market_history', 'indices');
+    var defs = [
+      { file: 'sh000001.json', code: '000001', name: '上证指数' },
+      { file: 'sz399001.json', code: '399001', name: '深证成指' },
+      { file: 'sz399006.json', code: '399006', name: '创业板指' },
+    ];
+    var results = [];
+    for (var i = 0; i < defs.length; i++) {
+      var fp = path.join(idxDir, defs[i].file);
+      if (!fs.existsSync(fp)) continue;
+      var arr = JSON.parse(fs.readFileSync(fp, 'utf8'));
+      if (!Array.isArray(arr) || arr.length === 0) continue;
+      var last = arr[arr.length - 1];
+      var prev = arr.length >= 2 ? arr[arr.length - 2] : null;
+      var changePercent = (prev && prev.close && last.close)
+        ? parseFloat(((last.close - prev.close) / prev.close * 100).toFixed(2))
+        : null;
+      results.push({
+        code: defs[i].code,
+        name: defs[i].name,
+        price: last.close,
+        changePercent: changePercent,
+        date: last.date || null,
+      });
+    }
+    return results.length > 0 ? results : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 decision_kernel.computeDecision = computeDecision;
 decision_kernel.getLastResult = getLastResult;
 decision_kernel.setCachedResult = setCachedResult;
 decision_kernel._buildAllGateStates = _buildAllGateStates;
+decision_kernel.loadLatestIndices = loadLatestIndices;
 
 module.exports = decision_kernel;

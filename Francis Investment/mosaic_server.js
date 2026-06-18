@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.4.2
+ * Francis Investment · Mosaic Server v3.4.3
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -247,16 +247,8 @@ function generateTodaysVerdict(data) {
       }
     } catch (_) {}
 
-    // v3.4.1: Load indices and market state for consistent context
-    var ttIndices = null;
-    try {
-      var ttIdxDir = require('path').join(__dirname, 'report-engine', 'data', 'market_history', 'indices');
-      var ttIfiles = require('fs').existsSync(ttIdxDir) ? require('fs').readdirSync(ttIdxDir).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
-      if (ttIfiles.length > 0) {
-        var ttIdata = JSON.parse(require('fs').readFileSync(require('path').join(ttIdxDir, ttIfiles[0]), 'utf8'));
-        if (ttIdata && ttIdata.indices) ttIndices = ttIdata.indices;
-      }
-    } catch (_) {}
+    // v3.4.3: Use shared loadLatestIndices()
+    var ttIndices = require('./mosaic/decision_kernel').loadLatestIndices();
 
     var shResult = null;
     try {
@@ -379,7 +371,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.4.1',
+    version: '3.4.3',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -720,7 +712,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.2',
+    systemVersion: 'v3.4.3',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -841,16 +833,9 @@ function buildCockpitData() {
       }
     } catch (_) {}
 
-    // v3.4.1: Load real indices for consistent kernel context (P1-3)
-    var indices = null;
-    try {
-      var idxPath = require('path').join(__dirname, 'report-engine', 'data', 'market_history', 'indices');
-      var idxFiles = require('fs').existsSync(idxPath) ? require('fs').readdirSync(idxPath).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
-      if (idxFiles.length > 0) {
-        var idxData = JSON.parse(require('fs').readFileSync(require('path').join(idxPath, idxFiles[0]), 'utf8'));
-        if (idxData && idxData.indices) indices = idxData.indices;
-      }
-    } catch (_) {}
+    // v3.4.3: Use shared loadLatestIndices() — reads raw arrays, not {indices:...}
+    var indices = require('./mosaic/decision_kernel').loadLatestIndices();
+    result.indices = indices;  // v3.4.3: expose to cockpit UI
 
     // v3.4.1: Load market state from scheduler (P1-2: marketClosed vs noMarketData)
     var marketState = null;
@@ -902,9 +887,9 @@ function buildCockpitData() {
           time: lrData.time,
         };
         result.pipelineSummary = pipelineSummary;
-        // v3.4.1: Pass actual pipeline results to kernel when available (P1-3)
-        if (lrData.allResults && lrData.allResults.length > 0) {
-          pipelineResultsForKernel = lrData.allResults.slice(0, 100);
+        // v3.4.3: Use pipelineResultsForKernel (always saved) instead of allResults (not persisted)
+        if (lrData.pipelineResultsForKernel && lrData.pipelineResultsForKernel.length > 0) {
+          pipelineResultsForKernel = lrData.pipelineResultsForKernel;
         }
       }
     } catch (_) {}
@@ -1202,7 +1187,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.2       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.3       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -2637,16 +2622,8 @@ const server = http.createServer(async function(req, res) {
       // v3.4.1: Load portfolio for consistent context (P1-3)
       var ttPf = null;
       try { ttPf = require('./mosaic/simfolio').loadPortfolio(); } catch (_) {}
-      // v3.4.1: Load indices
-      var ttIndices = null;
-      try {
-        var ttIdxPath = path.join(DATA_DIR, 'market_history', 'indices');  // v3.4.2: fix path (was '..' / 'market_history')
-        var ttIdxFiles = fs.existsSync(ttIdxPath) ? fs.readdirSync(ttIdxPath).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
-        if (ttIdxFiles.length > 0) {
-          var ttIdxData = JSON.parse(fs.readFileSync(path.join(ttIdxPath, ttIdxFiles[0]), 'utf8'));
-          if (ttIdxData && ttIdxData.indices) ttIndices = ttIdxData.indices;
-        }
-      } catch (_) {}
+      // v3.4.3: Use shared loadLatestIndices() — reads raw arrays, not {indices:...}
+      var ttIndices = require('./mosaic/decision_kernel').loadLatestIndices();
       // v3.4.1: Market state
       var ttMarketState = null;
       var ttMarketStateLabel = null;
@@ -2680,9 +2657,21 @@ const server = http.createServer(async function(req, res) {
         if (ttRiskState) ttMacroCtx = { riskState: ttRiskState };
       } catch (_) {}
 
+      // v3.4.3: Load pipelineResultsForKernel so think-tank kernel sees real candidates on restart
+      var ttPipelineResults = null;
+      try {
+        var ttLrPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        if (fs.existsSync(ttLrPath)) {
+          var ttLr = JSON.parse(fs.readFileSync(ttLrPath, 'utf8'));
+          if (ttLr.pipelineResultsForKernel && ttLr.pipelineResultsForKernel.length > 0) {
+            ttPipelineResults = ttLr.pipelineResultsForKernel;
+          }
+        }
+      } catch (_) {}
+
       var ttDecision = ttKernel.computeDecision({
         portfolio: ttPf, indices: ttIndices, macroContext: ttMacroCtx,
-        pipelineResults: null, dataQualityReport: ttDqReport,
+        pipelineResults: ttPipelineResults, dataQualityReport: ttDqReport,
         leakageAudit: ttLeakageAudit, strategyHealth: ttShResult,
         marketState: ttMarketState, marketStateLabel: ttMarketStateLabel,
       });

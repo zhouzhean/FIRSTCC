@@ -1,5 +1,5 @@
 /**
- * scheduler.js — 全自动量化交易调度器
+ * scheduler.js — 全自动量化交易调度器 v3.4.3
  *
  * A股交易时段状态机，驱动定时 Pipeline + 持仓监控 + 风控执行。
  * 纯 Node.js 内置模块，零外部依赖。
@@ -671,7 +671,8 @@ class Scheduler extends EventEmitter {
         } else if (!tradeResult.decisions || tradeResult.decisions.length === 0) {
           this.emit('think_trade', {
             type: 'trade_skip',
-            reason: 'no_candidates_above_threshold',
+            // v3.4.3: Reason priority — kernel's skipReason or primaryBlocker tells the real story
+            reason: tradeResult.skipReason || (tradeResult.kernelDecision && tradeResult.kernelDecision.primaryBlocker) || 'no_candidates_above_threshold',
             analyzedCount: result.analyzed,
             time: new Date().toISOString(),
             // v3.4.2: Kernel context for event consumers
@@ -956,7 +957,8 @@ class Scheduler extends EventEmitter {
           } else if (!tradeResult.decisions || tradeResult.decisions.length === 0) {
             this.emit('think_trade', {
               type: 'trade_skip',
-              reason: 'no_candidates_above_threshold',
+              // v3.4.3: Reason priority — kernel's skipReason or primaryBlocker tells the real story
+              reason: tradeResult.skipReason || (tradeResult.kernelDecision && tradeResult.kernelDecision.primaryBlocker) || 'no_candidates_above_threshold',
               analyzedCount: results.length,
               time: new Date().toISOString(),
               // v3.4.2: Kernel context
@@ -1747,6 +1749,19 @@ class Scheduler extends EventEmitter {
           ? Math.max(...allResults.map(r => r.compositeScore || 0))
           : 0,
         expectedReturns: expectedReturns,
+        // v3.4.3: Lightweight kernel context for cockpit/think-tank after restart.
+        // Top 100 scored stocks with just the fields decision_kernel consumers need.
+        pipelineResultsForKernel: allResults.slice(0, 100).map(function(r) {
+          return {
+            code: r.code, name: r.name,
+            compositeScore: r.compositeScore || 0,
+            prediction: r.prediction ? {
+              expectedReturn: r.prediction.expectedReturn,
+              confidence: r.prediction.confidence,
+              label: r.prediction.label,
+            } : null,
+          };
+        }),
       };
 
       const filePath = path.join(dir, 'last_pipeline_result.json');
