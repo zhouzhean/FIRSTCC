@@ -358,6 +358,8 @@ body {
 .circuit-legend-item:hover { background: #f1f5f9; }
 .circuit-legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
 .circuit-legend-status { font-size: 8px; opacity: 0.7; line-height: 1.4; }
+.circuit-footer { width: 100%; margin-top: 6px; padding-top: 5px; border-top: 1px solid #e2e8f0; font-size: 8.5px; color: #94a3b8; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.circuit-footer-ver { font-weight: 600; color: #64748b; background: #f1f5f9; padding: 1px 6px; border-radius: 3px; font-size: 8px; }
 
 #evoUSSparkCanvas { background: #f8fafc; border: 1px solid #e2e8f0; }
 #evolutionRow .card .evo-running-dot {
@@ -523,7 +525,7 @@ body {
 
   <!-- ROW 4: Learning Circuit -->
   <div class="card circuit-card" style="margin-bottom:8px;">
-    <div class="card-header"><span class="title">学习回路总览</span></div>
+    <div class="card-header"><span class="title">学习回路总览</span><span style="margin-left:8px;font-size:9px;color:#94a3b8;font-weight:400;">v3.4.5 · 7回路+6硬阻断</span></div>
     <div style="position:relative;">
       <svg class="circuit-svg" id="circuitSvg" viewBox="0 0 1140 170" preserveAspectRatio="xMidYMid meet"></svg>
       <div class="circuit-tooltip" id="circuitTooltip"></div>
@@ -1512,16 +1514,32 @@ function renderLearningCircuit(health, dynamicWeights, factorPerf) {
     }
   }
 
+  // Node sub-labels — what each stage actually does in v3.4.5
+  var nodeSubs = {
+    collect: '全A股+指数',
+    factor: 'H1-H9因子',
+    score: '5维加权',
+    candidate: 'Top80→5',
+    gate: '6硬阻断',
+    trade: 'Simfolio',
+    attrib: '盈亏归因',
+    evolution: '10任务进化',
+  };
+
   // Pipeline nodes
   for (var i = 0; i < nodes.length; i++) {
     var nd = nodes[i];
     var rx = nd.x, ry = nodeY;
-    var rw = 96, rh = 34;
+    var rw = 96, rh = 36;
     var nodeFill = (i === 0 || i === nodes.length-1) ? '#f1f5f9' : '#fafbfc';
     svgHTML += '<rect x="'+(rx-rw/2)+'" y="'+(ry-rh/2)+'" width="'+rw+'" height="'+rh+'" rx="6" ' +
       'fill="'+nodeFill+'" stroke="#e2e8f0" stroke-width="1.2" class="circuit-node"/>';
-    svgHTML += '<text x="'+rx+'" y="'+(ry-3)+'" text-anchor="middle" font-size="10" fill="#475569" font-weight="600" class="circuit-node">'+
+    svgHTML += '<text x="'+rx+'" y="'+(ry-5)+'" text-anchor="middle" font-size="10.5" fill="#475569" font-weight="600" class="circuit-node">'+
       nd.label+'</text>';
+    var sub = nodeSubs[nd.id] || '';
+    if (sub) {
+      svgHTML += '<text x="'+rx+'" y="'+(ry+11)+'" text-anchor="middle" font-size="7.5" fill="#94a3b8" class="circuit-node">'+sub+'</text>';
+    }
   }
 
   // Pipeline arrows between nodes
@@ -1546,7 +1564,22 @@ function renderLearningCircuit(health, dynamicWeights, factorPerf) {
       '<span class="circuit-legend-status" style="color:'+(ldata.status==='active'?'#16a34a':ldata.status==='degraded'?'#d97706':'#94a3b8')+'">'+statusLabel+'</span>' +
       '</div>';
   }
-  document.getElementById('circuitLegend').innerHTML = legendHTML;
+  // Footer: v3.4.5 kernel status + data bus freshness (from cockpit data if loaded)
+  var footerHTML = '<div class="circuit-footer">';
+  footerHTML += '<span class="circuit-footer-ver">v3.4.5</span>';
+  // Try to extract kernel verdict from page-level data
+  if (health && health.loops) {
+    var l7 = health.loops['7_evolutionEngine'];
+    var l4 = health.loops['4_thinkTankDefense'];
+    if (l7 && l7.process && l7.process.completedToday > 0) {
+      footerHTML += '<span style="color:#16a34a;">● 进化: ' + l7.process.completedToday + '/' + l7.process.totalToday + '任务</span>';
+    }
+    if (l4 && l4.process && l4.process.totalScore != null) {
+      footerHTML += '<span style="color:#94a3b8;">防御: ' + l4.process.totalScore + '/' + (l4.process.threshold || 3) + '</span>';
+    }
+  }
+  footerHTML += '</div>';
+  document.getElementById('circuitLegend').innerHTML = legendHTML + footerHTML;
 
   // Click on legend items to highlight the arc
   document.getElementById('circuitLegend').addEventListener('click', function(e) {
