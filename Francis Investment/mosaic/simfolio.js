@@ -889,7 +889,71 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     };
   }
 
-  // ---- Step 3.5c: Strategy Health Gate (v3.3.0) ----
+  // ---- Step 3.5c: Leakage Audit Gate (v3.3.2) ----
+  // Read leakage_audit.json directly in the real trading path.
+  // This is a HARD risk control: NO_SAMPLES / INSUFFICIENT_DATA / CRITICAL /
+  // DATA_LEAKAGE_RISK all block real buys. MINOR_ISSUES → CAUTIOUS (max 1 buy).
+  // Only CLEAN with totalChecks>0 allows normal trading.
+  // Shadow learning continues regardless — this only gates real money execution.
+  // Placed BEFORE Strategy Health so leakage state is visible even when
+  // strategy_health also returns REDUCE/BLOCK.
+  var leakageBlockActive = false;
+  var leakageReduceActive = false;
+  var leakageReasons = [];
+  var laVerdict = 'NO_SAMPLES';
+  try {
+    var leakagePath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+    var leakageAudit = null;
+    if (require('fs').existsSync(leakagePath)) {
+      leakageAudit = JSON.parse(require('fs').readFileSync(leakagePath, 'utf8'));
+    }
+    var laTotalChecks = leakageAudit ? (leakageAudit.totalChecks || 0) : 0;
+    laVerdict = leakageAudit ? (leakageAudit.verdict || 'NO_SAMPLES') : 'NO_SAMPLES';
+
+    if (laVerdict === 'CRITICAL_DATA_LEAKAGE' || laVerdict === 'DATA_LEAKAGE_RISK') {
+      leakageBlockActive = true;
+      leakageReasons.push('Leakage audit: ' + laVerdict + ' — 发现数据泄漏风险，禁止所有买入');
+    } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA' || laTotalChecks === 0) {
+      leakageBlockActive = true;
+      leakageReasons.push('Leakage audit: NO_SAMPLES — 审计样本不足，禁止实盘开仓 (' + laTotalChecks + ' 条检查)');
+    } else if (laVerdict === 'MINOR_ISSUES') {
+      leakageReduceActive = true;
+      leakageReasons.push('Leakage audit: MINOR_ISSUES — 有小问题需人工复核，限制买入数量');
+    }
+    // CLEAN → no block, no reduce
+  } catch (_) {
+    // Leakage audit read failure → conservative: block buys
+    leakageBlockActive = true;
+    leakageReasons.push('Leakage audit: 无法读取审计文件，保守禁止买入');
+  }
+
+  if (leakageBlockActive) {
+    var laSellDecisions = decisions.filter(function(d) { return d.action === 'sell'; });
+    var laExecutedTrades = [];
+    for (var lk = 0; lk < laSellDecisions.length; lk++) {
+      if (laSellDecisions[lk].action === 'sell') {
+        var laTrade = executeSell(pf, laSellDecisions[lk], today);
+        if (laTrade) laExecutedTrades.push(laTrade);
+      }
+    }
+    for (var lj = 0; lj < pf.positions.length; lj++) {
+      var laStockData = pipelineResults.find(function(r) { return r.code === pf.positions[lj].code; });
+      if (laStockData) pf.positions[lj].currentPrice = laStockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+    return {
+      decisions: laSellDecisions,
+      executed: laExecutedTrades,
+      snapshot: getSnapshot(pf),
+      leakageAuditBlock: true,
+      leakageAuditVerdict: laVerdict,
+      leakageReasons: leakageReasons,
+      gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+    };
+  }
+
+  // ---- Step 3.5d: Strategy Health Gate (v3.3.0) ----
   // Consume strategy_health.js verdict directly. BLOCK = no buys, REDUCE = sell-only,
   // CAUTIOUS = max 1 buy. This replaces the implicit "all systems nominal" assumption.
   var strategyHealthVerdict = 'ALLOW';
@@ -931,6 +995,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       strategyHealthBlock: true,
       strategyHealthVerdict: strategyHealthVerdict,
       strategyHealthReasons: strategyHealthReasons,
+      leakageAuditVerdict: laVerdict,
+      leakageReasons: leakageReasons,
       gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
@@ -958,6 +1024,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       strategyHealthReduce: true,
       strategyHealthVerdict: strategyHealthVerdict,
       strategyHealthReasons: strategyHealthReasons,
+      leakageAuditVerdict: laVerdict,
+      leakageReasons: leakageReasons,
       gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, []),
     };
   }
@@ -1280,6 +1348,10 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   if (strategyHealthVerdict === 'CAUTIOUS') {
     effectiveMaxBuys = Math.min(effectiveMaxBuys, 1);
   }
+  // v3.3.2: Leakage audit reduce → max 1 buy (MINOR_ISSUES)
+  if (leakageReduceActive) {
+    effectiveMaxBuys = Math.min(effectiveMaxBuys, 1);
+  }
   // v3.3.0: Auto-pause check — if auto-pause is active, force sell-only
   var autoPauseActive = false;
   var autoPauseReasons = [];
@@ -1414,6 +1486,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // v3.3.0: Log predictions for shadow model evaluation
   try {
     var mr = require('./evolution/model_registry');
+    // v3.3.1: horizon 'T+3' must match verification primary horizon
     var shadowPreds = buyCandidates.slice(0, 30).map(function(c) {
       return {
         code: c.code,
@@ -1422,6 +1495,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         rating: c.rating || '--',
         predictedReturn: (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : null,
         signals: (c.hiddenSignals || []).map(function(s) { return s.id; }),
+        horizon: 'T+3',
       };
     });
     // Log for all shadow models (tracked by their versionId internally)
@@ -1442,6 +1516,11 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     snapshot: getSnapshot(pf),
     nearMisses: nearMisses.slice(0, 10),
     gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors),
+    // v3.3.2: Leakage audit gate status
+    leakageAuditBlock: leakageBlockActive,
+    leakageAuditReduce: leakageReduceActive,
+    leakageAuditVerdict: laVerdict,
+    leakageReasons: leakageReasons,
   };
 }
 

@@ -310,8 +310,8 @@ function checkPromotionCriteria(shadow, championIC, championDrawdown) {
   // 7. Evaluation days
   checks.evaluationDays = (shadow.evaluationDays || 0) >= minEvalDays;
 
-  // 8. [v3.3.1] Leakage audit: must be CLEAN
-  checks.leakageAuditClean = _checkLeakageAudit();
+  // 8. [v3.3.1] Leakage audit: must be CLEAN (promotion requires real samples)
+  checks.leakageAuditClean = _checkLeakageAudit('promotion');
 
   var allPassed = checks.icExcess && checks.directionHitRate && checks.postCostPositive
     && checks.drawdownNotWorse && checks.forwardSamples && checks.calibrationCheck
@@ -454,7 +454,7 @@ function evaluateShadow(dateStr) {
       var a = actuals[k];
       if (a.actualReturn == null) continue;
       var predDate = a.predictionDate || dateStr;
-      var horizon = a.horizon || 'T+5';
+      var horizon = a.horizon || 'T+3';
       var countKey = predDate + '|' + a.code + '|' + horizon;
       if (countedKeys[countKey]) continue; // dedup within this call
 
@@ -709,7 +709,7 @@ function _buildShadowPredictionMap(versionId) {
     for (var j = 0; j < preds.length; j++) {
       var p = preds[j];
       if (p.code && p.predictedReturn != null) {
-        var horizon = p.horizon || 'T+5';
+        var horizon = p.horizon || 'T+3';
         var key = logDate + '|' + p.code + '|' + horizon;
         // First encounter (most recent log) wins for each exact key
         if (!(key in predMap)) {
@@ -725,7 +725,7 @@ function _buildShadowPredictionMap(versionId) {
 
   // Attach helper for date-aligned lookup
   predMap._getPrediction = function(code, date, horizon) {
-    horizon = horizon || 'T+5';
+    horizon = horizon || 'T+3';
     var key = date + '|' + code + '|' + horizon;
     if (key in predMap) return predMap[key];
     // Fallback: try other horizons for same date+code
@@ -761,10 +761,11 @@ function _loadVerification(dateStr) {
       if (!entry.results || !Array.isArray(entry.results)) continue;
       for (var j = 0; j < entry.results.length; j++) {
         var r = entry.results[j];
-        if (r.code && r.fwd5d != null && r.fwd5d !== 0) {
+        // v3.3.1: Use fwd3d to match verification primary horizon T+3
+        if (r.code && r.fwd3d != null && r.fwd3d !== 0) {
           actualReturns.push({
             code: r.code,
-            actualReturn: r.fwd5d,
+            actualReturn: r.fwd3d,
             score: r.score || 0,
             predictionDate: r.predictionDate || entry.date,
             targetDate: r.targetDate || null,
@@ -873,21 +874,47 @@ function _spearmanIC(pairs) {
 }
 
 /**
- * [v3.3.1] Check if leakage audit is CLEAN.
- * Returns true if audit is clean or unavailable (don't block on missing audit).
- * Returns false only if audit exists and verdict is CRITICAL or DATA_LEAKAGE_RISK.
+ * [v3.3.2] Check if leakage audit permits the given action.
+ * @param {string} purpose - 'promotion' (Champion/trading, strict) or 'learning' (Shadow, permissive)
+ *
+ * Learning:   NO_SAMPLES → OK (don't block Shadow accumulation).
+ *             MINOR_ISSUES → OK (model can learn, promotion needs manual review).
+ *             CRITICAL / DATA_LEAKAGE_RISK → BLOCK.
+ * Promotion:  Only CLEAN (totalChecks > 0, verdict === 'CLEAN') passes.
+ *             NO_SAMPLES / MINOR_ISSUES → BLOCK (human review needed).
+ *             CRITICAL / DATA_LEAKAGE_RISK → BLOCK.
+ * Trading:    same as promotion — must have clean audit.
  */
-function _checkLeakageAudit() {
+function _checkLeakageAudit(purpose) {
   try {
     var auditPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
-    if (!fs.existsSync(auditPath)) return true; // No audit yet — don't block
+    if (!fs.existsSync(auditPath)) {
+      // No audit file at all — allow learning, block promotion/trading
+      return purpose === 'learning';
+    }
     var audit = JSON.parse(fs.readFileSync(auditPath, 'utf8'));
-    if (!audit || !audit.verdict) return true;
-    // Only block on critical or high-risk findings
-    if (audit.verdict === 'CRITICAL_DATA_LEAKAGE') return false;
-    if (audit.verdict === 'DATA_LEAKAGE_RISK') return false;
-    return true; // CLEAN or MINOR_ISSUES are OK
-  } catch (_) { return true; }
+    if (!audit || !audit.verdict) return purpose === 'learning';
+
+    var verdict = audit.verdict;
+    var totalChecks = audit.totalChecks || 0;
+
+    // Always block on critical or high-risk leakage
+    if (verdict === 'CRITICAL_DATA_LEAKAGE') return false;
+    if (verdict === 'DATA_LEAKAGE_RISK') return false;
+
+    // NO_SAMPLES: allow learning (continue accumulation), block promotion/trading
+    if (verdict === 'NO_SAMPLES' || verdict === 'INSUFFICIENT_DATA' || totalChecks === 0) {
+      return purpose === 'learning';
+    }
+
+    // [v3.3.2] MINOR_ISSUES: allow learning only, NOT promotion
+    // For promotion (Champion/trading): only CLEAN (totalChecks>0, 0 violations) passes
+    // For learning (Shadow): MINOR_ISSUES is acceptable
+    if (verdict === 'CLEAN' && totalChecks > 0) return true;
+    if (verdict === 'MINOR_ISSUES') return purpose === 'learning';
+    // Fallback: any unexpected clean-ish state — allow learning, block promotion
+    return purpose === 'learning';
+  } catch (_) { return purpose === 'learning'; }
 }
 
 module.exports = {

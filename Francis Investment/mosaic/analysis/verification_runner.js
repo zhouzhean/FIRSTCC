@@ -242,7 +242,7 @@ function runLeakageAudit(history) {
 
   var audit = {
     generatedAt: new Date().toISOString(),
-    version: 'v3.3.1',
+    version: 'v3.3.2',
     totalChecks: totalChecks,
     totalViolations: totalViolations,
     leakageFree: totalChecks - leakageDetails.length,
@@ -253,12 +253,17 @@ function runLeakageAudit(history) {
     horizonIntegrityVerified: horizonViolations === 0,
     oldestPredictionDate: oldestPrediction,
     newestTargetDate: newestTarget,
-    verdict: totalViolations === 0 ? 'CLEAN'
-      : totalViolations <= 3 ? 'MINOR_ISSUES'
+    verdict: totalChecks === 0 ? 'NO_SAMPLES'
       : futureDataViolations > 0 ? 'CRITICAL_DATA_LEAKAGE'
+      : totalViolations === 0 ? 'CLEAN'
+      : totalViolations <= 3 ? 'MINOR_ISSUES'
       : 'DATA_LEAKAGE_RISK',
-    note: totalViolations > 0
-      ? '发现 ' + totalViolations + ' 项违规。未来数据泄漏是最严重的问题。'
+    note: totalChecks === 0
+      ? '样本数据不足，无法执行泄漏审计。需要至少一条验证记录。'
+      : futureDataViolations > 0
+      ? '发现 ' + futureDataViolations + ' 项未来数据泄漏（CRITICAL）。这是最严重的问题——模型在训练时接触了未来信息，预测结果不可信。'
+      : totalViolations > 0
+      ? '发现 ' + totalViolations + ' 项违规。'
       : '所有检查通过：无时间顺序违规、无未来数据泄漏、无前瞻偏差。',
   };
 

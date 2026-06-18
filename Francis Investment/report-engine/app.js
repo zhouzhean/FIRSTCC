@@ -2069,11 +2069,13 @@ function pollLiveStatus() {
       fetch('/api/simfolio/status')
         .then(function(r) { return r.json(); })
         .then(function(sfData) {
-          // Check for new auto-trades
+          // Check for new auto-trades — only today's trades
+          var today = new Date().toISOString().slice(0, 10);
           var trades = sfData.tradeHistory || [];
           for (var i = trades.length - 1; i >= 0; i--) {
             var t = trades[i];
-            if (t.triggeredBy && t.time) {
+            // Only notify today's auto-trades; skip historical ones
+            if (t.triggeredBy && t.time && t.date === today) {
               var tradeId = t.date + 'T' + t.time + '_' + t.code;
               if (!_notifiedTradeIds[tradeId]) {
                 _notifiedTradeIds[tradeId] = true;

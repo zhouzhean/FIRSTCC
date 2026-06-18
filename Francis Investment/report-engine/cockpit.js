@@ -1,5 +1,5 @@
 /**
- * Autonomy Cockpit — v3.3.1
+ * Autonomy Cockpit — v3.3.2
  * 30-second polling dashboard for autonomous trading status.
  *
  * Design principle: "可监督状态" (supervisable status) — not pretty cards.
@@ -114,7 +114,7 @@ function renderSystemStatus(data) {
   var html = '';
 
   // Version
-  var version = data.systemVersion || 'v3.3.1';
+  var version = data.systemVersion || 'v3.3.2';
   html += '<div class="sys-row">' +
     '<span class="sys-label">Version</span>' +
     '<span class="sys-value">' + esc(version) + '</span>' +
@@ -407,6 +407,7 @@ function renderLeakageAudit(audit) {
 
   var verdictClass = audit.verdict === 'CLEAN' ? 'verdict-ok'
     : audit.verdict === 'MINOR_ISSUES' ? 'verdict-warn'
+    : audit.verdict === 'NO_SAMPLES' || audit.verdict === 'INSUFFICIENT_DATA' ? 'verdict-info'
     : 'verdict-bad';
 
   var html = '';
@@ -513,6 +514,26 @@ function renderPermissions(perms) {
     '<span class="perm-label">Drawdown</span>' +
     '<span class="' + (perms.drawdownNarrowing ? 'metric-good' : 'metric-warn') + '">' +
     (perms.drawdownNarrowing ? 'NARROWING' : 'ACTIVE') + '</span></div>';
+
+  // Leakage audit (v3.3.2 — permissive→strict)
+  var leakageLabel, leakageClass;
+  if (perms.leakageAuditClean) {
+    leakageLabel = 'CLEAN';
+    leakageClass = 'metric-good';
+  } else if (perms.leakageAuditCaution) {
+    leakageLabel = 'MINOR_ISSUES';
+    leakageClass = 'metric-warn';
+  } else if (perms.leakageAuditVerdict === 'NO_SAMPLES' || perms.leakageAuditVerdict === 'INSUFFICIENT_DATA') {
+    leakageLabel = 'NO_SAMPLES';
+    leakageClass = 'metric-bad';
+  } else {
+    leakageLabel = perms.leakageAuditVerdict || 'DIRTY';
+    leakageClass = 'metric-bad';
+  }
+  html += '<div class="perm-reason">' +
+    '<span class="perm-label">Data Leakage</span>' +
+    '<span class="' + leakageClass + '">' +
+    leakageLabel + ' (' + (perms.leakageAuditChecks || 0) + ' checks)</span></div>';
 
   // Current positions
   html += '<div class="perm-reason">' +

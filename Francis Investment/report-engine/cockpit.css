@@ -1,4 +1,4 @@
-/* Autonomy Cockpit — v3.3.1
+/* Autonomy Cockpit — v3.3.2
    Design principle: "可监督状态" (supervisable status).
    Color coding: Green=PASS/REAL, Yellow=WARN/PENDING, Red=ERROR/BLOCK, Gray=UNKNOWN */
 
@@ -222,6 +222,7 @@ header h1 {
 .verdict-ok  { background: rgba(0,200,83,0.12); color: #00c853; }
 .verdict-warn{ background: rgba(255,171,0,0.12); color: #ffab00; }
 .verdict-bad { background: rgba(255,82,82,0.15); color: #ff5252; }
+.verdict-info{ background: rgba(100,149,237,0.12); color: #92b4f2; }
 
 .recommendation {
   font-size: 10px;

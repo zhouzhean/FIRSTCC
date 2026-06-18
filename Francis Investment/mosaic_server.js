@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.3.1
+ * Francis Investment · Mosaic Server v3.3.2
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -373,7 +373,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.3.1',
+    version: '3.3.2',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -662,11 +662,24 @@ function _fileExists(relPath) {
   } catch (_) { return false; }
 }
 
+// [v3.3.1] Normalize leakage audit — force NO_SAMPLES when totalChecks===0
+// Prevents stale/broken JSON from showing CLEAN when no samples were checked.
+function normalizeLeakageAudit(audit) {
+  if (!audit) return audit;
+  var totalChecks = audit.totalChecks || 0;
+  if (totalChecks === 0) {
+    audit.verdict = 'NO_SAMPLES';
+    audit.note = '样本数据不足，无法执行泄漏审计。需要至少一条验证记录。';
+    audit.leakageFree = 0;
+  }
+  return audit;
+}
+
 function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.3.1',
+    systemVersion: 'v3.3.2',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -840,6 +853,7 @@ function buildCockpitData() {
     var auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
     if (require('fs').existsSync(auditFile)) {
       var audit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+      audit = normalizeLeakageAudit(audit);  // v3.3.1: enforce NO_SAMPLES when totalChecks===0
       result.dataQuality.leakageRisk = audit.verdict || 'UNKNOWN';
       result.dataQuality.leakageChecks = audit.totalChecks || 0;
       result.leakageAudit = audit;  // Full audit for dedicated cockpit panel
@@ -878,8 +892,69 @@ function buildCockpitData() {
       result.permissions.rankICPositive = result.verification && result.verification.rankIC > 0;
       result.permissions.winRateRecovering = result.verification && result.verification.overallHitRate > 45;
       result.permissions.drawdownNarrowing = result.permissions.gates && !result.permissions.gates.drawdownActive;
+      // [v3.3.1] Leakage audit strict checks:
+      // - leakageAuditClean: only CLEAN verdict with real checks → auto-trading allowed
+      // - leakageAuditCaution: MINOR_ISSUES with real checks → manual review, NO auto-trading
+      // - Neither set → NO_SAMPLES / INSUFFICIENT_DATA / CRITICAL / missing file → BLOCK
+      var la = result.leakageAudit || {};
+      var laChecks = la.totalChecks || 0;
+      var laVerdict = la.verdict || 'NO_SAMPLES';
+      result.permissions.leakageAuditClean = laChecks > 0 && laVerdict === 'CLEAN';
+      result.permissions.leakageAuditCaution = laChecks > 0 && laVerdict === 'MINOR_ISSUES';
+      result.permissions.leakageAuditVerdict = laVerdict;
+      result.permissions.leakageAuditChecks = laChecks;
       result.permissions.hasPositions = false;
       result.permissions.positionCount = 0;
+
+      // [v3.3.2] Leakage audit downgrade for trading permissions
+      // If leakage is not CLEAN, trading must be restricted — this is a hard risk control.
+      if (!result.permissions.leakageAuditClean) {
+        var laReasons = [];
+        if (laChecks === 0) {
+          laReasons.push('Leakage audit has no valid samples — insufficient data to certify no data leakage');
+        } else if (laVerdict === 'MINOR_ISSUES') {
+          laReasons.push('Leakage audit: MINOR_ISSUES detected — manual review required, auto-trading disabled');
+        } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA') {
+          laReasons.push('Leakage audit: NO_SAMPLES — not enough verification records to certify clean');
+        } else if (laVerdict === 'CRITICAL_DATA_LEAKAGE') {
+          laReasons.push('Leakage audit: CRITICAL_DATA_LEAKAGE — future data leakage detected, trading blocked');
+        } else if (laVerdict === 'DATA_LEAKAGE_RISK') {
+          laReasons.push('Leakage audit: DATA_LEAKAGE_RISK — potential data leakage, trading blocked');
+        } else {
+          laReasons.push('Leakage audit has no valid samples or is not clean');
+        }
+
+        // Downgrade verdict based on severity
+        if (laVerdict === 'CRITICAL_DATA_LEAKAGE' || laVerdict === 'DATA_LEAKAGE_RISK') {
+          // Hard block for actual leakage
+          result.permissions.verdict = 'BLOCK';
+          result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
+        } else if (laVerdict === 'MINOR_ISSUES') {
+          // MINOR_ISSUES → at least CAUTIOUS
+          if (result.permissions.verdict === 'ALLOW') {
+            result.permissions.verdict = 'CAUTIOUS';
+            result.permissions.verdictLabel = '审计有小问题/需人工复核';
+          }
+        } else {
+          // NO_SAMPLES / INSUFFICIENT_DATA / missing file → at least CAUTIOUS, escalate to BLOCK if was already not ALLOW
+          if (result.permissions.verdict === 'ALLOW') {
+            result.permissions.verdict = 'CAUTIOUS';
+            result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
+          } else {
+            result.permissions.verdict = 'BLOCK';
+            result.permissions.verdictLabel = '审计样本不足/禁止实盘开仓';
+          }
+        }
+
+        // Force maxBuysPerDay to 0 — no real buys without clean leakage audit
+        result.permissions.maxBuysPerDay = 0;
+
+        // Append reasons
+        if (!result.permissions.reasons) result.permissions.reasons = [];
+        for (var lr = 0; lr < laReasons.length; lr++) {
+          result.permissions.reasons.push(laReasons[lr]);
+        }
+      }
     }
   } catch (_) {}
 
@@ -1051,7 +1126,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.3.1       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.3.2       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -1936,10 +2011,20 @@ const server = http.createServer(async function(req, res) {
     try {
       const auditFile = require('path').join(__dirname, 'report-engine', 'data', 'verification', 'leakage_audit.json');
       if (require('fs').existsSync(auditFile)) {
-        const audit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+        var rawAudit = JSON.parse(require('fs').readFileSync(auditFile, 'utf8'));
+        var audit = normalizeLeakageAudit(rawAudit);
         return jsonResponse(res, { ok: true, ...audit });
       }
-      return jsonResponse(res, { ok: true, leakageDetected: 0, totalChecks: 0, message: 'No audit data yet' });
+      // [v3.3.1] File doesn't exist → return NO_SAMPLES (not just a message)
+      return jsonResponse(res, {
+        ok: true,
+        verdict: 'NO_SAMPLES',
+        note: '样本数据不足，无法执行泄漏审计。需要至少一条验证记录。',
+        leakageDetected: 0,
+        totalChecks: 0,
+        totalViolations: 0,
+        leakageFree: 0,
+      });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }

@@ -653,11 +653,48 @@ function computeMasterControlJudgment(context) {
     }
   }
 
+  // [v3.3.2] 7. Leakage audit — data leakage risk is a HARD block for real trading
+  // Only CLEAN with real samples allows ALLOW. Everything else escalates.
+  var leakageSeverity = 0;
+  try {
+    var leakagePath = require('path').join(__dirname, '..', '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+    var leakageAudit = null;
+    if (require('fs').existsSync(leakagePath)) {
+      leakageAudit = JSON.parse(require('fs').readFileSync(leakagePath, 'utf8'));
+    }
+    var laTotalChecks = leakageAudit ? (leakageAudit.totalChecks || 0) : 0;
+    var laVerdict = leakageAudit ? (leakageAudit.verdict || 'NO_SAMPLES') : 'NO_SAMPLES';
+
+    if (laVerdict === 'CRITICAL_DATA_LEAKAGE') {
+      reasons.push('泄漏审计: CRITICAL_DATA_LEAKAGE — 发现未来数据泄漏，模型不可信');
+      recoveryConditions.push('修复数据泄漏来源，重新训练并通过审计');
+      leakageSeverity = 3; // BLOCK
+    } else if (laVerdict === 'DATA_LEAKAGE_RISK') {
+      reasons.push('泄漏审计: DATA_LEAKAGE_RISK — 存在数据泄漏风险');
+      recoveryConditions.push('排查泄漏来源，重新训练并通过审计');
+      leakageSeverity = 3; // BLOCK
+    } else if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA' || laTotalChecks === 0) {
+      reasons.push('泄漏审计: NO_SAMPLES — 样本不足，无法认证无数据泄漏 (' + laTotalChecks + ' 条检查)');
+      recoveryConditions.push('积累至少1条验证记录并通过泄漏审计');
+      leakageSeverity = 2; // REDUCE — no real buys without audit
+    } else if (laVerdict === 'MINOR_ISSUES') {
+      reasons.push('泄漏审计: MINOR_ISSUES — 有小问题，需人工复核');
+      recoveryConditions.push('完成人工复核或修复小问题至CLEAN');
+      leakageSeverity = 1; // CAUTIOUS
+    }
+    // CLEAN → severity 0, no action needed
+  } catch (_) {
+    // Can't read audit file → conservative
+    reasons.push('泄漏审计: 无法读取审计文件，保守降级');
+    recoveryConditions.push('确认verification_runner已运行并生成leakage_audit.json');
+    leakageSeverity = 2; // REDUCE
+  }
+
   // ── Compound cascading: multi-dimension escalation ──
 
-  // Take the max single-dimension severity as the baseline
+  // Take the max single-dimension severity as the baseline (including leakage)
   worstVerdict = Math.max(ddSeverity, sharpeSeverity, winRateSeverity,
-                           consecSeverity, lossSeverity, pfSeverity);
+                           consecSeverity, lossSeverity, pfSeverity, leakageSeverity);
 
   // CASCADE RULE 1: If drawdown is at warn level AND we have consecutive losses
   // with zero win rate, escalate from CAUTIOUS (1) to REDUCE (2) or BLOCK (3)
@@ -722,7 +759,7 @@ function computeMasterControlJudgment(context) {
 
   // Confidence: base 100%, severity-weighted reduction
   const severitySum = ddSeverity + sharpeSeverity + winRateSeverity +
-                      consecSeverity + lossSeverity + pfSeverity;
+                      consecSeverity + lossSeverity + pfSeverity + leakageSeverity;
   const confidence = Math.max(20, 100 - severitySum * 12);
 
   // Determine market state
@@ -731,6 +768,9 @@ function computeMasterControlJudgment(context) {
   else if (worstVerdict >= 2) marketStateHint = '策略承压 — 仅允许减仓观察';
   else if (worstVerdict >= 1) marketStateHint = '策略偏弱 — 提高买入门槛';
   if (consecSeverity >= 2 && winRateSeverity >= 2) marketStateHint = '策略失效预警 — 连续亏损+低胜率';
+  // v3.3.2: Leakage audit block takes precedence in market hint
+  if (leakageSeverity >= 3) marketStateHint = '数据泄漏风险 — 禁止所有买入，等待修复';
+  else if (leakageSeverity >= 2) marketStateHint = '审计样本不足 — 暂停买入，等待验证积累';
 
   return {
     verdict: verdict,
@@ -746,6 +786,7 @@ function computeMasterControlJudgment(context) {
       consecutiveLosses: consecSeverity,
       portfolioLoss: lossSeverity,
       profitFactor: pfSeverity,
+      leakageAudit: leakageSeverity,
       composite: Math.min(3, worstVerdict),
     },
     lastUpdated: new Date().toISOString(),
