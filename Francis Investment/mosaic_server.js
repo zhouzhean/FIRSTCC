@@ -2955,7 +2955,7 @@ const server = http.createServer(async function(req, res) {
       } catch (_) {}
 
       // --- Loop 4: Think-Tank Defense → Gate ---
-      let loop4 = { status: 'active', detail: '思维舱防御门运行中' };
+      let loop4 = { status: 'degraded', detail: '思维舱防御未执行 — 等待下次管线扫描' };
       try {
         const gateStatePath = path.join(DATA_DIR, 'simfolio', 'last_gate_state.json');
         let gateDefenseData = null;
@@ -2965,21 +2965,21 @@ const server = http.createServer(async function(req, res) {
             gateDefenseData = gs.thinkTankDefense;
           }
         }
-        if (gateDefenseData) {
+        if (gateDefenseData && gateDefenseData.score != null) {
           const bd = gateDefenseData.breakdown || {};
           const dimScores = {};
-          let totalScore = 0;
+          let totalScore = gateDefenseData.score || 0;
           let dimCount = 0;
           const dimNames = ['factorHealth', 'portfolioStress', 'consecutiveLoss', 'crossMarketRisk', 'signalDivergence', 'knowledgeBase'];
           for (const dn of dimNames) {
             if (bd[dn]) {
               dimScores[dn] = bd[dn].score || 0;
-              totalScore += bd[dn].score || 0;
               dimCount++;
             }
           }
+          if (dimCount === 0) dimCount = dimNames.length;
           loop4 = {
-            status: gateDefenseData.status === 'block' ? 'active' : 'active',
+            status: gateDefenseData.status === 'block' ? 'active' : (totalScore > 0 ? 'active' : 'degraded'),
             input: {
               label: '6维风控维度',
               dimensions: dimNames.length,
@@ -2988,17 +2988,22 @@ const server = http.createServer(async function(req, res) {
             process: {
               label: '综合防御评分',
               totalScore,
-              threshold: gateDefenseData.threshold || 2,
+              threshold: gateDefenseData.threshold || 3,
               blocked: gateDefenseData.status === 'block',
               dimScores,
             },
             output: gateDefenseData.status === 'block'
-              ? '防御触发！总分'+totalScore+'/'+dimCount+'≥阈值'+gateDefenseData.threshold+'，拦截买入'
-              : '防御正常，总分'+totalScore+'/'+dimCount+'<阈值'+gateDefenseData.threshold+'，放行交易',
-            detail: gateDefenseData.description || '6维综合评分：因子健康/持仓压力/连续回撤/跨市场风险/信号背离/知识库',
+              ? '防御触发！总分'+totalScore+'≥阈值'+gateDefenseData.threshold+'，拦截买入'
+              : '防御得分'+totalScore+'/'+dimCount+'<阈值'+gateDefenseData.threshold+'，放行交易',
+            detail: totalScore > 0
+              ? (gateDefenseData.description || '6维防御评分: ' + dimNames.slice(0, dimCount).join('/'))
+              : '当前防御得分0 — 因子健康/持仓/回撤/跨市场/信号背离/知识库 六维均未触发 (正常状态)',
           };
         }
+        // If gateDefenseData exists but has no score (old format), keep degraded
       } catch (_) {}
+
+      // --- Loop 5: Trade Attribution → Parameters ---
 
       // --- Loop 5: Trade Attribution → Parameters ---
       let loop5 = { status: 'off', detail: '暂无交易归因记录' };
@@ -3075,6 +3080,40 @@ const server = http.createServer(async function(req, res) {
         }
       } catch (_) {}
 
+      // --- Loop 7: Evolution Engine → All Loops ---
+      let loop7 = { status: 'degraded', detail: '进化引擎等待首次调度' };
+      try {
+        const evo = require('./mosaic/evolution/evolution_scheduler');
+        const evoStatus = evo.getStatus();
+        const todayTasks = evoStatus.todayTasks || [];
+        const completed = todayTasks.filter(function(t) { return t.success; }).length;
+        const total = todayTasks.length;
+        const recentHist = evoStatus.recentHistory || [];
+        const recentSuccess = recentHist.slice(-10).filter(function(h) { return h.success; }).length;
+        const scheduleCount = (evoStatus.schedule || []).length;
+
+        loop7 = {
+          status: completed > 0 ? 'active' : (recentHist.length > 0 ? 'degraded' : 'degraded'),
+          input: {
+            label: scheduleCount + '个进化任务 (bootstrap/回测/权重/美股预测/因子挖掘/复盘等)',
+            scheduleSummary: '02:00-05:30 夜盘批次 | 15:10-20:00 赛后批次 | 周末因子挖掘/周报',
+            running: evoStatus.running || false,
+          },
+          process: {
+            label: '空闲窗口自动调度 (catch-up + 30min超时+1次重试)',
+            completedToday: completed,
+            totalToday: total,
+            recentSuccessRate: recentHist.length > 0 ? Math.round(recentSuccess / Math.min(10, recentHist.length) * 100) + '%' : 'N/A',
+          },
+          output: completed > 0
+            ? '今日' + completed + '/' + total + '个任务完成，数据流向所有学习回路'
+            : (total > 0
+              ? '今日' + total + '个任务待执行'
+              : '等待凌晨/赛后调度窗口'),
+          detail: '24/7自主进化: bootstrap→回测→参数→美股预测→因子挖掘→复盘→知识库→验证→权重→推送。最近' + Math.min(10, recentHist.length) + '次成功率' + (recentHist.length > 0 ? Math.round(recentSuccess / Math.min(10, recentHist.length) * 100) + '%' : 'N/A'),
+        };
+      } catch (_) {}
+
       data.predictionHealth = {
         loops: {
           '1_weekendVerify': loop1,
@@ -3083,6 +3122,7 @@ const server = http.createServer(async function(req, res) {
           '4_thinkTankDefense': loop4,
           '5_tradeAttribution': loop5,
           '6_dynamicWeights': loop6,
+          '7_evolutionEngine': loop7,
         },
         stockPredictor: fs.existsSync(sfPath) ? { available: true } : { available: false },
         tradeAttribution: fs.existsSync(taPath) ? { available: true, recordCount: (function() {

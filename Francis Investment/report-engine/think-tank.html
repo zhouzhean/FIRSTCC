@@ -638,13 +638,13 @@ var FACTOR_DEFS = [
 ];
 
 var LOOP_DEFS = [
-  { id:1, name:'周末验证→分析', color:'#7c3aed', from:'归因', to:'因子', desc:'周末验证报告反馈到分析引擎，调整洞察权重与方向' },
-  { id:2, name:'北向→评分降权', color:'#2563eb', from:'候选', to:'评分', desc:'北向资金情绪计算命中率，动态调整评分权重(HOT/COLD)' },
-  { id:3, name:'知识库→决策', color:'#0891b2', from:'归因', to:'门控', desc:'历史高效因子监测，当前偏冷时触发防御模式' },
-  { id:4, name:'思考舱→防御门', color:'#d97706', from:'候选', to:'门控', desc:'6维综合评分：因子健康/持仓压力/连续回撤/跨市场风险/信号背离/知识库' },
-  { id:5, name:'归因→参数反馈', color:'#dc2626', from:'归因', to:'交易', desc:'每笔卖出分析盈亏原因→板块避让+因子降权→反馈下次交易' },
-  { id:6, name:'动态权重→评分', color:'#16a34a', from:'评分', to:'评分', desc:'每日盘后OLS回归，自动调整5维评分权重(限5%-50%, R²<0.05回退默认)' },
-  { id:7, name:'进化引擎→全回路', color:'#b8942c', from:'进化', to:'归因', desc:'夜间回测+自我质疑+美股预测+网格搜索+因子挖掘→增强所有回路数据质量' },
+  { id:1, name:'周末验证→分析', color:'#7c3aed', from:'归因', to:'因子', desc:'周末验证报告反馈分析引擎，调整板块偏好与跨市场风险感知' },
+  { id:2, name:'北向→评分', color:'#2563eb', from:'候选', to:'评分', desc:'北向资金情绪→HOT/COLD评级→动态调整composite评分中的北向权重(±3-5分)' },
+  { id:3, name:'知识库→门控', color:'#0891b2', from:'归因', to:'门控', desc:'历史高效因子追踪，当前偏冷时触发防御门knowledgeBase维度' },
+  { id:4, name:'防御门→门控', color:'#d97706', from:'候选', to:'门控', desc:'6维实时防御: 因子健康/持仓压力/连续回撤/跨市场/信号背离/知识库 → 得分≥3拦截买入' },
+  { id:5, name:'归因→参数', color:'#dc2626', from:'归因', to:'交易', desc:'每笔卖出盈亏归因→板块避让列表+因子信任度调整→反馈下次交易决策' },
+  { id:6, name:'权重→评分', color:'#16a34a', from:'评分', to:'评分', desc:'OLS回归学习5维评分权重 (需≥30样本, R²≥5%生效, 权重限5%-50%)' },
+  { id:7, name:'进化→全回路', color:'#b8942c', from:'进化', to:'归因', desc:'10任务24/7自主进化: 回测/权重/美股预测/因子挖掘/复盘/验证→增强所有回路' },
 ];
 
 // ====== HELPERS ======
@@ -1403,22 +1403,26 @@ function renderLearningCircuit(health, dynamicWeights, factorPerf) {
     var hk = keyMap[id];
     var loopData = health && health.loops ? health.loops[hk] : null;
 
-    // Loop 7: evolution engine — check evolution status API data if available
+    // Loop 7: evolution engine — prefer server data, fallback to cached evo API
     if (id === 7) {
-      if (loopData) return loopData;
-      // Build from cached evolution data if health doesn't have loop7
+      if (loopData && loopData.status && loopData.process && loopData.process.completedToday > 0) return loopData;
+      // Fallback: build from cached evolution API data
       if (_evoStatusCache) {
         var todayTasks = _evoStatusCache.todayTasks || [];
         var hasRun = todayTasks.some(function(t) { return t.success; });
-        return {
-          status: hasRun ? 'active' : 'degraded',
-          input: { label: '6个进化模块 (夜间回测/自我质疑/美股预测/网格搜索/因子挖掘)' },
-          process: { label: '空闲窗口自动调度 (02:00/03:00/05:30/15:10/20:00/周六10:00)' },
-          output: hasRun ? todayTasks.filter(function(t){return t.success;}).length + '/' + todayTasks.length + '个任务已执行' : '等待首次调度',
-          detail: hasRun ? '进化引擎运行中，数据正在累积' : '尚无进化任务执行记录',
-        };
+        var completedCount = todayTasks.filter(function(t){return t.success;}).length;
+        if (hasRun) {
+          return loopData || {
+            status: 'active',
+            input: { label: '10个进化任务 (bootstrap/回测/权重/美股预测/因子挖掘等)' },
+            process: { label: '空闲窗口自动调度 (02:00-05:30/15:10-20:00)' },
+            output: completedCount + '/' + todayTasks.length + '个任务已执行',
+            detail: '进化引擎运行中，数据正在流向所有学习回路',
+          };
+        }
       }
-      return { status:'degraded', input:{label:'6个进化模块已部署'}, process:{label:'等待凌晨调度窗口'}, output:'待首次运行', detail:'首次运行需等待 02:00' };
+      if (loopData) return loopData;
+      return { status:'degraded', input:{label:'10个进化任务已部署'}, process:{label:'等待凌晨/赛后调度窗口'}, output:'待首次运行', detail:'首次进化任务需等待 02:00 调度' };
     }
 
     if (!loopData) {
