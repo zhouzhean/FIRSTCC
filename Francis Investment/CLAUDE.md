@@ -2,7 +2,7 @@
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
 
-v3.4.5: **Data Bus Unification** — pipeline.fetchIndices 写入 market_snapshot_latest.json (最完整数据: changePercent/prevClose/high/low/open)，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，IndexRecorder 新增创业板399006。MarketDirection 修复 (changePercent=null→warn)。decision_audit 补全 (dataQualityPenalty/strategyHealthSampleCount/version)。
+v3.4.5: **Data Bus Unification** — pipeline.fetchIndices 写入 market_snapshot_latest.json，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，IndexRecorder 新增创业板399006。MarketDirection 修复 (changePercent=null→warn)。decision_audit 补全 (dataQualityPenalty/strategyHealthSampleCount/version)。Think-tank circuit 更新 (节点子标签, Loop7服务端补全, 数据总线状态条)。
 
 ## Unified Decision Kernel (v3.4.5)
 
