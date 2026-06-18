@@ -825,6 +825,51 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   }
 
+  // ---- v3.4.1: Unified kernel verdict check (P0-1) ----
+  // The kernel is the SINGLE source of truth. BLOCK/REDUCE → sell-only, skip all buys.
+  // This replaces the old pattern of independently checking 6 separate gates.
+  // All return paths now carry kernelDecision + _kernelGateResults for consistency.
+  if (kernelDecision && (kernelDecision.finalVerdict === 'BLOCK' || kernelDecision.finalVerdict === 'REDUCE')) {
+    var kSellDecisions = decisions.filter(function(d) { return d.action === 'sell'; });
+    var kExecutedTrades = [];
+    for (var ki = 0; ki < kSellDecisions.length; ki++) {
+      if (kSellDecisions[ki].action === 'sell') {
+        var kTrade = executeSell(pf, kSellDecisions[ki], today);
+        if (kTrade) kExecutedTrades.push(kTrade);
+      }
+    }
+    for (var kj = 0; kj < pf.positions.length; kj++) {
+      var kStockData = pipelineResults.find(function(r) { return r.code === pf.positions[kj].code; });
+      if (kStockData) pf.positions[kj].currentPrice = kStockData.price;
+    }
+    recordDailyNAV(pf, today);
+    savePortfolio(pf);
+    return {
+      decisions: kSellDecisions,
+      executed: kExecutedTrades,
+      snapshot: getSnapshot(pf),
+      kernelDecision: kernelDecision,
+      kernelBlockActive: true,
+      kernelVerdict: kernelDecision.finalVerdict,
+      kernelVerdictLabel: kernelDecision.finalVerdictLabel,
+      kernelReasons: kernelDecision.displayReasons || kernelDecision.hardBlockers.map(function(b) { return b.reason; }),
+      maxBuysPerDay: kernelDecision.maxBuysPerDay,
+      canBuy: false,
+      // Preserve legacy flags for backward compat
+      drawdownGateActive: kernelDecision.gateStates.drawdown.status === 'block',
+      marketGateActive: kernelDecision.gateStates.marketDirection.status === 'block',
+      circuitBreakerActive: kernelDecision.gateStates.circuitBreaker.status === 'block',
+      leakageAuditBlock: kernelDecision.gateStates.leakageAudit.status === 'block',
+      strategyHealthBlock: kernelDecision.gateStates.strategyHealth.status === 'block',
+      strategyHealthReduce: kernelDecision.gateStates.strategyHealth.status === 'reduce',
+      leakageAuditVerdict: kernelDecision.gateStates.leakageAudit.verdict || 'NO_SAMPLES',
+      leakageReasons: [kernelDecision.gateStates.leakageAudit.description],
+      strategyHealthVerdict: kernelDecision.gateStates.strategyHealth.verdict || 'ALLOW',
+      strategyHealthReasons: kernelDecision.gateStates.strategyHealth.reasons || [],
+      gateResults: _kernelGateResults(kernelDecision, pf, indices, macroContext),
+    };
+  }
+
   // ---- Step 3: Drawdown gate ----
   // [v3.4.0] Enhanced with kernel — blocks when kernel reports drawdown block OR legacy ddLevel halt
   const ddLevel = (pf._drawdownLevel && pf._drawdownLevel.level) || 'normal';
@@ -887,7 +932,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       snapshot: getSnapshot(pf),
       marketGateActive: true,
       marketGateReason: '上证跌幅' + shIdx.changePercent.toFixed(2) + '%超过-0.5%阈值，跳过所有买入',
-      gateResults: buildGateResults(pf, indices, macroContext, null, []),
+      gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
     };
   }
 
@@ -1598,8 +1643,14 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     executed: executedTrades,
     snapshot: getSnapshot(pf),
     nearMisses: nearMisses.slice(0, 10),
-    gateResults: buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors),
-    // v3.3.2: Leakage audit gate status
+    // v3.4.1: Use kernel gate results when available (P1-4 fix) — ensures last_gate_state
+    // includes leakage/dataQuality/strategyHealth states from the unified kernel
+    gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, avoidSectors),
+    kernelDecision: kernelDecision,
+    kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : null,
+    maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : null,
+    canBuy: kernelDecision ? kernelDecision.canBuy : true,
+    // v3.3.2: Leakage audit gate status (backward compat)
     leakageAuditBlock: leakageBlockActive,
     leakageAuditReduce: leakageReduceActive,
     leakageAuditVerdict: laVerdict,

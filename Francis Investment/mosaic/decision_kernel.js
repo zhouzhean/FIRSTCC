@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Decision Kernel v3.4.0
+ * Francis Investment · Decision Kernel v3.4.1
  *
  * Unified trading permission engine. Single source of truth for ALL three consumers:
  *   1. Cockpit permissions (buildCockpitData)
@@ -62,7 +62,47 @@ function computeDecision(context) {
     advisorySignals: [],
     sourceTimestamp: now,
     gateStates: {},
+    // v3.4.1: Active blockers summary for cockpit display
+    primaryBlocker: null,
+    allActiveBlockers: [],
+    displayReasons: [],
   };
+
+  // v3.4.1: finalize() ensures gateStates+cache are written for ALL return paths
+  function finalize(res) {
+    res.gateStates = _buildAllGateStates(ctx, res);
+    // Build allActiveBlockers + displayReasons from gateStates
+    var gs = res.gateStates;
+    var activeBlocks = [];
+    if (gs.circuitBreaker && gs.circuitBreaker.status === 'block') activeBlocks.push({ gate: 'circuitBreaker', status: gs.circuitBreaker.status, label: '跨市场熔断', detail: gs.circuitBreaker.description });
+    if (gs.leakageAudit && gs.leakageAudit.status === 'block') activeBlocks.push({ gate: 'leakageAudit', status: 'block', label: '数据泄漏审计', detail: gs.leakageAudit.description });
+    if (gs.leakageAudit && gs.leakageAudit.status === 'cautious') activeBlocks.push({ gate: 'leakageAudit', status: 'cautious', label: '泄漏审计(小问题)', detail: gs.leakageAudit.description });
+    if (gs.strategyHealth && gs.strategyHealth.status === 'block') activeBlocks.push({ gate: 'strategyHealth', status: 'block', label: '策略健康异常', detail: gs.strategyHealth.description });
+    if (gs.strategyHealth && gs.strategyHealth.status === 'reduce') activeBlocks.push({ gate: 'strategyHealth', status: 'reduce', label: '策略健康(仅卖)', detail: gs.strategyHealth.description });
+    if (gs.strategyHealth && gs.strategyHealth.status === 'cautious') activeBlocks.push({ gate: 'strategyHealth', status: 'cautious', label: '策略健康(谨慎)', detail: gs.strategyHealth.description });
+    if (gs.dataQuality && gs.dataQuality.status === 'block') activeBlocks.push({ gate: 'dataQuality', status: 'block', label: '数据质量严重不足', detail: gs.dataQuality.description });
+    if (gs.dataQuality && gs.dataQuality.status === 'cautious') activeBlocks.push({ gate: 'dataQuality', status: 'cautious', label: '数据质量偏低', detail: gs.dataQuality.description });
+    if (gs.drawdown && gs.drawdown.status === 'block') activeBlocks.push({ gate: 'drawdown', status: 'block', label: '回撤熔断', detail: gs.drawdown.description });
+    if (gs.drawdown && gs.drawdown.status === 'restrict') activeBlocks.push({ gate: 'drawdown', status: 'restrict', label: '回撤限仓', detail: gs.drawdown.description });
+    if (gs.marketDirection && gs.marketDirection.status === 'block') activeBlocks.push({ gate: 'marketDirection', status: 'block', label: '市场方向不利', detail: gs.marketDirection.description });
+    // Add marketClosed/marketData status
+    if (ctx.marketState === 'closed' || ctx.marketState === 'post_market') {
+      res.marketClosed = true;
+    }
+    if (res.hardBlockers.length > 0) {
+      res.primaryBlocker = res.hardBlockers[0].gate;
+    }
+    res.allActiveBlockers = activeBlocks;
+    // displayReasons: merge hard blockers + soft reducers + advisory for UI
+    res.displayReasons = [];
+    for (var h = 0; h < res.hardBlockers.length; h++) { res.displayReasons.push(res.hardBlockers[h].reason); }
+    for (var s = 0; s < res.softReducers.length; s++) { res.displayReasons.push(res.softReducers[s].reason); }
+    for (var a = 0; a < res.advisorySignals.length; a++) { res.displayReasons.push(res.advisorySignals[a].interpretation); }
+    // Cache
+    _lastResult = res;
+    _lastResultTime = Date.now();
+    return res;
+  }
 
   var pf = ctx.portfolio || { positions: [], tradeHistory: [], _stats: {} };
   var indices = ctx.indices || null;
@@ -72,21 +112,31 @@ function computeDecision(context) {
   // ================================================================
   // HARD BLOCKER 1: No market data
   // ================================================================
+  // v3.4.1: Distinguish marketClosed (normal after-hours) vs noMarketData (error during trading)
+  var marketState = ctx.marketState || null;
+  var isMarketClosed = marketState === 'closed' || marketState === 'post_market';
   var noMarketData = !indices || !Array.isArray(indices) || indices.length === 0;
   var noPipeline = !pipelineResults || !Array.isArray(pipelineResults) || pipelineResults.length === 0;
 
   if (noMarketData && noPipeline) {
     result.canBuy = false;
     result.finalVerdict = 'BLOCK';
-    result.finalVerdictLabel = '无行情数据/禁止开仓';
-    result.maxBuysPerDay = 0;
-    result.hardBlockers.push({
-      gate: 'marketData',
-      reason: '无指数行情数据且无管线结果，无法做出交易决策（非交易时段或数据采集异常）',
-      severity: 'block',
-    });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    if (isMarketClosed) {
+      result.finalVerdictLabel = '离市/等待下个交易窗口';
+      result.hardBlockers.push({
+        gate: 'marketClosed',
+        reason: '当前非交易时段 — ' + (ctx.marketStateLabel || '离市') + '，等待下个交易窗口。系统状态正常，非数据异常。',
+        severity: 'block',
+      });
+    } else {
+      result.finalVerdictLabel = '无行情数据/禁止开仓';
+      result.hardBlockers.push({
+        gate: 'marketData',
+        reason: '无指数行情数据且无管线结果，无法做出交易决策（非交易时段或数据采集异常）',
+        severity: 'block',
+      });
+    }
+    return finalize(result);
   }
 
   // ================================================================
@@ -107,8 +157,7 @@ function computeDecision(context) {
         (riskState.regimeLabel || '') + ' — 等待宏观风险信号改善',
       severity: 'block',
     });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    return finalize(result);
   }
 
   // ================================================================
@@ -128,8 +177,7 @@ function computeDecision(context) {
       reason: 'Leakage audit: ' + laVerdict + ' — 检测到数据泄漏风险，绝对禁止实盘开仓。需排查数据管线后重新审计',
       severity: 'block',
     });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    return finalize(result);
   }
 
   if (laVerdict === 'NO_SAMPLES' || laVerdict === 'INSUFFICIENT_DATA' || laTotalChecks === 0) {
@@ -142,8 +190,7 @@ function computeDecision(context) {
       reason: 'Leakage audit: NO_SAMPLES — 审计样本不足，无法确认无数据泄漏 (' + laTotalChecks + ' 条检查)。需积累足够验证记录后再允许实盘',
       severity: 'block',
     });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    return finalize(result);
   }
 
   // MINOR_ISSUES is a soft reducer (handled below)
@@ -183,8 +230,7 @@ function computeDecision(context) {
       reason: shBlockReason,
       severity: 'block',
     });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    return finalize(result);
   }
 
   // ================================================================
@@ -209,8 +255,7 @@ function computeDecision(context) {
         ' — 在此状态下交易风险不可控，强制禁止买入',
       severity: 'block',
     });
-    result.gateStates = _buildAllGateStates(ctx, result);
-    return result;
+    return finalize(result);
   }
 
   // ================================================================
@@ -309,13 +354,8 @@ function computeDecision(context) {
     result.maxBuysPerDay = 0;
   }
 
-  result.gateStates = _buildAllGateStates(ctx, result);
-
-  // Cache for cross-call consistency
-  _lastResult = result;
-  _lastResultTime = Date.now();
-
-  return result;
+  // All paths lead through finalize() which builds gateStates + caches + allActiveBlockers
+  return finalize(result);
 }
 
 /**

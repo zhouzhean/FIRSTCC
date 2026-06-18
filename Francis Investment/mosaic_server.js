@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.4.0
+ * Francis Investment · Mosaic Server v3.4.1
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -207,7 +207,7 @@ function _buildLoopImpact(data) {
   return loopImpact;
 }
 
-// [v3.4.0] Unified Decision Kernel — single source of truth for ALL trading decisions.
+// [v3.4.1] Unified Decision Kernel — single source of truth for ALL trading decisions.
 // Replaces the old independent logic (factor HOT/COLD + portfolio P&L + cross-market regime)
 // with the same kernel that cockpit and simfolio use. No more contradictory verdicts.
 function generateTodaysVerdict(data) {
@@ -247,11 +247,22 @@ function generateTodaysVerdict(data) {
       }
     } catch (_) {}
 
+    // v3.4.1: Load indices and market state for consistent context
+    var ttIndices = null;
+    try {
+      var ttIdxDir = require('path').join(__dirname, 'report-engine', 'data', 'market_history', 'indices');
+      var ttIfiles = require('fs').existsSync(ttIdxDir) ? require('fs').readdirSync(ttIdxDir).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
+      if (ttIfiles.length > 0) {
+        var ttIdata = JSON.parse(require('fs').readFileSync(require('path').join(ttIdxDir, ttIfiles[0]), 'utf8'));
+        if (ttIdata && ttIdata.indices) ttIndices = ttIdata.indices;
+      }
+    } catch (_) {}
+
     var shResult = null;
     try {
       var sh = require('./mosaic/analysis/strategy_health');
       shResult = sh.computeStrategyHealth({
-        portfolio: pf, indices: null, macroContext: null, pipelineResults: null,
+        portfolio: pf, indices: ttIndices, macroContext: null, pipelineResults: null,
       });
     } catch (_) {}
 
@@ -264,7 +275,7 @@ function generateTodaysVerdict(data) {
 
     var decision = kernel.computeDecision({
       portfolio: pf,
-      indices: null,
+      indices: ttIndices,
       macroContext: macroContext,
       pipelineResults: null,
       dataQualityReport: dqReport,
@@ -368,7 +379,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.4.0',
+    version: '3.4.1',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -674,7 +685,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.0',
+    systemVersion: 'v3.4.1',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -795,11 +806,37 @@ function buildCockpitData() {
       }
     } catch (_) {}
 
+    // v3.4.1: Load real indices for consistent kernel context (P1-3)
+    var indices = null;
+    try {
+      var idxPath = require('path').join(__dirname, 'report-engine', 'data', 'market_history', 'indices');
+      var idxFiles = require('fs').existsSync(idxPath) ? require('fs').readdirSync(idxPath).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
+      if (idxFiles.length > 0) {
+        var idxData = JSON.parse(require('fs').readFileSync(require('path').join(idxPath, idxFiles[0]), 'utf8'));
+        if (idxData && idxData.indices) indices = idxData.indices;
+      }
+    } catch (_) {}
+
+    // v3.4.1: Load market state from scheduler (P1-2: marketClosed vs noMarketData)
+    var marketState = null;
+    var marketStateLabel = null;
+    try {
+      var schedStatePath = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'scheduler_state.json');
+      if (require('fs').existsSync(schedStatePath)) {
+        var schedState = JSON.parse(require('fs').readFileSync(schedStatePath, 'utf8'));
+        if (schedState.state) {
+          marketState = schedState.state;
+          var stateLabels = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后', trading: '交易中' };
+          marketStateLabel = stateLabels[marketState] || marketState;
+        }
+      }
+    } catch (_) {}
+
     var shResult = null;
     try {
       var sh = require('./mosaic/analysis/strategy_health');
       shResult = sh.computeStrategyHealth({
-        portfolio: pf, indices: null, macroContext: null, pipelineResults: null,
+        portfolio: pf, indices: indices, macroContext: null, pipelineResults: null,
       });
       if (shResult && shResult.masterControl) {
         result.masterControl = shResult.masterControl;
@@ -815,6 +852,7 @@ function buildCockpitData() {
 
     // Load pipeline summary for funnel display (v3.4.0)
     var pipelineSummary = null;
+    var pipelineResultsForKernel = null;
     try {
       var lrFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
       if (require('fs').existsSync(lrFile)) {
@@ -829,18 +867,24 @@ function buildCockpitData() {
           time: lrData.time,
         };
         result.pipelineSummary = pipelineSummary;
+        // v3.4.1: Pass actual pipeline results to kernel when available (P1-3)
+        if (lrData.allResults && lrData.allResults.length > 0) {
+          pipelineResultsForKernel = lrData.allResults.slice(0, 100);
+        }
       }
     } catch (_) {}
 
     // --- Call the unified kernel ---
     var decision = kernel.computeDecision({
       portfolio: pf,
-      indices: null,
+      indices: indices,
       macroContext: macroContext,
-      pipelineResults: null,
+      pipelineResults: pipelineResultsForKernel,
       dataQualityReport: dqReport,
       leakageAudit: leakageAudit,
       strategyHealth: shResult,
+      marketState: marketState,
+      marketStateLabel: marketStateLabel,
     });
 
     // --- Build backward-compatible permissions object ---
@@ -849,8 +893,12 @@ function buildCockpitData() {
       verdict: decision.finalVerdict,
       verdictLabel: decision.finalVerdictLabel,
       maxBuysPerDay: decision.maxBuysPerDay,
-      reasons: [],
+      reasons: decision.displayReasons || [],
       confidence: shResult && shResult.masterControl ? shResult.masterControl.confidence : null,
+      // v3.4.1: Expose all active blockers for cockpit display (P1-1)
+      primaryBlocker: decision.primaryBlocker,
+      allActiveBlockers: decision.allActiveBlockers,
+      marketClosed: decision.marketClosed || false,
       // Flat gate states for backward compat
       gates: {
         drawdownActive: gs.drawdown.status === 'block' || gs.drawdown.status === 'restrict',
@@ -872,15 +920,8 @@ function buildCockpitData() {
       positionCount: pf.positions ? pf.positions.length : 0,
     };
 
-    // Collect reasons from both hard blockers and soft reducers
-    for (var h = 0; h < decision.hardBlockers.length; h++) {
-      result.permissions.reasons.push(decision.hardBlockers[h].reason);
-    }
-    for (var s = 0; s < decision.softReducers.length; s++) {
-      result.permissions.reasons.push(decision.softReducers[s].reason);
-    }
-
-    // If kernel says BLOCK but we didn't find any reasons, add generic
+    // displayReasons already built by kernel finalize() — set as primary reasons
+    // Fallback: ensure reasons is populated for backward compat
     if (result.permissions.reasons.length === 0 && decision.finalVerdict !== 'ALLOW') {
       result.permissions.reasons.push('Decision kernel: ' + decision.finalVerdict + ' — no specific reason recorded');
     }
@@ -1126,7 +1167,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.0       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.1       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -2558,6 +2599,33 @@ const server = http.createServer(async function(req, res) {
     try {
       // Pre-load context for kernel
       var ttKernel = require('./mosaic/decision_kernel');
+      // v3.4.1: Load portfolio for consistent context (P1-3)
+      var ttPf = null;
+      try { ttPf = require('./mosaic/simfolio').loadPortfolio(); } catch (_) {}
+      // v3.4.1: Load indices
+      var ttIndices = null;
+      try {
+        var ttIdxPath = path.join(DATA_DIR, '..', 'market_history', 'indices');
+        var ttIdxFiles = fs.existsSync(ttIdxPath) ? fs.readdirSync(ttIdxPath).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
+        if (ttIdxFiles.length > 0) {
+          var ttIdxData = JSON.parse(fs.readFileSync(path.join(ttIdxPath, ttIdxFiles[0]), 'utf8'));
+          if (ttIdxData && ttIdxData.indices) ttIndices = ttIdxData.indices;
+        }
+      } catch (_) {}
+      // v3.4.1: Market state
+      var ttMarketState = null;
+      var ttMarketStateLabel = null;
+      try {
+        var ttSchedPath = path.join(DATA_DIR, 'simfolio', 'scheduler_state.json');
+        if (fs.existsSync(ttSchedPath)) {
+          var ttSched = JSON.parse(fs.readFileSync(ttSchedPath, 'utf8'));
+          if (ttSched.state) {
+            ttMarketState = ttSched.state;
+            var stateLabels = { closed: '离市', pre_market: '盘前', lunch_break: '午休', post_market: '盘后', trading: '交易中' };
+            ttMarketStateLabel = stateLabels[ttMarketState] || ttMarketState;
+          }
+        }
+      } catch (_) {}
       var ttDqReport = null;
       try { ttDqReport = require('./mosaic/analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
       var ttLeakageAudit = null;
@@ -2568,7 +2636,7 @@ const server = http.createServer(async function(req, res) {
       var ttShResult = null;
       try {
         var ttSh = require('./mosaic/analysis/strategy_health');
-        ttShResult = ttSh.computeStrategyHealth({ portfolio: null, indices: null, macroContext: null, pipelineResults: null });
+        ttShResult = ttSh.computeStrategyHealth({ portfolio: ttPf, indices: ttIndices, macroContext: null, pipelineResults: null });
       } catch (_) {}
       var ttMacroCtx = null;
       try {
@@ -2578,9 +2646,10 @@ const server = http.createServer(async function(req, res) {
       } catch (_) {}
 
       var ttDecision = ttKernel.computeDecision({
-        portfolio: null, indices: null, macroContext: ttMacroCtx,
+        portfolio: ttPf, indices: ttIndices, macroContext: ttMacroCtx,
         pipelineResults: null, dataQualityReport: ttDqReport,
         leakageAudit: ttLeakageAudit, strategyHealth: ttShResult,
+        marketState: ttMarketState, marketStateLabel: ttMarketStateLabel,
       });
 
       data.decisionGates = ttDecision.gateStates;

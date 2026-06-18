@@ -683,36 +683,28 @@ class Scheduler extends EventEmitter {
             };
             fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
 
-            // [v3.4.0] Decision audit log — record why the system did or didn't buy
+            // [v3.4.1] Decision audit log — records kernelDecision directly (P0-2 fix)
             try {
               var buyCandidates = tradeResult.buyCandidates || [];
               var executedBuys = (tradeResult.executed || []).filter(function(t) { return t.action === 'buy'; });
-              var isBlocked = tradeResult.drawdownGateActive || tradeResult.marketGateActive ||
-                tradeResult.circuitBreakerActive || tradeResult.thinkTankDefensive ||
-                tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock;
-              var isReduce = tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive;
-              var blockReasons = [];
-              if (tradeResult.drawdownGateActive) blockReasons.push('drawdown');
-              if (tradeResult.marketGateActive) blockReasons.push('marketDirection');
-              if (tradeResult.circuitBreakerActive) blockReasons.push('circuitBreaker');
-              if (tradeResult.thinkTankDefensive) blockReasons.push('thinkTankDefense');
-              if (tradeResult.leakageAuditBlock) blockReasons.push('leakageAudit');
-              if (tradeResult.strategyHealthBlock) blockReasons.push('strategyHealth');
-              if (tradeResult.strategyHealthReduce) blockReasons.push('strategyHealthReduce');
-              if (tradeResult.leakageReduceActive) blockReasons.push('leakageReduce');
+              var kd = tradeResult.kernelDecision || null;
 
-              var verdict = isBlocked ? 'BLOCK' : (isReduce ? 'REDUCE' : (executedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS'));
+              // Build audit entry from kernelDecision (the single source of truth)
+              var verdict = kd ? kd.finalVerdict : (tradeResult.drawdownGateActive || tradeResult.circuitBreakerActive || tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock ? 'BLOCK' :
+                (tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive ? 'REDUCE' :
+                  (executedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS')));
+
               var note = '';
-              if (isBlocked) {
-                note = '今天不买入：' + blockReasons.join('+');
-              } else if (isReduce) {
-                note = '今天限制买入：' + blockReasons.join('+');
-              } else if (executedBuys.length === 0 && buyCandidates.length === 0) {
-                note = '今天无候选股达标（评分/预期收益不足）';
-              } else if (executedBuys.length === 0 && buyCandidates.length > 0) {
-                note = '有' + buyCandidates.length + '只候选但因风控未执行';
-              } else {
+              if (kd && kd.hardBlockers && kd.hardBlockers.length > 0) {
+                note = '今天不买入：' + kd.hardBlockers.map(function(b) { return b.gate; }).join('+');
+              } else if (kd && kd.softReducers && kd.softReducers.length > 0) {
+                note = '今天限制买入：' + kd.softReducers.map(function(r) { return r.gate; }).join('+');
+              } else if (verdict === 'ALLOW' && executedBuys.length > 0) {
                 note = '今天买入' + executedBuys.length + '只' + (buyCandidates.length > executedBuys.length ? '（共' + buyCandidates.length + '只候选）' : '');
+              } else if (verdict === 'ALLOW' && buyCandidates.length > 0) {
+                note = '有' + buyCandidates.length + '只候选但未执行';
+              } else {
+                note = '今天无候选股达标';
               }
 
               var auditEntry = {
@@ -725,10 +717,14 @@ class Scheduler extends EventEmitter {
                 avgScore: result.allResults ? Math.round(result.allResults.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / result.allResults.length) : 0,
                 buyCandidates: buyCandidates.length,
                 executedBuyCount: executedBuys.length,
-                blockReasons: blockReasons,
-                verdict: verdict,
-                canBuy: !isBlocked && !isReduce,
-                maxBuysPerDay: tradeResult.gateResults && tradeResult.gateResults.effectiveMaxBuys != null ? tradeResult.gateResults.effectiveMaxBuys : null,
+                // v3.4.1: Direct kernelDecision fields (replaces old flag-based blockReasons)
+                kernelVerdict: kd ? kd.finalVerdict : verdict,
+                canBuy: kd ? kd.canBuy : (verdict === 'ALLOW'),
+                maxBuysPerDay: kd ? kd.maxBuysPerDay : null,
+                hardBlockers: kd ? kd.hardBlockers.map(function(b) { return b.gate; }) : [],
+                softReducers: kd ? kd.softReducers.map(function(r) { return r.gate; }) : [],
+                primaryBlocker: kd ? kd.primaryBlocker : null,
+                allActiveGates: kd ? kd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
                 note: note,
               };
               _appendDecisionAudit(auditEntry);
@@ -939,26 +935,26 @@ class Scheduler extends EventEmitter {
               };
               fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
 
-            // [v3.4.0] Decision audit log for mid scan
+            // [v3.4.1] Decision audit log for mid scan (P0-2 fix)
             try {
               var midBuyCandidates = tradeResult.buyCandidates || [];
               var midExecutedBuys = (tradeResult.executed || []).filter(function(t) { return t.action === 'buy'; });
-              var midBlocked = tradeResult.drawdownGateActive || tradeResult.marketGateActive ||
-                tradeResult.circuitBreakerActive || tradeResult.thinkTankDefensive ||
-                tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock;
-              var midReduce = tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive;
-              var midBlockReasons = [];
-              if (tradeResult.drawdownGateActive) midBlockReasons.push('drawdown');
-              if (tradeResult.marketGateActive) midBlockReasons.push('marketDirection');
-              if (tradeResult.circuitBreakerActive) midBlockReasons.push('circuitBreaker');
-              if (tradeResult.thinkTankDefensive) midBlockReasons.push('thinkTankDefense');
-              if (tradeResult.leakageAuditBlock) midBlockReasons.push('leakageAudit');
-              if (tradeResult.strategyHealthBlock) midBlockReasons.push('strategyHealth');
+              var midKd = tradeResult.kernelDecision || null;
 
-              var midVerdict = midBlocked ? 'BLOCK' : (midReduce ? 'REDUCE' : (midExecutedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS'));
-              var midNote = midBlocked ? 'mid-scan不买入：' + midBlockReasons.join('+')
-                : (midReduce ? 'mid-scan限制买入：' + midBlockReasons.join('+')
-                  : (midExecutedBuys.length === 0 ? 'mid-scan无候选达标' : 'mid-scan买入' + midExecutedBuys.length + '只'));
+              var midVerdict = midKd ? midKd.finalVerdict : (tradeResult.drawdownGateActive || tradeResult.circuitBreakerActive || tradeResult.leakageAuditBlock || tradeResult.strategyHealthBlock ? 'BLOCK' :
+                (tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive ? 'REDUCE' :
+                  (midExecutedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS')));
+
+              var midNote = '';
+              if (midKd && midKd.hardBlockers && midKd.hardBlockers.length > 0) {
+                midNote = 'mid-scan不买入：' + midKd.hardBlockers.map(function(b) { return b.gate; }).join('+');
+              } else if (midKd && midKd.softReducers && midKd.softReducers.length > 0) {
+                midNote = 'mid-scan限制买入：' + midKd.softReducers.map(function(r) { return r.gate; }).join('+');
+              } else if (midExecutedBuys.length > 0) {
+                midNote = 'mid-scan买入' + midExecutedBuys.length + '只';
+              } else {
+                midNote = 'mid-scan无候选达标';
+              }
 
               _appendDecisionAudit({
                 timestamp: new Date().toISOString(),
@@ -970,10 +966,14 @@ class Scheduler extends EventEmitter {
                 avgScore: results.length > 0 ? Math.round(results.reduce(function(a, r) { return a + (r.compositeScore || 0); }, 0) / results.length) : 0,
                 buyCandidates: midBuyCandidates.length,
                 executedBuyCount: midExecutedBuys.length,
-                blockReasons: midBlockReasons,
-                verdict: midVerdict,
-                canBuy: !midBlocked && !midReduce,
-                maxBuysPerDay: tradeResult.gateResults && tradeResult.gateResults.effectiveMaxBuys != null ? tradeResult.gateResults.effectiveMaxBuys : null,
+                // v3.4.1: Direct kernelDecision fields
+                kernelVerdict: midKd ? midKd.finalVerdict : midVerdict,
+                canBuy: midKd ? midKd.canBuy : (midVerdict === 'ALLOW'),
+                maxBuysPerDay: midKd ? midKd.maxBuysPerDay : null,
+                hardBlockers: midKd ? midKd.hardBlockers.map(function(b) { return b.gate; }) : [],
+                softReducers: midKd ? midKd.softReducers.map(function(r) { return r.gate; }) : [],
+                primaryBlocker: midKd ? midKd.primaryBlocker : null,
+                allActiveGates: midKd ? midKd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
                 note: midNote,
               });
             } catch (_) {}

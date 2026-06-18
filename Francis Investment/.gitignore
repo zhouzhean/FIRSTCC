@@ -34,6 +34,7 @@ report-engine/data/events/
 report-engine/data/summaries/
 report-engine/data/knowledge_base/
 report-engine/data/klines/
+report-engine/data/klines_short/
 report-engine/data/us_market/
 report-engine/data/market_history/indices/
 report-engine/data/weekend_archive/

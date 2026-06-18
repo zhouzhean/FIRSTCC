@@ -1,4 +1,4 @@
-﻿/* Autonomy Cockpit — v3.4.0
+﻿/* Autonomy Cockpit — v3.4.1
    Design principle: "可监督状态" (supervisable status).
    Color coding: Green=PASS/REAL, Yellow=WARN/PENDING, Red=ERROR/BLOCK, Gray=UNKNOWN */
 
@@ -695,3 +695,22 @@ header h1 {
   margin-top: 4px;
 }
 .wnb-funnel strong { color: #b8942c; }
+
+/* v3.4.1: Gate matrix — shows all active blockers as tags */
+.wnb-gates-matrix {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 14px 2px;
+}
+.wnb-gate-tag {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.wnb-gate-tag.gate-block   { background: rgba(255,59,74,0.18);  color: #ff6b75; border: 1px solid rgba(255,59,74,0.3); }
+.wnb-gate-tag.gate-reduce  { background: rgba(255,152,0,0.15);  color: #ff9800; border: 1px solid rgba(255,152,0,0.25); }
+.wnb-gate-tag.gate-cautious{ background: rgba(255,184,0,0.12);  color: #d4a017; border: 1px solid rgba(255,184,0,0.2); }

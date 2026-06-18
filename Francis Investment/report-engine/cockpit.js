@@ -1,5 +1,5 @@
 ﻿/**
- * Autonomy Cockpit — v3.4.0
+ * Autonomy Cockpit — v3.4.1
  * 30-second polling dashboard for autonomous trading status.
  *
  * Design principle: "可监督状态" (supervisable status) — not pretty cards.
@@ -81,11 +81,15 @@ function renderWhyNotBuying(perms, pipelineSummary) {
     return;
   }
 
-  var canBuy = perms.verdict === 'ALLOW';
   var isBlock = perms.verdict === 'BLOCK';
   var isReduce = perms.verdict === 'REDUCE';
   var hasCaveats = perms.verdict === 'CAUTIOUS';
+  var isAllow = perms.verdict === 'ALLOW';
   var reasons = perms.reasons || [];
+  // v3.4.1: Show all active blocker gates (P1-1)
+  var activeBlockers = perms.allActiveBlockers || [];
+  var primaryBlocker = perms.primaryBlocker || null;
+  var marketClosed = perms.marketClosed || false;
 
   var html = '';
   var bannerClass = isBlock ? 'wnb-block' : (isReduce ? 'wnb-reduce' : (hasCaveats ? 'wnb-cautious' : 'wnb-clear'));
@@ -93,13 +97,37 @@ function renderWhyNotBuying(perms, pipelineSummary) {
   if (isBlock) {
     html += '<div class="wnb-header ' + bannerClass + '">';
     html += '<span class="wnb-icon">&#9888;</span>';
-    html += '<span class="wnb-title">系统当前不买入</span>';
+    // v3.4.1: Show marketClosed label or generic BLOCK
+    if (marketClosed) {
+      html += '<span class="wnb-title">离市 — 等待下个交易窗口</span>';
+    } else if (primaryBlocker === 'marketClosed') {
+      html += '<span class="wnb-title">离市 — 等待下个交易窗口</span>';
+    } else {
+      html += '<span class="wnb-title">系统当前不买入</span>';
+    }
     html += '<span class="wnb-verdict">(BLOCK)</span>';
     html += '</div>';
+
+    // v3.4.1: Show all active blockers as a matrix (P1-1)
+    if (activeBlockers.length > 0) {
+      html += '<div class="wnb-gates-matrix">';
+      for (var g = 0; g < activeBlockers.length; g++) {
+        var gb = activeBlockers[g];
+        var gbClass = gb.status === 'block' ? 'gate-block' : (gb.status === 'reduce' ? 'gate-reduce' : 'gate-cautious');
+        html += '<span class="wnb-gate-tag ' + gbClass + '">' + esc(gb.label) + '</span>';
+      }
+      html += '</div>';
+    }
+
     html += '<ul class="wnb-reasons">';
     if (reasons.length > 0) {
       for (var i = 0; i < Math.min(5, reasons.length); i++) {
         html += '<li>' + esc(reasons[i]) + '</li>';
+      }
+    } else if (activeBlockers.length > 0) {
+      // Show gate details as reasons when no displayReasons
+      for (var ag = 0; ag < activeBlockers.length; ag++) {
+        html += '<li>' + esc(activeBlockers[ag].detail || activeBlockers[ag].label) + '</li>';
       }
     }
     if (perms.maxBuysPerDay != null) {
@@ -112,6 +140,15 @@ function renderWhyNotBuying(perms, pipelineSummary) {
     html += '<span class="wnb-title">仅允许卖出，禁止买入</span>';
     html += '<span class="wnb-verdict">(REDUCE)</span>';
     html += '</div>';
+    if (activeBlockers.length > 0) {
+      html += '<div class="wnb-gates-matrix">';
+      for (var gr = 0; gr < activeBlockers.length; gr++) {
+        var grb = activeBlockers[gr];
+        var grbClass = grb.status === 'block' ? 'gate-block' : (grb.status === 'reduce' ? 'gate-reduce' : 'gate-cautious');
+        html += '<span class="wnb-gate-tag ' + grbClass + '">' + esc(grb.label) + '</span>';
+      }
+      html += '</div>';
+    }
     if (reasons.length > 0) {
       html += '<ul class="wnb-reasons">';
       for (var j = 0; j < Math.min(5, reasons.length); j++) {
@@ -125,6 +162,15 @@ function renderWhyNotBuying(perms, pipelineSummary) {
     html += '<span class="wnb-title">谨慎交易模式</span>';
     html += '<span class="wnb-verdict">(CAUTIOUS)</span>';
     html += '</div>';
+    if (activeBlockers.length > 0) {
+      html += '<div class="wnb-gates-matrix">';
+      for (var gc = 0; gc < activeBlockers.length; gc++) {
+        var gcb = activeBlockers[gc];
+        var gcbClass = gcb.status === 'block' ? 'gate-block' : (gcb.status === 'reduce' ? 'gate-reduce' : 'gate-cautious');
+        html += '<span class="wnb-gate-tag ' + gcbClass + '">' + esc(gcb.label) + '</span>';
+      }
+      html += '</div>';
+    }
     if (reasons.length > 0) {
       html += '<ul class="wnb-reasons">';
       for (var k = 0; k < reasons.length; k++) {
@@ -201,7 +247,7 @@ function renderSystemStatus(data) {
   var html = '';
 
   // Version
-  var version = data.systemVersion || 'v3.4.0';
+  var version = data.systemVersion || 'v3.4.1';
   html += '<div class="sys-row">' +
     '<span class="sys-label">Version</span>' +
     '<span class="sys-value">' + esc(version) + '</span>' +
