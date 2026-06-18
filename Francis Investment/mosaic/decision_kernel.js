@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Decision Kernel v3.4.1
+ * Francis Investment · Decision Kernel v3.4.2
  *
  * Unified trading permission engine. Single source of truth for ALL three consumers:
  *   1. Cockpit permissions (buildCockpitData)

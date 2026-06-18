@@ -628,11 +628,22 @@ class Scheduler extends EventEmitter {
         const pf = simfolio.loadPortfolio();
         const crossMarket = require('./analysis/cross_market');
         const macroContext = { riskState: crossMarket.getCachedRiskState() };
-        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext);
+        // v3.4.2: Pass market state so kernel can distinguish "market closed" vs "data anomaly"
+        var stateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext, this._state, stateLabels[this._state] || this._state);
         this._logEvent('trade_complete', {
           decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
           executed: tradeResult.executed ? tradeResult.executed.length : 0,
           totalValue: tradeResult.snapshot ? tradeResult.snapshot.totalValue : null,
+          // v3.4.2: Kernel audit fields
+          kernelVerdict: tradeResult.kernelVerdict || null,
+          primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+          allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+          displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+          analyzed: result.analyzed || 0,
+          topScore: result.allResults ? Math.max.apply(null, result.allResults.map(function(r){return r.compositeScore||0;})) : 0,
+          buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+          executedBuyCount: tradeResult.executed ? tradeResult.executed.filter(function(t){return t.action==='buy';}).length : 0,
         });
 
         if (tradeResult.executed && tradeResult.executed.length > 0) {
@@ -663,6 +674,14 @@ class Scheduler extends EventEmitter {
             reason: 'no_candidates_above_threshold',
             analyzedCount: result.analyzed,
             time: new Date().toISOString(),
+            // v3.4.2: Kernel context for event consumers
+            kernelVerdict: tradeResult.kernelVerdict || null,
+            primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+            allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+            displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+            buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+            topScore: result.allResults ? Math.max.apply(null, result.allResults.map(function(r){return r.compositeScore||0;})) : 0,
+            skipReason: tradeResult.skipReason || null,
           });
         }
 
@@ -738,6 +757,14 @@ class Scheduler extends EventEmitter {
             nearMisses: tradeResult.nearMisses || [],
             decisions: (tradeResult.decisions || []).length,
             time: new Date().toISOString(),
+            // v3.4.2: Kernel context
+            kernelVerdict: tradeResult.kernelVerdict || null,
+            primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+            allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+            displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+            buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+            effectiveMaxBuys: tradeResult.effectiveMaxBuys != null ? tradeResult.effectiveMaxBuys : null,
+            skipReason: tradeResult.skipReason || null,
           });
         }
       } catch (tradeErr) {
@@ -886,7 +913,24 @@ class Scheduler extends EventEmitter {
           const pf = simfolio.loadPortfolio();
           const crossMarket = require('./analysis/cross_market');
           const macroContext = { riskState: crossMarket.getCachedRiskState() };
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext);
+          // v3.4.2: Pass market state
+          var midStateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state);
+          // v3.4.2: trade_complete event for mid-scan (was missing — only full scan had it)
+          this._logEvent('trade_complete', {
+            decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
+            executed: tradeResult.executed ? tradeResult.executed.length : 0,
+            totalValue: tradeResult.snapshot ? tradeResult.snapshot.totalValue : null,
+            scanType: 'mid',
+            kernelVerdict: tradeResult.kernelVerdict || null,
+            primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+            allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+            displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+            analyzed: results.length,
+            topScore: results.length > 0 ? Math.max.apply(null, results.map(function(r){return r.compositeScore||0;})) : 0,
+            buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+            executedBuyCount: tradeResult.executed ? tradeResult.executed.filter(function(t){return t.action==='buy';}).length : 0,
+          });
           if (tradeResult.executed && tradeResult.executed.length > 0) {
             for (const t of tradeResult.executed) {
               this._logEvent('trade_executed', {
@@ -915,6 +959,14 @@ class Scheduler extends EventEmitter {
               reason: 'no_candidates_above_threshold',
               analyzedCount: results.length,
               time: new Date().toISOString(),
+              // v3.4.2: Kernel context
+              kernelVerdict: tradeResult.kernelVerdict || null,
+              primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+              allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+              displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+              buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+              topScore: results.length > 0 ? Math.max.apply(null, results.map(function(r){return r.compositeScore||0;})) : 0,
+              skipReason: tradeResult.skipReason || null,
             });
           }
 
@@ -986,6 +1038,14 @@ class Scheduler extends EventEmitter {
               nearMisses: tradeResult.nearMisses || [],
               decisions: (tradeResult.decisions || []).length,
               time: new Date().toISOString(),
+              // v3.4.2: Kernel context
+              kernelVerdict: tradeResult.kernelVerdict || null,
+              primaryBlocker: tradeResult.kernelDecision ? tradeResult.kernelDecision.primaryBlocker : null,
+              allActiveGates: tradeResult.kernelDecision ? tradeResult.kernelDecision.allActiveBlockers.map(function(g){return g.gate+':'+g.status;}) : [],
+              displayReasons: tradeResult.kernelDecision ? tradeResult.kernelDecision.displayReasons : [],
+              buyCandidates: tradeResult.buyCandidates ? tradeResult.buyCandidates.length : 0,
+              effectiveMaxBuys: tradeResult.effectiveMaxBuys != null ? tradeResult.effectiveMaxBuys : null,
+              skipReason: tradeResult.skipReason || null,
             });
           }
         } catch (tradeErr) {

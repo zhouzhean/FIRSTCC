@@ -1,6 +1,8 @@
-# Francis Investment · A股量化交易系统 v3.4.1
+# Francis Investment · A股量化交易系统 v3.4.2
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
+
+v3.4.2: **Kernel Closure** — 所有执行链路100%经过 decision_kernel。No-index 路径不再绕过 kernel，scheduler 事件日志完整记录 kernelVerdict/primaryBlocker/allActiveGates/displayReasons/buyCandidates，手动 trade endpoint 传 macroContext+marketState，Think-Tank 指数路径修正。
 
 v3.4.1: **Unified Decision Kernel 完全控制交易执行链** — 单一决策来源 (5 Hard Blockers + Soft Reducers)，simfolio 必须服从 `finalVerdict`，decision audit 直接记录 kernel 输出，所有消费者传一致上下文。
 
@@ -9,9 +11,9 @@ v3.4.1: **Unified Decision Kernel 完全控制交易执行链** — 单一决策
 ```
 mosaic_server.js (HTTP 主服务器, 98+ API)
 ├── mosaic/decision_kernel.js    # ★ v3.4.0 统一决策内核 — single source of truth
-├── mosaic/scheduler.js          # 状态机调度器 (1837行) — 全自动
+├── mosaic/scheduler.js          # 状态机调度器 (~1950行) — 全自动
 ├── mosaic/pipeline.js           # 主流程编排 (519行, EventEmitter+SSE)
-├── mosaic/simfolio.js           # 模拟交易引擎 (2440行) — 服从kernel裁决
+├── mosaic/simfolio.js           # 模拟交易引擎 (~2550行) — 服从kernel裁决
 ├── mosaic/config.js             # ★ 唯一配置入口 (507行)
 
 ├── mosaic/collectors/           # 数据采集
@@ -443,6 +445,7 @@ LEAKAGE_AUDIT:  enforceTemporalOrder, maxLookbackGap=5
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v3.4.2 | 2026-06-18 | Kernel Closure: no-index路径过kernel, marketState贯穿全链路, 手动trade传macroContext, Think-Tank指数路径修正, scheduler事件完整kernel字段, simfolio返回buyCandidates/effectiveMaxBuys/skipReason |
 | v3.4.1 | 2026-06-18 | P0/P1修复: Kernel完全控制交易执行链 (finalVerdict→simfolio, kernel→audit, finalize()缓存, allActiveBlockers, marketClosed, 统一上下文) |
 | v3.4.0 | 2026-06-17 | Unified Decision Kernel (5 Hard Blockers), Decision Audit, Cockpit WNB Banner + Gate Matrix, MD scan 20→50 |
 | v3.3.2 | 2026-06-17 | 泄漏审计升级为真实风控门禁, permissions 诊断修复 |

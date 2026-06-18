@@ -8,7 +8,7 @@ Static web project — no build tools, no package manager, no tests. HTML/CSS/JS
 |------|-------------|
 | `pomodoro/` | Pomodoro timer (vanilla JS, localStorage) |
 | `calendar.html` | Cyberpunk calendar (self-contained single file) |
-| `Francis Investment/` | A-stock quant system v3.4.1 + report engine → see `Francis Investment/CLAUDE.md` |
+| `Francis Investment/` | A-stock quant system v3.4.2 + report engine → see `Francis Investment/CLAUDE.md` |
 
 ## Francis Investment (quick reference)
 
@@ -16,7 +16,7 @@ Static web project — no build tools, no package manager, no tests. HTML/CSS/JS
 - **Local debug**: `node mosaic_server.js` → `http://localhost:8765`
 - **Desktop shortcut**: `open.vbs` → opens cloud URL in Chrome `--app` mode
 - **Stop server**: `taskkill /F /IM node.exe` (local) or `systemctl stop mosaic` (cloud)
-- **Version**: v3.4.1 — Unified Decision Kernel fully controls trade execution chain
+- **Version**: v3.4.2 — Kernel closure: all execution paths through decision_kernel, enriched event audit
 
 ## Git
 

@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.4.1
+ * Francis Investment · Mosaic Server v3.4.2
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -594,14 +594,49 @@ function handleSimfolioTrade(res) {
     return jsonResponse(res, { ok: false, message: '请先运行量化分析（Pipeline未完成）' });
   }
 
+  // v3.4.2: Load macroContext + marketState for kernel consistency
+  // Manual trades must go through the same kernel path as automated ones
+  var macroContext = null;
+  try {
+    var crossMarket = require('./mosaic/analysis/cross_market');
+    var riskState = crossMarket.getCachedRiskState();
+    if (riskState) macroContext = { riskState: riskState };
+  } catch (_) {}
+
+  var mktState = null, mktLabel = null;
+  try {
+    var schedPath = path.join(DATA_DIR, 'simfolio', 'scheduler_state.json');
+    if (fs.existsSync(schedPath)) {
+      var ss = JSON.parse(fs.readFileSync(schedPath, 'utf8'));
+      if (ss.state) {
+        mktState = ss.state;
+        var stateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
+        mktLabel = stateLabels[mktState] || mktState;
+      }
+    }
+  } catch (_) {}
+
   const pf = simfolio.loadPortfolio();
-  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices, 'full');
+  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices, 'full', macroContext, mktState, mktLabel);
 
   return jsonResponse(res, {
     ok: true,
     decisions: result.decisions,
     executed: result.executed,
     snapshot: result.snapshot,
+    // v3.4.2: Return kernel decision for UI transparency
+    kernelDecision: result.kernelDecision ? {
+      canBuy: result.kernelDecision.canBuy,
+      finalVerdict: result.kernelDecision.finalVerdict,
+      finalVerdictLabel: result.kernelDecision.finalVerdictLabel,
+      maxBuysPerDay: result.kernelDecision.maxBuysPerDay,
+      primaryBlocker: result.kernelDecision.primaryBlocker,
+      allActiveBlockers: result.kernelDecision.allActiveBlockers,
+      displayReasons: result.kernelDecision.displayReasons,
+    } : null,
+    kernelVerdict: result.kernelVerdict,
+    maxBuysPerDay: result.maxBuysPerDay,
+    canBuy: result.canBuy,
   });
 }
 
@@ -685,7 +720,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.1',
+    systemVersion: 'v3.4.2',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -1167,7 +1202,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.1       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.2       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');
@@ -2605,7 +2640,7 @@ const server = http.createServer(async function(req, res) {
       // v3.4.1: Load indices
       var ttIndices = null;
       try {
-        var ttIdxPath = path.join(DATA_DIR, '..', 'market_history', 'indices');
+        var ttIdxPath = path.join(DATA_DIR, 'market_history', 'indices');  // v3.4.2: fix path (was '..' / 'market_history')
         var ttIdxFiles = fs.existsSync(ttIdxPath) ? fs.readdirSync(ttIdxPath).filter(function(f) { return f.endsWith('.json'); }).sort().reverse() : [];
         if (ttIdxFiles.length > 0) {
           var ttIdxData = JSON.parse(fs.readFileSync(path.join(ttIdxPath, ttIdxFiles[0]), 'utf8'));

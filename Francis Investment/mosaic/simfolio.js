@@ -713,37 +713,25 @@ function getAutoPauseStatus() {
   };
 }
 
-function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext) {
+function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
   const isFullScan = scanType === 'full';
 
-  // Guard: if no index data available, skip trade decisions entirely
-  // This happens during non-trading hours, weekends, holidays, or when the
-  // index API returns empty data. Without market context, decisions are unsafe.
-  if (!indices || !Array.isArray(indices) || indices.length === 0) {
-    return {
-      decisions: [],
-      executed: [],
-      snapshot: getSnapshot(pf),
-      noMarketData: true,
-      reason: '无指数行情数据，跳过交易决策（非交易时段或API不可达）',
-      gateResults: buildGateResults(pf, indices, macroContext, null, []),
-    };
-  }
-
-  // [v3.4.0] ---- Unified Decision Kernel ----
-  // Single source of truth for ALL gates. All consumers (cockpit, think-tank, simfolio)
-  // now use the same kernel. The existing gate chain below inspects kernelDecision.gateStates
-  // instead of doing independent checks.
+  // [v3.4.2] ---- Unified Decision Kernel (MUST run on ALL paths) ----
+  // The kernel is the single source of truth. Even when indices are missing
+  // (non-trading hours, weekends, holidays), we construct context and call
+  // kernel so consumers get consistent kernelDecision/gateStates/displayReasons.
   var kernelDecision = null;
+  var dqReport = null;
+  var leakageAudit = null;
+  var shResult = null;
+
   try {
     var kernel = require('./decision_kernel');
 
-    var dqReport = null;
     try { dqReport = require('./analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
 
-    var leakageAudit = null;
     try {
       var laPath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
       if (require('fs').existsSync(laPath)) {
@@ -751,7 +739,6 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       }
     } catch (_) {}
 
-    var shResult = null;
     try {
       shResult = require('./analysis/strategy_health').computeStrategyHealth({
         portfolio: pf, indices: indices, macroContext: macroContext, pipelineResults: pipelineResults,
@@ -766,8 +753,51 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       dataQualityReport: dqReport,
       leakageAudit: leakageAudit,
       strategyHealth: shResult,
+      marketState: marketState || null,
+      marketStateLabel: marketStateLabel || null,
     });
   } catch (_) { /* kernel unavailable — fall through to legacy gate chain */ }
+
+  // Guard: if no index data available, return early WITH kernel decision
+  // This ensures all consumers see consistent kernelDecision/gateStates
+  // even during non-trading hours, weekends, or when API is down.
+  if (!indices || !Array.isArray(indices) || indices.length === 0) {
+    var noIdxKd = kernelDecision;
+    var noIdxGs = _kernelGateResults(noIdxKd, pf, indices, macroContext);
+    // Extract leakage audit state from kernel gateStates
+    var noIdxLaBlock = false, noIdxLaReduce = false, noIdxLaVerdict = 'NO_SAMPLES', noIdxLaReasons = [];
+    if (noIdxKd && noIdxKd.gateStates && noIdxKd.gateStates.leakageAudit) {
+      var nla = noIdxKd.gateStates.leakageAudit;
+      noIdxLaVerdict = nla.verdict || 'NO_SAMPLES';
+      if (nla.status === 'block') { noIdxLaBlock = true; noIdxLaReasons.push(nla.description); }
+      else if (nla.status === 'cautious') { noIdxLaReduce = true; noIdxLaReasons.push(nla.description); }
+    }
+    return {
+      decisions: [],
+      executed: [],
+      snapshot: getSnapshot(pf),
+      noMarketData: true,
+      reason: '无指数行情数据，跳过交易决策（非交易时段或API不可达）',
+      gateResults: noIdxGs,
+      // v3.4.2: Kernel fields — all paths now carry kernelDecision for audit consistency
+      kernelDecision: noIdxKd,
+      kernelVerdict: noIdxKd ? noIdxKd.finalVerdict : 'BLOCK',
+      kernelVerdictLabel: noIdxKd ? noIdxKd.finalVerdictLabel : '无行情数据/禁止开仓',
+      kernelReasons: noIdxKd ? noIdxKd.displayReasons : ['无指数行情数据，无法做出交易决策'],
+      maxBuysPerDay: noIdxKd ? noIdxKd.maxBuysPerDay : 0,
+      canBuy: false,
+      kernelBlockActive: true,
+      leakageAuditBlock: noIdxLaBlock,
+      leakageAuditReduce: noIdxLaReduce,
+      leakageAuditVerdict: noIdxLaVerdict,
+      leakageReasons: noIdxLaReasons,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: '无指数行情数据（非交易时段或API不可达）',
+    };
+  }
 
   // --- Helper: map kernel gateStates back to buildGateResults()-style return ---
   function _kernelGateResults(kd, pf, indices, macroContext) {
@@ -867,6 +897,12 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       strategyHealthVerdict: kernelDecision.gateStates.strategyHealth.verdict || 'ALLOW',
       strategyHealthReasons: kernelDecision.gateStates.strategyHealth.reasons || [],
       gateResults: _kernelGateResults(kernelDecision, pf, indices, macroContext),
+      // v3.4.2: Audit fields for all return paths
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: 'Kernel ' + kernelDecision.finalVerdict + ': ' + (kernelDecision.displayReasons || []).join('; '),
     };
   }
 
@@ -897,6 +933,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       drawdownGateActive: true,
       drawdownGateReason: ddReason || '回撤熔断',
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: '回撤熔断: ' + (ddReason || 'drawdown halt'),
     };
   }
 
@@ -933,6 +979,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       marketGateActive: true,
       marketGateReason: '上证跌幅' + shIdx.changePercent.toFixed(2) + '%超过-0.5%阈值，跳过所有买入',
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: '上证跌幅超过-0.5%',
     };
   }
 
@@ -965,6 +1021,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         circuitBreakerReason: kernelCbBlock ? kernelDecision.gateStates.circuitBreaker.description :
           '跨市场风险熔断：' + (regime === 'panic' ? '恐慌状态，禁止所有买入（仅允许卖出）' : '避险状态，禁止所有买入（仅允许卖出）'),
         gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, null, []),
+        // v3.4.2: Kernel fields on all paths
+        kernelDecision: kernelDecision,
+        kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+        maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+        canBuy: false,
+        nearMisses: [],
+        buyCandidates: [],
+        effectiveMaxBuys: 0,
+        buyThreshold: null,
+        skipReason: kernelCbBlock ? '跨市场熔断(kernel)' : '跨市场风险熔断: ' + regime,
       };
     }
 
@@ -997,6 +1063,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       thinkTankDefensive: true,
       thinkTankReason: thinkTankGate.reason,
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: 'Think-Tank 防守: ' + thinkTankGate.reason,
     };
   }
 
@@ -1076,6 +1152,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: 'Leakage Audit BLOCK: ' + laVerdict,
     };
   }
 
@@ -1126,6 +1212,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'BLOCK',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: 'Strategy Health BLOCK: ' + (strategyHealthReasons.join(', ') || '策略健康异常'),
     };
   }
 
@@ -1155,6 +1251,16 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       leakageAuditVerdict: laVerdict,
       leakageReasons: leakageReasons,
       gateResults: kernelDecision ? _kernelGateResults(kernelDecision, pf, indices, macroContext) : buildGateResults(pf, indices, macroContext, thinkTankGate, []),
+      // v3.4.2: Kernel fields on all paths
+      kernelDecision: kernelDecision,
+      kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : 'REDUCE',
+      maxBuysPerDay: kernelDecision ? kernelDecision.maxBuysPerDay : 0,
+      canBuy: false,
+      nearMisses: [],
+      buyCandidates: [],
+      effectiveMaxBuys: 0,
+      buyThreshold: null,
+      skipReason: 'Strategy Health REDUCE: ' + (strategyHealthReasons.join(', ') || '仅卖出模式'),
     };
   }
 
@@ -1329,6 +1435,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // instead of hard score thresholds. Falls back to legacy percentile logic otherwise.
   const useExpectedReturn = (config.PREDICTION && config.PREDICTION.useExpectedReturnRanking);
   let buyCandidates = [];
+  var buyThreshold = null;  // v3.4.2: declared at function scope for final return
   let predictionContext = null;
 
   if (useExpectedReturn) {
@@ -1357,6 +1464,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
       // Filter and extract
       const minExpectedReturn = (config.PREDICTION && config.PREDICTION.minExpectedReturn) || 0;
+      buyThreshold = minExpectedReturn;  // v3.4.2: prediction threshold for audit
       buyCandidates = ranked
         .filter(r => {
           if (pf.positions.some(p => p.code === r.code)) return false;
@@ -1427,7 +1535,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         }
       } catch (_) {}
 
-      let buyThreshold = effectiveMinAbsolute;
+      buyThreshold = effectiveMinAbsolute;
       let strongThreshold = Math.max(effectiveMinStrong, effectiveMinAbsolute + 5);
       if (scoredWithScores.length > 0) {
         const buyIdx = Math.max(0, Math.floor(scoredWithScores.length * pctBuy) - 1);
@@ -1655,6 +1763,14 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     leakageAuditReduce: leakageReduceActive,
     leakageAuditVerdict: laVerdict,
     leakageReasons: leakageReasons,
+    // v3.4.2: Candidate + sizing info for scheduler audit traceability
+    buyCandidates: buyCandidates,
+    effectiveMaxBuys: effectiveMaxBuys,
+    buyThreshold: buyThreshold,
+    skipReason: portfolioInLoss ? '组合浮亏中暂停新买入' :
+      (availableSlots <= 0 ? '仓位已满无可用槽位' :
+      (effectiveMaxBuys <= 0 ? '自动暂停或风控限购为0' :
+      (buyCandidates.length === 0 ? '无合格候选股达标' : null))),
   };
 }
 
