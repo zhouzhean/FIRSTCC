@@ -1,83 +1,124 @@
-# Francis Investment · A股量化交易系统 v3.3.1
+# Francis Investment · A股量化交易系统 v3.4.1
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
 
-v3.3.1: 从"看起来智能"到"可证明预测能力" — Walk-Forward 验证、反数据泄漏审计、收紧 Champion 晋升、IC 分解、置信度校准、市场状态分层验证。
-
-**[2026-06-17] v3.3.1 修复版**: Shadow/Champion评估链路对齐 (predictionDate+code+horizon)、calibration路径统一、API Health真实状态、Cockpit UI 8面板全部返回真实数据 (不再空白/假OK)。详见 `### v3.3.1 修复记录`。
+v3.4.1: **Unified Decision Kernel 完全控制交易执行链** — 单一决策来源 (5 Hard Blockers + Soft Reducers)，simfolio 必须服从 `finalVerdict`，decision audit 直接记录 kernel 输出，所有消费者传一致上下文。
 
 ## 核心架构
 
 ```
-mosaic_server.js (HTTP 主服务器, 55+ API)
-├── mosaic/scheduler.js         # 状态机调度器 (1734行) — 全自动
-├── mosaic/pipeline.js          # 主流程编排 (EventEmitter+SSE)
-├── mosaic/simfolio.js          # 模拟交易引擎 (2228行) — 6门风控
-├── mosaic/config.js            # ★ 唯一配置入口 (520+行)
+mosaic_server.js (HTTP 主服务器, 98+ API)
+├── mosaic/decision_kernel.js    # ★ v3.4.0 统一决策内核 — single source of truth
+├── mosaic/scheduler.js          # 状态机调度器 (1837行) — 全自动
+├── mosaic/pipeline.js           # 主流程编排 (519行, EventEmitter+SSE)
+├── mosaic/simfolio.js           # 模拟交易引擎 (2440行) — 服从kernel裁决
+├── mosaic/config.js             # ★ 唯一配置入口 (507行)
 
-├── mosaic/collectors/          # 数据采集
-│   ├── market_data.js          #   行情/K线 (Eastmoney+腾讯ifzq+Sina)
-│   ├── capital_flow.js         #   板块/个股资金流
-│   ├── north_bound.js          #   北向资金 (沪港通/深港通)
-│   ├── margin_data.js          #   两融数据
-│   ├── dragon_tiger.js         #   龙虎榜
-│   ├── news_collector.js       #   财经新闻 (Sina)
-│   ├── index_recorder.js       #   日内指数快照
-│   └── us_market.js            #   美股监控 (SPY/QQQ/ADR等)
+├── mosaic/collectors/           # 数据采集
+│   ├── market_data.js           #   行情/K线 (Eastmoney+腾讯ifzq+Sina)
+│   ├── capital_flow.js          #   板块/个股资金流
+│   ├── north_bound.js           #   北向资金 (沪港通/深港通)
+│   ├── margin_data.js           #   两融数据
+│   ├── dragon_tiger.js          #   龙虎榜
+│   ├── news_collector.js        #   财经新闻 (Sina)
+│   ├── index_recorder.js        #   日内指数快照
+│   └── us_market.js             #   美股监控 (SPY/QQQ/ADR等)
 
-├── mosaic/factors/             # 评分引擎
-│   ├── hidden_signals.js       #   H1-H9 隐藏因子
-│   └── composite.js            #   5维加权综合评分 (regime-aware)
+├── mosaic/factors/              # 评分引擎
+│   ├── hidden_signals.js        #   H1-H9 隐藏因子
+│   └── composite.js             #   5维加权综合评分 (regime-aware)
 
-├── mosaic/evolution/           # 24/7 自主学习进化引擎
-│   ├── evolution_scheduler.js  #   任务编排 (10任务, catch-up, 超时+重试)
-│   ├── bootstrap_history.js    #   ★ 7 Phase历史训练 + Walk-Forward Split (~2000行)
-│   ├── full_backtest.js        #   多周期全回测 2020-2026
-│   ├── model_registry.js       #   ★ v3.3.1 Shadow/Champion注册 (6项晋升检查+降级)
-│   ├── night_backtest.js       #   每日因子回测 T+1/3/5
-│   ├── weight_grid_search.js   #   OLS权重网格搜索
-│   ├── us_as_predict.js        #   美股→A股预测
-│   ├── self_reflection.js      #   每日自我复盘
-│   └── weekend_factor_mining.js#   周末因子组合挖掘
+├── mosaic/evolution/            # 24/7 自主学习进化引擎
+│   ├── evolution_scheduler.js   #   任务编排 (10任务, catch-up, 超时+重试)
+│   ├── bootstrap_history.js     #   ★ 7 Phase历史训练 + Walk-Forward Split (~2000行)
+│   ├── full_backtest.js         #   多周期全回测 2020-2026
+│   ├── model_registry.js        #   ★ Shadow/Champion注册 (6项晋升检查+降级)
+│   ├── night_backtest.js        #   每日因子回测 T+1/3/5
+│   ├── weight_grid_search.js    #   OLS权重网格搜索
+│   ├── us_as_predict.js         #   美股→A股预测
+│   ├── self_reflection.js       #   每日自我复盘
+│   └── weekend_factor_mining.js #   周末因子组合挖掘
 
-├── mosaic/predict/             # 预测引擎
-│   ├── expected_return.js      #   6维 E[R5d] 预期收益
-│   ├── stock_predictor.js      #   个股因子命中率追踪
-│   ├── dynamic_weights.js      #   OLS回归动态权重学习
-│   ├── cycle_factor_matrix.js  #   周期×因子有效性热力图
-│   ├── sector_leadlag.js       #   板块轮动领先/滞后矩阵
-│   └── trade_attribution.js    #   卖出归因分析→参数反馈
+├── mosaic/predict/              # 预测引擎
+│   ├── expected_return.js       #   6维 E[R5d] 预期收益
+│   ├── stock_predictor.js       #   个股因子命中率追踪
+│   ├── dynamic_weights.js       #   OLS回归动态权重学习
+│   ├── cycle_factor_matrix.js   #   周期×因子有效性热力图
+│   ├── sector_leadlag.js        #   板块轮动领先/滞后矩阵
+│   └── trade_attribution.js     #   卖出归因分析→参数反馈
 
-├── mosaic/analysis/            # 盘后+深度分析
-│   ├── cross_market.js         #   美股-A股相关性+风险状态机
-│   ├── data_quality.js         #   数据源健康+置信度惩罚
-│   ├── factor_performance.js   #   因子命中率 (HOT/WARM/COLD)
-│   ├── knowledge_base.js       #   每日知识积累+因子追踪
-│   ├── market_cycle.js         #   A股市场周期分类
-│   ├── risk_budget.js          #   ★ v3.0 风险预算 (Kelly/Vol/Corr)
-│   ├── strategy_health.js      #   策略健康评估→BLOCK/REDUCE/CAUTIOUS
-│   ├── history_review.js       #   ★ v3.2 统一历史复盘 (日度/深度/发现)
-│   ├── history_verifier.js     #   历史相似性预测验证
-│   ├── verification_dashboard.js # ★ v3.3.1 IC分解+置信度校准+市场状态分层
-│   ├── verification_runner.js  #   ★ v3.3.1 赛后验证+反数据泄漏审计
-│   ├── quant_report.js         #   每日量化报告
-│   ├── us_macro.js             #   美股隔夜宏观摘要
-│   ├── weekend_analyzer.js     #   (DEPRECATED→history_review)
-│   └── weekend_verifier.js     #   (DEPRECATED→history_review)
+├── mosaic/analysis/             # 盘后+深度分析
+│   ├── cross_market.js          #   美股-A股相关性+风险状态机
+│   ├── data_quality.js          #   数据源健康+置信度惩罚
+│   ├── factor_performance.js    #   因子命中率 (HOT/WARM/COLD)
+│   ├── knowledge_base.js        #   每日知识积累+因子追踪
+│   ├── market_cycle.js          #   A股市场周期分类
+│   ├── risk_budget.js           #   风险预算 (Kelly/Vol/Corr)
+│   ├── strategy_health.js       #   策略健康评估→BLOCK/REDUCE/CAUTIOUS
+│   ├── history_review.js        #   统一历史复盘 (日度/深度/发现)
+│   ├── history_verifier.js      #   历史相似性预测验证
+│   ├── verification_dashboard.js #  IC分解+置信度校准+市场状态分层
+│   ├── verification_runner.js   #   赛后验证+反数据泄漏审计
+│   ├── quant_report.js          #   每日量化报告
+│   ├── us_macro.js              #   美股隔夜宏观摘要
+│   ├── weekend_analyzer.js      #   (DEPRECATED→history_review)
+│   └── weekend_verifier.js      #   (DEPRECATED→history_review)
 
-└── mosaic/tools/               # 独立工具
-    └── download_klines.js      #   ★ v3.2.3 批量K线下载 (ifzq, 5并发)
+└── mosaic/tools/
+    └── download_klines.js       #   批量K线下载 (ifzq, 5并发)
 
 report-engine/                   # 前端 (纯静态)
-├── index.html                  #   主仪表板 (多Section路由)
-├── think-tank.html             #   AI思考舱 (SSE实时流)
-├── cockpit.html                #   ★ v3.3.1 自主驾驶舱 (9面板, 30s轮询)
-├── app.js / style.css          #   主控制器+样式
-├── cockpit.js / cockpit.css    #   ★ v3.3.1 驾驶舱逻辑+样式 (IC分解/校准/Shadow追踪)
-├── renderer.js                 #   PDF报告渲染
-├── kline.js                    #   K线图渲染
-└── templates/                  #   报告模板 (18个)
+├── index.html                   #   主仪表板 (多Section路由)
+├── think-tank.html              #   AI思考舱 (SSE实时流)
+├── cockpit.html                 #   ★ Autonomous Cockpit (30s轮询)
+├── app.js / style.css           #   主控制器+样式
+├── cockpit.js / cockpit.css     #   驾驶舱逻辑+样式 (Gate Matrix + Funnel)
+├── renderer.js                  #   PDF报告渲染
+├── kline.js                     #   K线图渲染
+└── templates/                   #   报告模板 (18个)
 ```
+
+## Unified Decision Kernel (v3.4.1)
+
+`mosaic/decision_kernel.js` — `computeDecision(context)` 是交易决策的单一真相来源。
+
+### 5 Hard Blockers (优先级顺序,first match wins 后阻断但继续收集):
+
+| 优先级 | 门禁 | 阻断条件 |
+|--------|------|----------|
+| 1 | **marketData/marketClosed** | 无指数行情数据 (区分离市 vs 数据错误) |
+| 2 | **circuitBreaker** | regime = `panic` 或 `risk_off` |
+| 3 | **leakageAudit** | verdict = CRITICAL/DATA_LEAKAGE_RISK/NO_SAMPLES |
+| 4 | **strategyHealth** | masterControl.verdict = BLOCK |
+| 5 | **dataQuality** | penalty ≥ 7 |
+
+### Soft Reducers:
+- leakageAudit MINOR_ISSUES → maxBuysPerDay 减半
+- strategyHealth REDUCE/CAUTIOUS → 限制买入
+- dataQuality penalty 4-6 → 降低置信度
+
+### 返回结构:
+```js
+{
+  canBuy, finalVerdict: 'ALLOW'|'CAUTIOUS'|'REDUCE'|'BLOCK',
+  finalVerdictLabel, maxBuysPerDay,
+  hardBlockers: [{gate, reason, severity}],
+  softReducers: [{gate, reason}],
+  advisorySignals: [{signal, value, interpretation}],
+  primaryBlocker,        // v3.4.1: 第一个阻断的门禁
+  allActiveBlockers,     // v3.4.1: 所有非pass的门禁列表
+  displayReasons,        // v3.4.1: 合并显示理由
+  gateStates: { circuitBreaker, leakageAudit, strategyHealth, dataQuality, ... },
+  marketClosed,          // v3.4.1: 区分离市 vs 数据缺失
+}
+```
+
+### 三个消费者:
+| 消费者 | 上下文 | 使用方式 |
+|--------|--------|----------|
+| **simfolio** (P0-1) | 实时portfolio+indices+pipeline | `kernelDecision.finalVerdict` BLOCK/REDUCE→sell-only, 跳过所有buy |
+| **cockpit** (P1-1) | 同simfolio | 显示 Gate Matrix 标签矩阵 + primaryBlocker |
+| **think-tank** (P1-3) | 同simfolio | 映射 verdict→action (BLOCK→defensive, etc.) |
 
 ## Pipeline 执行流程
 
@@ -85,12 +126,12 @@ report-engine/                   # 前端 (纯静态)
 1. 全A股列表 → 过滤 (价格≤20/成交额>1亿/PE≤40/排除ST+创业板)
 2. 计算 H1-H9 + 并行 LHB/板块/北向/两融
 3. 8维预评分 → top 80 → 5维综合评分 → 排序/评级/SSE广播
-4. Simfolio 自动执行买卖决策 (6门风控→持仓监控→止损/止盈)
+4. Simfolio 执行买卖决策 → kernel统一裁决 → 持仓监控→止损/止盈
 ```
 
 ### 综合评分 (composite.js)
 
-5维加权: fundamental(25%) + technical(15%) + hidden(20%) + capital_flow(25%) + event(15%)。动态权重 OLS R²≥0.05 时启用。无财务数据时 fundamental→10%，总分上限 65。regime-aware 因子加权。
+5维加权: fundamental(25%) + technical(15%) + hidden(20%) + capital_flow(25%) + event(15%)。动态权重 OLS R²≥0.05 时启用。无财务数据时 fundamental→10%，总分上限 65。
 
 ### 隐藏因子 H1-H9
 
@@ -108,21 +149,23 @@ report-engine/                   # 前端 (纯静态)
 
 ### Simfolio 模拟交易
 
-初始 ¥100,000，T+1，持仓上限 5 只，单只 ≤30%。v3.3.0 6门风控:
-1. **回撤门禁**: warn(-5%)/restrict(-8%)/halt(-10%)
-2. **市场方向门禁**: 指数跌幅超-0.5%
-3. **跨市场熔断**: panic/risk_off → sell-only
-4. **Think-Tank防御**: 6维评分阈值≥3
-5. **策略健康门禁**: BLOCK/REDUCE/CAUTIOUS/ALLOW
-6. **自动暂停**: 5条件触发 (数据质量/训练失败/验证下滑/连续亏损/API异常)
+初始 ¥100,000，T+1，持仓上限 5 只，单只 ≤30%。v3.4.1 Kernel 统一裁决:
 
-卖出: 硬止损-8%/软止损评分<35/移动止盈。止损冷却期 4 交易日不回买 (v3.3.0)。
+1. **Kernel BLOCK/REDUCE check** → sell-only, skip all buys (P0-1)
+2. **回撤门禁**: warn(-5%)/restrict(-8%)/halt(-10%)
+3. **市场方向门禁**: 指数跌幅超-0.5%
+4. **跨市场熔断**: panic/risk_off → sell-only (来自kernel)
+5. **Think-Tank防御**: 6维评分阈值≥3
+6. **策略健康门禁**: BLOCK/REDUCE/CAUTIOUS/ALLOW (来自kernel)
+7. **数据质量**: penalty≥7 → BLOCK (来自kernel)
 
-### Risk Budget 风险预算 (v3.0)
+卖出: 硬止损-8%/软止损评分<35/移动止盈。止损冷却期 4 交易日不回买。
+
+### Risk Budget 风险预算
 
 波动率调整 → 相关性惩罚(>0.6) → 流动性限制(≤5%日均成交量) → Kelly仓位(Half-Kelly 0.5) → 日最大亏损上限(2% NAV) → 连续亏损上限(5次=冻结买入)。
 
-### Model Registry 模型注册 (v3.3.1)
+### Model Registry 模型注册
 
 Champion/Challenger (Shadow) 模式，6项严格晋升检查:
 
@@ -138,8 +181,6 @@ Champion/Challenger (Shadow) 模式，6项严格晋升检查:
 
 **降级逻辑**: Champion IC < 0 且最佳 Shadow IC 超过 |demotionThreshold|(0.10) → 自动降级。
 
-新训练版本先以 "shadow" 身份进入，记录预测但不影响实盘。每日赛后验证: Shadow 6项全过才晋升。最大 20 版本，支持 `retireVersion`、`demoteChampion`。
-
 ## 24/7 进化引擎调度
 
 | 任务 | 时间 | 说明 |
@@ -148,47 +189,29 @@ Champion/Challenger (Shadow) 模式，6项严格晋升检查:
 | full_backtest | 周日 02:00 | 多周期全回测 2020-2026 |
 | night_backtest | 每天 02:00 | 因子回测 T+1/3/5 |
 | weight_grid_search | 每天 03:00 | OLS权重网格搜索 |
-| parameter_push | 每天 04:00 | 参数推送 (grid search/bootstrap完成后) |
+| parameter_push | 每天 04:00 | 参数推送 |
 | us_predict_generate | 每天 05:30 | 美股→A股预测生成 |
 | us_predict_verify | 每天 16:10 | 美股预测验证 |
 | self_reflection | 每天 20:00 | 每日自我复盘 |
-| weekend_factor_mining | 周六 10:00 | 因子组合挖掘 (协同/冲突对) |
+| weekend_factor_mining | 周六 10:00 | 因子组合挖掘 |
 | weekly_report | 周日 14:00 | 周度报告生成 |
-| **daily_verification** | **每天 15:30** | **[v3.2.3] 赛后验证 (命中率+Rank IC+泄漏审计)** |
+| daily_verification | 每天 15:30 | 赛后验证 (命中率+Rank IC+泄漏审计) |
 
-全部10个任务支持 catch-up (服务器重启不丢窗口)、30分钟超时+1次重试 (`_executeWithRetry`)。
+全部10个任务支持 catch-up、30分钟超时+1次重试。
 
-## Bootstrap 历史训练 (bootstrap_history.js)
+## Bootstrap 历史训练
 
 7 Phase: K线下载→每日回放→因子矩阵→组合挖掘→跨市场→参数搜索→输出报告。
 首次全量，后续每周增量 (EMA alpha=0.15)。
 
-**v3.3.1 Walk-Forward Split**: `--split` 模式将数据分为训练(2021-2024)、验证(2025)、前向(2026)三段，输出 `walk_forward_report.json` 和 `ic_decomposition.json`。
+**Walk-Forward Split**: `--split` 模式将数据分为训练(2021-2024)、验证(2025)、前向(2026)三段。
 
 ```bash
-node mosaic/evolution/bootstrap_history.js              # 全量
-node mosaic/evolution/bootstrap_history.js --incremental # 增量
+node mosaic/evolution/bootstrap_history.js                    # 全量
+node mosaic/evolution/bootstrap_history.js --incremental      # 增量
 node mosaic/evolution/bootstrap_history.js --split --skipDownload  # Walk-Forward验证
 curl -X POST http://8.153.101.112:8765/api/evolution/run-bootstrap
 ```
-
-## 反数据泄漏审计 (v3.3.1)
-
-`verification_runner.js` 每条验证记录增加 `predictionDate`、`targetDate`、`horizon`、`isLeakageFree` 字段。每日赛后运行 `runLeakageAudit()` 验证 temporal order (predictionDate < targetDate)，输出 `leakage_audit.json`。
-
-## 置信度校准 (v3.3.1)
-
-预测按分数分 bin (low 0-55/medium 55-70/high 70-100)，比较预期命中率 vs 实际命中率，计算 ECE。输出 `calibration.json`。Cockpit Panel 6 显示校准柱状图。
-
-## IC 分解 (v3.3.1)
-
-从 walk_forward_report + verification_history 拆解:
-- **Training IC**: Bootstrap 样本内 (2021-2024)
-- **Validation IC**: 留出验证期 (2025)
-- **Forward IC**: 最近30天真实样本外
-- **Overfit Ratio**: (trainIC - forwardIC) / trainIC，>0.3 标记过拟合
-
-Cockpit Panel 5 显示三栏 IC + overfit verdict。
 
 ## 关键 API 路由
 
@@ -197,7 +220,7 @@ Cockpit Panel 5 显示三栏 IC + overfit verdict。
 |------|------|
 | `/api/status` | 服务器+管线+调度器状态 |
 | `/api/config/public` | 公开配置 (UI Standard) |
-| `/api/cockpit` | **[v3.3.1]** 9面板自主驾驶舱 (含IC分解/校准/泄漏/Shadow追踪) |
+| `/api/cockpit` | 自主驾驶舱 (含 Gate Matrix + Funnel) |
 
 ### 管线+交易
 | 路由 | 说明 |
@@ -266,22 +289,22 @@ Cockpit Panel 5 显示三栏 IC + overfit verdict。
 | `/api/evolution/us-predict/today` | 今日美股→A预测 |
 | `/api/evolution/us-predict/accuracy` | 美股预测准确率 |
 | `/api/evolution/run-all` (POST) | 触发全部进化任务 |
-| `/api/evolution/walk-forward-report` | **[v3.3.1]** Walk-Forward报告 |
+| `/api/evolution/walk-forward-report` | Walk-Forward报告 |
 
-### 模型注册 (v3.3.1 收紧)
+### 模型注册
 | 路由 | 说明 |
 |------|------|
 | `/api/model-registry/status` | 模型注册状态 (含forwardSamples/demotionLog) |
 | `/api/model-registry/champion` | 当前冠军模型参数 |
 | `/api/model-registry/evaluate` (POST) | 触发Shadow评估 (6项晋升检查) |
 
-### 验证 (v3.3.1 扩展)
+### 验证
 | 路由 | 说明 |
 |------|------|
 | `/api/verification/dashboard` | 赛后验证仪表板 (含IC分解/校准/市场状态) |
-| `/api/verification/ic-breakdown` | **[v3.3.1]** IC分解 (train/validate/forward) |
-| `/api/verification/leakage-audit` | **[v3.3.1]** 数据泄漏审计 |
-| `/api/verification/calibration` | **[v3.3.1]** 置信度校准 |
+| `/api/verification/ic-breakdown` | IC分解 (train/validate/forward) |
+| `/api/verification/leakage-audit` | 数据泄漏审计 |
+| `/api/verification/calibration` | 置信度校准 |
 
 ### 历史复盘+知识
 | 路由 | 说明 |
@@ -334,11 +357,7 @@ ssh root@8.153.101.112 "systemctl restart mosaic"
 # 前端无需重启
 # 验证
 curl -s http://8.153.101.112:8765/api/status
-curl -s http://8.153.101.112:8765/api/verification/dashboard
-curl -s http://8.153.101.112:8765/api/verification/ic-breakdown
-curl -s http://8.153.101.112:8765/api/verification/leakage-audit
-curl -s http://8.153.101.112:8765/api/verification/calibration
-curl -s http://8.153.101.112:8765/api/evolution/walk-forward-report
+curl -s http://8.153.101.112:8765/api/cockpit
 ```
 
 ## 关键约束
@@ -365,22 +384,16 @@ SCHEDULER:      3次全扫描(09:30/11:00/13:00)+7次中盘扫描
 EVOLUTION:      10个定时任务 (见调度表)
 PREDICTION:     6维 E[R5d], OLS动态权重 (R²≥0.05启用)
 
-[v3.3.0 新增]
-SHADOW_MODE:    { enabled: true, minEvalDays: 5, promotionThreshold: 0.05 }
-MODEL_REGISTRY: { maxVersions: 20, minEvaluationDays: 5, minVerificationSamples: 30 }
-AUTO_PAUSE:     { dataQualityMin: 85, maxConsecutiveLosses: 5, ... }
+[v3.4.x]
+MID_SCAN:       midScanDeepAnalyze=50, midScanTopCount=300
+SHADOW_MODE:    enabled, minEvalDays=5, promotionThreshold=0.05
+MODEL_REGISTRY: maxVersions=20, minVerificationSamples=30, forwardSamples persistence
+AUTO_PAUSE:     dataQualityMin=85, maxConsecutiveLosses=5
 STOP_LOSS_COOLDOWN_DAYS: 4
-
-[v3.3.1 新增]
-WALK_FORWARD:      { train:2021-2024, validate:2025, forward:2026, expandingWindow:true }
-IC_DECOMPOSITION:  { rollingICWindow:30, overfitWarningRatio:0.3 }
-VERIFICATION_AUDIT: { enforceTemporalOrder:true, maxLookbackGap:5 }
-CONFIDENCE_CALIBRATION: { bins:[low/medium/high], minSamplesPerBin:30 }
-REGIME_VERIFICATION: { minSamplesPerRegime:10 }
-SHADOW_MODE 收紧:   { minForwardSamplesPerShadow:100, minDirectionHitRate:0.52,
-                     requirePostCostPositive:true, maxDrawdownNotWorse:true,
-                     requireCalibrationCheck:true }
-MODEL_REGISTRY:     { forwardSamplesFile, demotionLogFile }
+WALK_FORWARD:   train:2021-2024, validate:2025, forward:2026, expandingWindow
+IC_DECOMPOSITION: rollingICWindow=30, overfitWarningRatio=0.3
+CONFIDENCE_CALIBRATION: bins:[low/medium/high], minSamplesPerBin=30
+LEAKAGE_AUDIT:  enforceTemporalOrder, maxLookbackGap=5
 ```
 
 ### 已知陷阱速查
@@ -388,81 +401,52 @@ MODEL_REGISTRY:     { forwardSamplesFile, demotionLogFile }
 | 陷阱 | 要点 |
 |------|------|
 | SSH 路径含空格 | 必须引号 `"/root/FIRSTCC/Francis Investment/..."` |
-| Eastmoney 在 ECS 被墙 | K 线用腾讯 ifzq API；两融/板块资金流也受影响 |
+| Eastmoney 在 ECS 被墙 | K线用腾讯 ifzq API；两融/板块资金流也受影响 |
 | compositeScore 返回类型 | 对象，需提取 `.compositeScore` |
 | klines 目录冲突 | `market_data.js`→`klines_short/`，`bootstrap_history.js`→`klines/` |
 | 前端 JS 语法错误 | `node --check` 部署前验证，一个错误全挂 |
 | regime 字段路径 | `riskState.regime`，不是 `riskState.riskRegime` |
-| 回测止损冷却期 | `STOP_LOSS_COOLDOWN_DAYS=4` |
 | `safeFixed()` | simfolio.js 所有 `.toFixed()` 必须用它包装 |
-| stock_factor_performance 结构 | `dailyRecords` (对象 key=日期) 不是 `records` (数组); factorSignals 无 hit 字段=待验证 |
-| scan_records 路径+格式 | 在 `SIMFOLIO_DIR` (非 DATA_DIR); 纯数组，非 `{results:...}` 对象 |
-| macroContext 作用域 | `checkBuySignal` 是模块级函数，无法闭包访问 `makeTradingDecisions` 局部变量，必须显式传入 [v3.3] |
-| 策略健康门禁 | `strategy_health` 返回 BLOCK/REDUCE/CAUTIOUS/ALLOW，`simfolio.js` 必须消费此裁决 [v3.3] |
-| 止损冷却期 | `STOP_LOSS_COOLDOWN_DAYS=4`，`executeSell` 中触发止损时记录，`makeTradingDecisions` 候选遍历中检查冷却 [v3.3] |
-| 任务超时 | `evolution_scheduler` 30分钟超时 + 1次重试，`_executeWithRetry` 防止 `_state.running` 永久卡住 [v3.3] |
-| model_registry 数据 | `model_registry.json` 在 `report-engine/data/evolution/`，运行时数据不提交 git [v3.3] |
-| avoidSectors 来源 | 从 `trade_attribution.json` 的 `_avoidSectors` 读取，由 `trade_attribution.js` 在卖出归因后更新 [v3.3] |
+| macroContext 作用域 | `checkBuySignal` 模块级函数，必须显式传入 |
+| 止损冷却期 | `STOP_LOSS_COOLDOWN_DAYS=4`，止损时记录，候选遍历中检查 |
+| 任务超时 | `evolution_scheduler` 30分钟超时 + 1次重试 |
+| model_registry 数据 | `model_registry.json` 在 `report-engine/data/evolution/` |
+| avoidSectors 来源 | 从 `trade_attribution.json` 的 `_avoidSectors` 读取 |
 
-**v3.3.1 新增陷阱**:
+**v3.3.x+ 陷阱:**
 
 | 陷阱 | 要点 |
 |------|------|
-| Shadow 晋升 6 项检查 | `checkPromotionCriteria()` 返回 `{eligible, failingChecks[]}`，晋升前必须全部通过；早期 Shadow 会因为缺少 forward 样本被阻塞 |
-| Bootstrap --split | 需要 klines/ 目录已有数据（`--skipDownload`），否则 Phase 1 下载会覆盖训练/验证/前向分区 |
-| Walk-forward 报告路径 | `walk_forward_report.json` 和 `ic_decomposition.json` 都在 `report-engine/data/evolution/`，不提交 git |
-| 泄漏审计 | `leakage_audit.json` 在首次 verification_runner 运行后生成；`totalChecks=0` 表示验证数据中尚无 predictionDate/targetDate 字段 (向后兼容) |
-| 置信度校准 | 需要 ≥30 条验证样本/bin 才有结果；初始阶段 low bin 和 medium bin 样本最多 |
-| demoteChampion | 触发条件: championIC < 0 AND bestShadowIC > championIC + 0.10；降级后 `_state.champion` 变为 null |
-| 孤儿注释 `/**` | verification_runner.js 中注意：插入代码块时不要留下孤立的 JSDoc 开头标记 |
-| Shadow 验证对齐 | `_computeRankIC` 和 `evaluateShadow` 必须统一使用 `_buildShadowPredictionMap()` 按 predictionDate+code+horizon 匹配，不能只用 code-only `predMap[code]` |
-| calibration.json 路径 | 唯一路径: `data/evolution/calibration.json`；`verification_dashboard.js` 写到这里，`buildDataFileHealth()` 也查这里 |
-| API Health 不能写死 | `buildCockpitData()` 中每个 apiHealth 字段必须基于真实文件存在性或数据内容判断，用 `_fileExists()` 或检查 result 对象 |
-| `_loadVerification()` 字段完整 | 必须携带 predictionDate/targetDate/horizon（不只是 code/actualReturn/score），否则 evaluateShadow 无法做日期对齐 |
-| latestByCode/code-only fallback | **禁用**。`_buildShadowPredictionMap._getPrediction`、`evaluateShadow`、`_computeRankIC` 三处均不允许跨日期 code-only 匹配，只能 date+code+horizon 精确对齐 |
-| forwardSamples 重复累计 | `updateForwardSamples` 必须持久化 `sampleKeys[]` 数组；每次调用只统计新 key；`evaluateShadow` 传 `(versionId, dateStr, sampleKeys, hitSampleKeys)` |
-| Cockpit 加载态阻塞 | API 失败时必须调用 `renderAllError(msg)` 填充所有 panel body；不能只设 connection status 让面板永久 Loading |
-| config.js calibrationFile | 必须指向 `data/evolution/calibration.json`；`CONFIDENCE_CALIBRATION.calibrationFile` 与 `verification_dashboard.js` 内 EVOLUTION_DIR 必须一致 |
+| Shadow 晋升 6 项检查 | `checkPromotionCriteria()` 返回 `{eligible, failingChecks[]}` |
+| Bootstrap --split | 需要 klines/ 已有数据 (`--skipDownload`)，否则 Phase 1 覆盖分区 |
+| 泄漏审计 | 首次 verification_runner 运行后生成；向后兼容无 predictionDate 的旧数据 |
+| calibration.json 路径 | 唯一路径: `data/evolution/calibration.json` |
+| Shadow 验证对齐 | 按 predictionDate+code+horizon 匹配，禁用 code-only fallback |
+| forwardSamples 持久化 | `sampleKeys[]` 数组防重复累计 |
+| Cockpit 加载态 | API 失败时 `renderAllError(msg)` 填充所有面板 |
+
+**v3.4.x 陷阱:**
+
+| 陷阱 | 要点 |
+|------|------|
+| kernel 上下文一致性 | 三个消费者 (cockpit/think-tank/simfolio) 必须传同一套 portfolio+indices+pipelineResults+marketState |
+| simfolio P0-1 | 在旧 6-gate chain 之前先检查 `kernelDecision.finalVerdict` BLOCK/REDUCE→sell-only |
+| decision audit | 直接从 `tradeResult.kernelDecision` 取字段，不要用旧 flags 重建 verdict |
+| marketClosed vs noMarketData | kernel 接受 `marketState` 字段区分，cockpit 根据 `marketClosed` 显示不同标签 |
+| allActiveBlockers | 数组包含所有 block/reduce/cautious 的门禁，不只第一个 |
 
 ### 绝不提交的运行时数据
 
-`portfolio.json`, `scheduler_state.json`, `events/*.json`, `summaries/*.json`, `knowledge_base/*.json`, `index_history_*.json`, `us_latest.json`, `correlation_history.json`, `factor_performance.json`, `scan_records_*.json`, `last_pipeline_result.json`, `weekend_context.json`, `market_history/indices/*.json`, `weekend_archive/*.json`, `margin_cache.json`, `dynamic_weights.json`, `stock_factor_performance.json`, `cycle_factor_matrix.json`, `sector_leadlag.json`, `trade_attribution.json`, `klines/*.json`, `klines_short/*.json`, `night_backtest_result.json`, `self_reflection_result.json`, `us_as_predictions.json`, `us_as_verification_history.json`, `factor_combinations.json`, `weight_grid_result.json`, `full_backtest_result*.json`, `data_quality_report.json`, `strategy_health_snapshot.json`, `*_snapshot.json`, `bootstrap_state.json`, `training_matrix.json`, `factor_effectiveness.json`, `param_search_results.json`, `cross_market_linkage.json`, `expected_return_verification.json`, `history_context.json`, `verification/`, `evolution/`, `stop_loss_cooldowns.json`, `model_registry.json`, `daily_reflections/`, `attribution_adjustments.json`, `last_gate_state.json`, `position_diagnosis.json`, `false_signal_patterns.json`, `missed_opportunities.json`, `evo_task_history.json`, `version_history.json`
+见 `.gitignore` 完整列表。新增运行时数据文件/目录必须同步更新。
 
-**[v3.3.1 新增]** `walk_forward_report.json`, `ic_decomposition.json`, `shadow_forward_samples.json`, `demotion_log.json`, `leakage_audit.json`, `calibration.json`
+## 版本历史摘要
 
-### v3.3.1 修复记录 (2026-06-17)
-
-**第一轮**: 6个bug修复，解决"API返回200但数据空洞"问题:
-
-| 问题 | 修复 | 涉及文件 |
+| 版本 | 日期 | 关键变更 |
 |------|------|----------|
-| `_loadVerification()` 丢失 predictionDate/targetDate/horizon | 补全6字段到 actualReturns 列表 | `model_registry.js` |
-| `_computeRankIC()` code-only 匹配，忽略日期对齐 | 改用 `_buildShadowPredictionMap()` + date-aligned lookup | `model_registry.js` |
-| calibration.json 路径不一致 (写到 evolution/，数据健康检查查 data/根) | 统一为 `data/evolution/calibration.json` | `mosaic_server.js`, `.gitignore` |
-| API Health 写死 OK (walkForward/cockpit/calibration) | 新增 `_fileExists()` helper, 7个API均基于真实文件/数据判断 | `mosaic_server.js` |
-| 核心数据文件未生成 (evolution/ + verification/ 目录空) | 云端运行 `verification_runner.js` 生成全部9个文件 | 运维操作 |
-| Cockpit 预测能力面板数据缺失时显示空白 | 缺失时 fallback 显示 Verification Summary 基本命中率 | `cockpit.js` |
-
-**第二轮 (2026-06-17)**: 4个深层硬问题修复:
-
-| 问题 | 修复 | 涉及文件 |
-|------|------|----------|
-| `_buildShadowPredictionMap._getPrediction` 仍保留 latestByCode fallback | 彻底移除 latestByCode 和 code-only fallback，只允许 date+code+horizon 精确匹配 | `model_registry.js` |
-| `evaluateShadow` 和 `_computeRankIC` 保留 code-only fallback | 移除所有 `predMap[code]` 回退逻辑 | `model_registry.js` |
-| `updateForwardSamples` 无 sampleKeys 持久化，重复评估累加 | 新增 sampleKeys 持久化数组，`updateForwardSamples` 跳过已计入的 key，返回 `{addedTotal, addedHits}` | `model_registry.js` |
-| Cockpit API 失败时面板永久 Loading | 新增 `renderAllError(msg)` 函数，API 404/error 时所有面板显示错误原因而非 spinner | `cockpit.js` |
-| config.js calibrationFile 指向错误路径 `data/verification/` | 修正为 `data/evolution/calibration.json`，与 dashboard/cockpit 统一 | `config.js` |
-| .gitignore 同时存在 evolution/calibration.json 和 verification/calibration.json | 删除 verification/calibration.json，只保留 evolution/ | `.gitignore` |
-
-**修复后状态**: 
-- 5个核心API全部200 OK 返回真实数据
-- 9个核心数据文件全部落盘（evolution/ 8个 + verification/ 3个）
-- Shadow/Champion 按 (predictionDate, code, horizon) 严格对齐，无 code-only fallback
-- forwardSamples 持久化 sampleKeys 防重复累计
-- Cockpit 所有面板：数据缺失/API失败时显示原因而非空转
-
-**当前 Shadow 状态** (2026-06-17):
-- Champion: `v_2026-06-16` (bootstrap), params: stopLoss=-0.03, buyMinScore=45
-- Shadow: `v_2026-06-17` (grid_search), cumulativeIC=0.377, forwardSamples=7, directionHitRate=42.86%
-- Promotion blocked: directionHitRate(>52%), forwardSamples(≥100), evaluationDays(≥5)
-- Leakage Audit: CLEAN (47 checks, 0 violations)
+| v3.4.1 | 2026-06-18 | P0/P1修复: Kernel完全控制交易执行链 (finalVerdict→simfolio, kernel→audit, finalize()缓存, allActiveBlockers, marketClosed, 统一上下文) |
+| v3.4.0 | 2026-06-17 | Unified Decision Kernel (5 Hard Blockers), Decision Audit, Cockpit WNB Banner + Gate Matrix, MD scan 20→50 |
+| v3.3.2 | 2026-06-17 | 泄漏审计升级为真实风控门禁, permissions 诊断修复 |
+| v3.3.1 | 2026-06-17 | Walk-Forward验证, IC分解, 置信度校准, Shadow评估对齐, 数据泄漏审计 |
+| v3.3.0 | 2026-06-16 | Bootstrap验证, Model Registry, Shadow预测, 自主学习交易员闭环 |
+| v3.2.x | 2026-06 | 验证仪表板, 历史复盘, K线数据扩充 |
+| v3.0 | 2026-05 | 策略健康仪表板, 风险预算, 全回测框架 |
