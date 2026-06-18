@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Decision Kernel v3.4.4
+ * Francis Investment · Decision Kernel v3.4.5
  *
  * Unified trading permission engine. Single source of truth for ALL three consumers:
  *   1. Cockpit permissions (buildCockpitData)
@@ -85,6 +85,7 @@ function computeDecision(context) {
     if (gs.drawdown && gs.drawdown.status === 'block') activeBlocks.push({ gate: 'drawdown', status: 'block', label: '回撤熔断', detail: gs.drawdown.description });
     if (gs.drawdown && gs.drawdown.status === 'restrict') activeBlocks.push({ gate: 'drawdown', status: 'restrict', label: '回撤限仓', detail: gs.drawdown.description });
     if (gs.marketDirection && gs.marketDirection.status === 'block') activeBlocks.push({ gate: 'marketDirection', status: 'block', label: '市场方向不利', detail: gs.marketDirection.description });
+    if (gs.marketDirection && gs.marketDirection.status === 'warn') activeBlocks.push({ gate: 'marketDirection', status: 'warn', label: '市场方向数据不全', detail: gs.marketDirection.description });
     // Add marketSession/marketData status
     if (gs.marketSession && gs.marketSession.status === 'block') {
       res.marketClosed = true;
@@ -418,9 +419,15 @@ function _buildAllGateStates(ctx, decision) {
   var ddStatus = ddLevel === 'halt' ? 'block' : (ddLevel === 'restrict' ? 'restrict' : (ddLevel === 'warn' ? 'warn' : 'pass'));
 
   // --- Market direction ---
+  // v3.4.5: changePercent=null is WARN (data incomplete), not pass/unknown.
+  // This happens when IndexRecorder provides price but no changePercent.
   var shIdx = indices ? indices.find(function(i) { return i.code === '000001' || i.code === 'sh000001'; }) : null;
-  var marketBlocked = shIdx && shIdx.changePercent != null && shIdx.changePercent < -0.5;
-  var marketStatus = marketBlocked ? 'block' : (shIdx ? 'pass' : 'unknown');
+  var marketStatus = 'unknown';
+  if (shIdx && shIdx.changePercent != null) {
+    marketStatus = shIdx.changePercent < -0.5 ? 'block' : 'pass';
+  } else if (shIdx && shIdx.price != null) {
+    marketStatus = 'warn'; // price exists but changePercent missing
+  }
 
   // --- Circuit breaker ---
   var riskState = macroContext && macroContext.riskState ? macroContext.riskState : null;
@@ -443,10 +450,12 @@ function _buildAllGateStates(ctx, decision) {
   var shVerdict = 'ALLOW';
   var shConfidence = null;
   var shReasons = [];
+  var shTotalTrades = 0;
   if (shResult && shResult.masterControl) {
     shVerdict = shResult.masterControl.verdict || 'ALLOW';
     shConfidence = shResult.masterControl.confidence;
     shReasons = shResult.masterControl.reasons || [];
+    shTotalTrades = shResult.masterControl.totalTrades || 0;
   } else if (shResult && shResult.verdict) {
     shVerdict = shResult.verdict;
     shConfidence = shResult.confidence;
@@ -506,9 +515,13 @@ function _buildAllGateStates(ctx, decision) {
       status: marketStatus,
       shIndex: shIdx ? shIdx.price : null,
       changePercent: (shIdx && shIdx.changePercent != null) ? Math.round(shIdx.changePercent * 100) / 100 : null,
-      description: marketBlocked
+      description: marketStatus === 'block'
         ? '上证跌幅' + (shIdx && shIdx.changePercent != null ? shIdx.changePercent.toFixed(2) : '?') + '%超过-0.5%阈值，禁止买入'
-        : (shIdx && shIdx.changePercent != null ? '上证' + (shIdx.changePercent >= 0 ? '涨' : '跌') + Math.abs(shIdx.changePercent).toFixed(2) + '%，方向正常' : '无上证指数数据'),
+        : (marketStatus === 'warn'
+          ? '上证指数' + (shIdx && shIdx.price != null ? shIdx.price.toFixed(2) : '?') + '点，涨跌幅数据缺失（IndexRecorder/Sina仅提供价格），市场方向判断降级'
+          : (marketStatus === 'pass'
+            ? '上证' + (shIdx && shIdx.changePercent >= 0 ? '涨' : '跌') + Math.abs(shIdx.changePercent).toFixed(2) + '%，方向正常'
+            : '无上证指数数据')),
     },
     circuitBreaker: {
       status: circuitStatus,
@@ -532,6 +545,7 @@ function _buildAllGateStates(ctx, decision) {
       status: shStatus,
       verdict: shVerdict,
       confidence: shConfidence,
+      totalTrades: shTotalTrades,
       reasons: shReasons,
       description: shStatus === 'block'
         ? '策略健康: BLOCK，禁止买入。' + shReasons.slice(0, 2).join('；')
@@ -574,126 +588,142 @@ function setCachedResult(result) {
 }
 
 /**
- * v3.4.4: Shared index loader — unified market snapshot pipeline.
+ * v3.4.5: Shared index loader — unified market snapshot pipeline.
  *
  * Priority order:
- *   1. Live intraday snapshot from IndexRecorder (index_history_YYYY-MM-DD.json)
- *   2. Cached market_snapshot_latest.json (written by pipeline after each fetchIndices)
- *   3. Historical daily K-line files (market_history/indices/*.json) — fallback
+ *   1. market_snapshot_latest.json (written by pipeline.fetchIndices — most complete,
+ *      includes changePercent, prevClose, high, low, open from Eastmoney)
+ *   2. IndexRecorder intraday files (index_history_DATE.json) — for indices
+ *      pipeline didn't cover; price only, no changePercent
+ *   3. Historical daily K-line files (market_history/indices/*.json) — last resort,
+ *      NEVER rewrites date to today
  *
- * IndexRecorder writes {time, sh, sz, bj} during trading hours to
- *   report-engine/data/simfolio/index_history_YYYY-MM-DD.json
+ * Each index now carries independent freshness metadata:
+ *   - freshnessStatus: 'live' | 'recorder' | 'cached' | 'stale_daily' | 'missing'
+ *   - source: 'pipeline_eastmoney' | 'index_recorder' | 'daily_kline'
+ *   - fetchAt: ISO timestamp of when the data was captured
+ *   - quoteDate: actual date of the price quote (NOT faked to today)
  *
- * Pipeline fetchIndices() returns [{code, name, price, changePercent}] from
- *   Sina API in real time. This function now also writes market_snapshot_latest.json
- *   so all consumers (kernel, cockpit, data_quality) read from the same source.
- *
- * Returns [{code, name, price, changePercent, date, source}] or null on failure.
+ * Returns [{code, name, price, changePercent, prevClose, date, source,
+ *           fetchAt, quoteDate, freshnessStatus}] or null on failure.
  * Used by cockpit, think-tank, kernel, data_quality, and strategy_health.
  */
 function loadLatestIndices() {
   try {
     var fs = require('fs');
     var path = require('path');
-    var today = new Date().toISOString().slice(0, 10);
+    var now = new Date();
+    var today = now.toISOString().slice(0, 10);
     var idxDir = path.join(__dirname, '..', 'report-engine', 'data', 'market_history', 'indices');
     var snapDir = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+    var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
     var defs = [
       { file: 'sh000001.json', code: '000001', name: '上证指数', recorderKey: 'sh' },
       { file: 'sz399001.json', code: '399001', name: '深证成指', recorderKey: 'sz' },
-      { file: 'sz399006.json', code: '399006', name: '创业板指', recorderKey: null }, // not in IndexRecorder
+      { file: 'sz399006.json', code: '399006', name: '创业板指', recorderKey: 'cy' },
     ];
 
-    // === Tier 1: Live intraday snapshot from IndexRecorder ===
+    // === Tier 1: market_snapshot_latest.json (pipeline writes this, most complete) ===
+    var snapshotData = null;
+    if (fs.existsSync(snapshotFile)) {
+      try {
+        snapshotData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
+      } catch (_) {}
+    }
+
+    // === Tier 2: IndexRecorder intraday file ===
     var recorderFile = path.join(snapDir, 'index_history_' + today + '.json');
     var recorderData = null;
     if (fs.existsSync(recorderFile)) {
       try {
         var raw = JSON.parse(fs.readFileSync(recorderFile, 'utf8'));
         if (Array.isArray(raw) && raw.length > 0) {
-          recorderData = raw[raw.length - 1]; // latest record point
+          recorderData = raw[raw.length - 1];
         }
       } catch (_) {}
     }
 
-    // === Tier 2: Cached market snapshot (written by pipeline) ===
-    var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
-    var snapshotData = null;
-    if (fs.existsSync(snapshotFile)) {
-      try {
-        snapshotData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-        // Only use if from today and not too stale
-        if (snapshotData.date !== today) snapshotData = null;
-      } catch (_) {}
+    // === Build results: each index independently ===
+    var results = [];
+    var snapshotAge = 999;
+    if (snapshotData && snapshotData.time) {
+      snapshotAge = (now - new Date(snapshotData.time)) / 60000;
     }
 
-    // === Tier 3: Historical daily K-line files (fallback) ===
-    var results = [];
     for (var i = 0; i < defs.length; i++) {
       var idxDef = defs[i];
 
-      // Try recorder first (only for sh/sz which have recorderKey)
-      if (recorderData && idxDef.recorderKey && recorderData[idxDef.recorderKey] != null) {
-        results.push({
-          code: idxDef.code,
-          name: idxDef.name,
-          price: recorderData[idxDef.recorderKey],
-          changePercent: null, // recorder doesn't compute change% from prev close
-          date: today,
-          source: 'index_recorder',
-        });
-        continue;
-      }
-
-      // Try snapshot cache
+      // Tier 1: pipeline snapshot (has changePercent, prevClose, etc.)
       if (snapshotData && snapshotData.indices) {
         var snapIdx = snapshotData.indices.find(function(ix) {
           return ix.code === idxDef.code;
         });
         if (snapIdx) {
+          var isFresh = snapshotAge < 5 && snapIdx.freshnessStatus === 'live';
           results.push({
             code: idxDef.code,
             name: idxDef.name,
             price: snapIdx.price,
             changePercent: snapIdx.changePercent != null ? snapIdx.changePercent : null,
-            date: snapshotData.date || today,
-            source: 'snapshot_cache',
+            prevClose: snapIdx.prevClose != null ? snapIdx.prevClose : null,
+            high: snapIdx.high != null ? snapIdx.high : null,
+            low: snapIdx.low != null ? snapIdx.low : null,
+            open: snapIdx.open != null ? snapIdx.open : null,
+            date: snapIdx.quoteDate || snapshotData.date || today,
+            source: snapIdx.source || 'snapshot_cache',
+            fetchAt: snapIdx.fetchAt || snapshotData.time || null,
+            quoteDate: snapIdx.quoteDate || snapshotData.date || null,
+            freshnessStatus: isFresh ? 'live' : (snapshotAge < 30 ? 'cached' : 'stale_daily'),
           });
           continue;
         }
       }
 
-      // Fallback: historical daily K-line
-      var fp = path.join(idxDir, idxDef.file);
-      if (!fs.existsSync(fp)) continue;
-      var arr = JSON.parse(fs.readFileSync(fp, 'utf8'));
-      if (!Array.isArray(arr) || arr.length === 0) continue;
-      var last = arr[arr.length - 1];
-      var prev = arr.length >= 2 ? arr[arr.length - 2] : null;
-      var changePercent = (prev && prev.close && last.close)
-        ? parseFloat(((last.close - prev.close) / prev.close * 100).toFixed(2))
-        : null;
-      results.push({
-        code: idxDef.code,
-        name: idxDef.name,
-        price: last.close,
-        changePercent: changePercent,
-        date: last.date || null,
-        source: 'daily_kline',
-      });
-    }
-
-    // Save snapshot for next consumers (cross-module consistency)
-    if (results.length > 0) {
-      try {
-        if (!fs.existsSync(snapDir)) fs.mkdirSync(snapDir, { recursive: true });
-        fs.writeFileSync(snapshotFile, JSON.stringify({
+      // Tier 2: IndexRecorder (price only, no changePercent)
+      if (recorderData && idxDef.recorderKey && recorderData[idxDef.recorderKey] != null) {
+        results.push({
+          code: idxDef.code,
+          name: idxDef.name,
+          price: recorderData[idxDef.recorderKey],
+          changePercent: null,
+          prevClose: null,
           date: today,
-          time: new Date().toISOString(),
-          indices: results,
-          source: results[0].source || 'composite',
-        }, null, 2), 'utf8');
-      } catch (_) {}
+          source: 'index_recorder',
+          fetchAt: today + 'T' + (recorderData.time || '') + ':00+08:00',
+          quoteDate: today,
+          freshnessStatus: 'recorder',
+        });
+        continue;
+      }
+
+      // Tier 3: Historical daily K-line (LAST RESORT — NEVER fake the date)
+      var fp = path.join(idxDir, idxDef.file);
+      if (fs.existsSync(fp)) {
+        try {
+          var arr = JSON.parse(fs.readFileSync(fp, 'utf8'));
+          if (Array.isArray(arr) && arr.length > 0) {
+            var last = arr[arr.length - 1];
+            var prev = arr.length >= 2 ? arr[arr.length - 2] : null;
+            var changePercent = (prev && prev.close && last.close)
+              ? parseFloat(((last.close - prev.close) / prev.close * 100).toFixed(2))
+              : null;
+            var klineDate = last.date || null;
+            results.push({
+              code: idxDef.code,
+              name: idxDef.name,
+              price: last.close,
+              changePercent: changePercent,
+              prevClose: prev ? prev.close : null,
+              date: klineDate,           // ← REAL date, NOT faked to today
+              source: 'daily_kline',
+              fetchAt: null,
+              quoteDate: klineDate,
+              freshnessStatus: 'stale_daily',
+            });
+          }
+        } catch (_) {}
+      }
+      // If nothing found, this index is simply not in results (missing)
     }
 
     return results.length > 0 ? results : null;
@@ -702,10 +732,67 @@ function loadLatestIndices() {
   }
 }
 
+/**
+ * v3.4.5: Write market snapshot from pipeline fetchIndices results.
+ *
+ * Called by pipeline.js after each fetchIndices() call. The pipeline gets
+ * the most complete index data (price, changePercent, change, high, low,
+ * open, prevClose from Eastmoney push2 API).
+ *
+ * This is now the PRIMARY snapshot source — IndexRecorder is the fallback.
+ *
+ * @param {Array} indices — [{code, name, price, changePercent, change, high, low, open, prevClose}]
+ * @param {string} source — 'pipeline_eastmoney' (default)
+ */
+function writeMarketSnapshot(indices, source) {
+  try {
+    if (!indices || !Array.isArray(indices) || indices.length === 0) return;
+    var fs = require('fs');
+    var path = require('path');
+    var now = new Date();
+    var today = now.toISOString().slice(0, 10);
+    var snapDir = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+    if (!fs.existsSync(snapDir)) fs.mkdirSync(snapDir, { recursive: true });
+
+    var enriched = indices.map(function(ix) {
+      return {
+        code: ix.code,
+        name: ix.name || '',
+        price: ix.price,
+        changePercent: ix.changePercent != null ? ix.changePercent : null,
+        prevClose: ix.prevClose != null ? ix.prevClose : null,
+        high: ix.high != null ? ix.high : null,
+        low: ix.low != null ? ix.low : null,
+        open: ix.open != null ? ix.open : null,
+        fetchAt: now.toISOString(),
+        quoteDate: today,
+        source: source || 'pipeline_eastmoney',
+        freshnessStatus: 'live',
+      };
+    });
+
+    var snapshot = {
+      date: today,
+      time: now.toISOString(),
+      source: source || 'pipeline_eastmoney',
+      indices: enriched,
+    };
+
+    fs.writeFileSync(
+      path.join(snapDir, 'market_snapshot_latest.json'),
+      JSON.stringify(snapshot, null, 2),
+      'utf8'
+    );
+  } catch (_) {
+    // Silent — snapshot write is advisory
+  }
+}
+
 decision_kernel.computeDecision = computeDecision;
 decision_kernel.getLastResult = getLastResult;
 decision_kernel.setCachedResult = setCachedResult;
 decision_kernel._buildAllGateStates = _buildAllGateStates;
 decision_kernel.loadLatestIndices = loadLatestIndices;
+decision_kernel.writeMarketSnapshot = writeMarketSnapshot;
 
 module.exports = decision_kernel;

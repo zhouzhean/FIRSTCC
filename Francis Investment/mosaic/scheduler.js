@@ -1,5 +1,5 @@
 /**
- * scheduler.js — 全自动量化交易调度器 v3.4.4
+ * scheduler.js — 全自动量化交易调度器 v3.4.5
  *
  * A股交易时段状态机，驱动定时 Pipeline + 持仓监控 + 风控执行。
  * 纯 Node.js 内置模块，零外部依赖。
@@ -727,15 +727,16 @@ class Scheduler extends EventEmitter {
                 note = '今天无候选股达标';
               }
 
-              // v3.4.4: Load index freshness from loadLatestIndices for data freshness audit
+              // v3.4.5: Load index freshness with per-index freshnessStatus (no fake-fresh)
               var indexFreshness = 'unknown';
               try {
                 var dk = require('./decision_kernel');
                 var liveIdxs = dk.loadLatestIndices();
                 if (liveIdxs && liveIdxs.length > 0) {
-                  var srcs = liveIdxs.map(function(ix) { return ix.source || 'unknown'; });
-                  var dates = liveIdxs.map(function(ix) { return ix.date || '?'; });
-                  indexFreshness = dates.join(',') + ' src:' + srcs.join(',');
+                  var idxDetails = liveIdxs.map(function(ix) {
+                    return ix.code + ':' + (ix.freshnessStatus || ix.source || '?');
+                  });
+                  indexFreshness = idxDetails.join(', ');
                 }
               } catch (_) {}
 
@@ -746,9 +747,18 @@ class Scheduler extends EventEmitter {
                 buyThreshold = cfg.BUY_THRESHOLD ? cfg.BUY_THRESHOLD.minAbsoluteScore : null;
               } catch (_) {}
 
+              // v3.4.5: dataQuality penalty and strategyHealth sample count
+              var dqPenalty = null;
+              var shSampleCount = null;
+              if (kd && kd.gateStates) {
+                if (kd.gateStates.dataQuality) dqPenalty = kd.gateStates.dataQuality.penalty;
+                if (kd.gateStates.strategyHealth) shSampleCount = kd.gateStates.strategyHealth.totalTrades;
+              }
+
               var auditEntry = {
                 timestamp: new Date().toISOString(),
                 scanType: 'full',
+                version: 'v3.4.5',
                 // Funnel
                 totalStocks: result.totalStocks || 0,
                 candidates: result.candidates || 0,
@@ -772,6 +782,9 @@ class Scheduler extends EventEmitter {
                 marketState: this._state || 'unknown',
                 indexFreshness: indexFreshness,
                 indicesCount: result.indices ? result.indices.length : 0,
+                // v3.4.5: Diagnostic fields for "why not buying" triage
+                dataQualityPenalty: dqPenalty,
+                strategyHealthSampleCount: shSampleCount,
                 note: note,
               };
               _appendDecisionAudit(auditEntry);
@@ -1037,23 +1050,33 @@ class Scheduler extends EventEmitter {
                 midNote = 'mid-scan无候选达标';
               }
 
-              // v3.4.4: Load index freshness + buy threshold
+              // v3.4.5: Load index freshness with per-index freshnessStatus
               var midIndexFreshness = 'unknown';
               try {
                 var midDk = require('./decision_kernel');
                 var midLiveIdxs = midDk.loadLatestIndices();
                 if (midLiveIdxs && midLiveIdxs.length > 0) {
-                  var midSrcs = midLiveIdxs.map(function(ix) { return ix.source || 'unknown'; });
-                  var midDates = midLiveIdxs.map(function(ix) { return ix.date || '?'; });
-                  midIndexFreshness = midDates.join(',') + ' src:' + midSrcs.join(',');
+                  var midIdxDetails = midLiveIdxs.map(function(ix) {
+                    return ix.code + ':' + (ix.freshnessStatus || ix.source || '?');
+                  });
+                  midIndexFreshness = midIdxDetails.join(', ');
                 }
               } catch (_) {}
               var midBuyThreshold = null;
               try { var midCfg = require('./config'); midBuyThreshold = midCfg.BUY_THRESHOLD ? midCfg.BUY_THRESHOLD.minAbsoluteScore : null; } catch (_) {}
 
+              // v3.4.5: dataQuality penalty and strategyHealth sample count
+              var midDqPenalty = null;
+              var midShSampleCount = null;
+              if (midKd && midKd.gateStates) {
+                if (midKd.gateStates.dataQuality) midDqPenalty = midKd.gateStates.dataQuality.penalty;
+                if (midKd.gateStates.strategyHealth) midShSampleCount = midKd.gateStates.strategyHealth.totalTrades;
+              }
+
               _appendDecisionAudit({
                 timestamp: new Date().toISOString(),
                 scanType: 'mid',
+                version: 'v3.4.5',
                 totalStocks: results.length > 0 ? candidates.length : 0,
                 candidates: candidates.length,
                 analyzed: results.length,
@@ -1074,6 +1097,9 @@ class Scheduler extends EventEmitter {
                 marketState: this._state || 'unknown',
                 indexFreshness: midIndexFreshness,
                 indicesCount: indices ? indices.length : 0,
+                // v3.4.5: Diagnostic fields
+                dataQualityPenalty: midDqPenalty,
+                strategyHealthSampleCount: midShSampleCount,
                 note: midNote,
               });
             } catch (_) {}

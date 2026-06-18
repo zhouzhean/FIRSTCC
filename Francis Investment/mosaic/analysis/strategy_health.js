@@ -796,6 +796,7 @@ function computeMasterControlJudgment(context) {
     marketStateHint: marketStateHint,
     reasons: reasons,
     recoveryConditions: uniqueRecovery,
+    totalTrades: tradeStats.totalTrades || 0,
     severityBreakdown: {
       drawdown: ddSeverity,
       sharpe: sharpeSeverity,

@@ -1,5 +1,5 @@
 /**
- * data_quality.js — 数据质量监控面板 v3.0
+ * data_quality.js — 数据质量监控面板 v3.4.5
  *
  * 监控每个数据源的健康状态，告知"系统当前不知道什么"。
  * 纯诊断模块，不修改任何生产数据。
@@ -160,11 +160,55 @@ function checkMarketData() {
 function checkIndexData() {
   var result = { label: '指数数据', key: 'indexData', status: 'OK', score: 100, lastUpdate: null, note: '' };
 
-  // v3.4.4: Check live snapshot FIRST (same source as kernel/cockpit/think-tank)
+  // v3.4.5: Read unified market_snapshot_latest.json (written by pipeline.fetchIndices)
+  // Each index has independent freshnessStatus — no more "fake fresh" packaging.
   var today = new Date().toISOString().slice(0, 10);
   var snapDir = path.join(DATA_DIR, 'simfolio');
+  var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
 
-  // Tier 1: IndexRecorder live file (intraday, during trading hours)
+  // Tier 1: market_snapshot_latest.json (pipeline writes this, most authoritative)
+  if (fs.existsSync(snapshotFile)) {
+    try {
+      var snap = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
+      if (snap.indices && snap.indices.length > 0) {
+        var sstat = fs.statSync(snapshotFile);
+        var ageMin = (Date.now() - sstat.mtimeMs) / 60000;
+        result.indicesAvailable = snap.indices.length;
+        result.lastUpdate = snap.time || new Date(sstat.mtimeMs).toISOString();
+
+        // Check individual freshness
+        var liveCount = 0, staleCount = 0, missingCpCount = 0;
+        for (var si = 0; si < snap.indices.length; si++) {
+          var six = snap.indices[si];
+          if (six.freshnessStatus === 'live') liveCount++;
+          else if (six.freshnessStatus === 'stale_daily') staleCount++;
+          if (six.changePercent == null && six.price != null) missingCpCount++;
+        }
+
+        if (liveCount === snap.indices.length && ageMin < 5) {
+          result.status = 'OK';
+          result.score = 100;
+          result.note = 'Pipeline实时: ' + snap.indices.length + '只指数, ' + Math.round(ageMin) + 'min前, 全部live';
+        } else if (liveCount >= 2 && ageMin < 15) {
+          result.status = 'OK';
+          result.score = 90;
+          result.note = 'Pipeline: ' + liveCount + '/' + snap.indices.length + '只live, ' + Math.round(ageMin) + 'min前';
+          if (missingCpCount > 0) result.note += ', ' + missingCpCount + '只缺涨跌幅';
+        } else if (staleCount > 0) {
+          result.status = 'WARN';
+          result.score = 50;
+          result.note = 'Pipeline快照: ' + staleCount + '/' + snap.indices.length + '只依赖历史日线(stale), ' + Math.round(ageMin) + 'min前 — 非交易时段或数据源异常';
+        } else {
+          result.status = 'WARN';
+          result.score = 60;
+          result.note = '快照缓存: ' + snap.indices.length + '只, ' + Math.round(ageMin) + 'min前 (' + (snap.source || 'pipeline') + ')';
+        }
+        return result;
+      }
+    } catch (_) {}
+  }
+
+  // Tier 2: IndexRecorder live file (intraday, during trading hours, price only)
   var recorderFile = path.join(snapDir, 'index_history_' + today + '.json');
   if (fs.existsSync(recorderFile)) {
     try {
@@ -174,42 +218,19 @@ function checkIndexData() {
         var liveCount = 0;
         if (latest.sh != null) liveCount++;
         if (latest.sz != null) liveCount++;
+        if (latest.cy != null) liveCount++;
         if (latest.bj != null) liveCount++;
         result.indicesAvailable = liveCount;
         result.lastUpdate = today + 'T' + (latest.time || '') + ':00+08:00';
         result.status = 'OK';
-        result.score = 100;
-        result.note = 'IndexRecorder 实时: ' + liveCount + '/3 指数 (' + raw.length + '条记录)，数据源统一';
+        result.score = 85;
+        result.note = 'IndexRecorder: ' + liveCount + '/4 指数 (' + raw.length + '条), 仅价格无涨跌幅 — pipeline快照缺失，使用recorder补充';
         return result;
       }
     } catch (_) {}
   }
 
-  // Tier 2: market_snapshot_latest.json (cached by loadLatestIndices)
-  var snapshotFile = path.join(snapDir, 'market_snapshot_latest.json');
-  if (fs.existsSync(snapshotFile)) {
-    try {
-      var snap = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-      if (snap.date === today && snap.indices && snap.indices.length > 0) {
-        var sstat = fs.statSync(snapshotFile);
-        var ageMin = (Date.now() - sstat.mtimeMs) / 60000;
-        result.indicesAvailable = snap.indices.length;
-        result.lastUpdate = snap.time || new Date(sstat.mtimeMs).toISOString();
-        if (ageMin < 15) {
-          result.status = 'OK';
-          result.score = 95;
-          result.note = '快照缓存: ' + snap.indices.length + '只指数, ' + Math.round(ageMin) + 'min前 (' + (snap.source || 'loadLatestIndices') + ')';
-        } else {
-          result.status = 'WARN';
-          result.score = 60;
-          result.note = '快照过期: ' + Math.round(ageMin) + 'min前 (' + (snap.source || 'loadLatestIndices') + ')';
-        }
-        return result;
-      }
-    } catch (_) {}
-  }
-
-  // Tier 3: Historical daily K-line files (fallback)
+  // Tier 3: Historical daily K-line files (last resort)
   var mhDir = path.join(DATA_DIR, 'market_history', 'indices');
   try {
     if (!fs.existsSync(mhDir)) {
@@ -241,15 +262,15 @@ function checkIndexData() {
     if (available < 2) {
       result.status = 'DOWN';
       result.score = 20;
-      result.note = '仅' + available + '/3个指数有数据（历史日线）';
+      result.note = '仅' + available + '/3个指数有数据（历史日线）— pipeline和recorder均无数据';
     } else if (ageHours > 48) {
       result.status = 'STALE';
       result.score = 30;
-      result.note = '指数数据超过48小时未更新（历史日线）';
+      result.note = '指数数据超过48小时未更新（历史日线）— pipeline和recorder均无数据';
     } else if (ageHours > 6) {
       result.status = 'WARN';
       result.score = 70;
-      result.note = '指数数据非实时（' + Math.round(ageHours * 10) / 10 + '小时前，历史日线）';
+      result.note = '指数数据非实时（' + Math.round(ageHours * 10) / 10 + '小时前，历史日线）— pipeline和recorder均无数据';
     } else {
       result.note = available + '/3个指数数据正常，' + Math.round(ageHours * 10) / 10 + '小时前（历史日线）';
     }

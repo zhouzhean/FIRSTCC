@@ -1,5 +1,5 @@
 /**
- * pipeline.js — Mosaic 量化分析主流程
+ * pipeline.js — Mosaic 量化分析主流程 v3.4.5
  *
  * 步骤：
  *   1. 采集全市场行情 → 筛选候选股票
@@ -139,6 +139,13 @@ class Pipeline extends EventEmitter {
       // === Step 3: Fetch market indices ===
       this._setProgress(45, '正在获取大盘指数...');
       const indices = await marketData.fetchIndices();
+
+      // v3.4.5: Write unified market snapshot for all consumers (kernel, cockpit, data_quality)
+      try {
+        const dk = require('./decision_kernel');
+        dk.writeMarketSnapshot(indices, 'pipeline_eastmoney');
+      } catch (_) {}
+
       const marketDown = indices.length > 0 && (indices[0].changePercent || 0) < -0.3;
 
       // [v3.2] Build market context for regime detection (advance ratio, turnover, volatility)

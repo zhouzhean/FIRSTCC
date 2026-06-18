@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Mosaic Server v3.4.4
+ * Francis Investment · Mosaic Server v3.4.5
  * 一键启动本地服务器 — 纯 Node.js，零外部依赖。
  * 内置量化分析 Pipeline + 全自动交易调度器。
  */
@@ -49,16 +49,16 @@ const SCAN_SCHEDULE = [
 ];
 
 function saveLastPipelineResult(result, type) {
-  // v3.4.4: Use shared pipeline_summary module — same as scheduler.
+  // v3.4.5: Use shared pipeline_summary module — same as scheduler.
   // This guarantees pipelineResultsForKernel is always saved,
   // even after manual pipeline runs via the API.
   try {
     var psum = require('./mosaic/pipeline_summary');
     psum.savePipelineSummary(result, type || 'full', new Date().toISOString().slice(0, 10), {
-      version: 'v3.4.4',
+      version: 'v3.4.5',
     });
   } catch (e) {
-    // Fallback: inline save (legacy — same as before v3.4.4)
+    // Fallback: inline save (legacy — same as before v3.4.5)
     try {
       const dir = path.join(DATA_DIR, 'simfolio');
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -382,7 +382,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.4.4',
+    version: '3.4.5',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -723,7 +723,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.4',
+    systemVersion: 'v3.4.5',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -1198,7 +1198,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.4       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.5       ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');

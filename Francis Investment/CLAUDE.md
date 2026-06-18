@@ -1,6 +1,8 @@
-# Francis Investment · A股量化交易系统 v3.4.4
+# Francis Investment · A股量化交易系统 v3.4.5
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
+
+v3.4.5: **Data Bus Unification** — market_snapshot_latest.json 由 pipeline.fetchIndices (Eastmoney) 写入最完整数据(含changePercent/prevClose/high/low/open)，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，历史日线不再伪装成今日快照。IndexRecorder 新增创业板399006。MarketDirection 修复 — changePercent=null 显示 warn 而非 "无数据"。decision_audit 新增 dataQualityPenalty/strategyHealthSampleCount/version 字段。
 
 v3.4.4: **Session Gate + Data Bus** — market session gate 作为第一个硬阻断 (closed/post_market/pre_market/lunch_break禁止买入)，数据总线统一 (loadLatestIndices三层优先级: IndexRecorder→快照→历史日线, data_quality同源检查)，pipeline summary 提取共享函数 (scheduler+server同路径保存pipelineResultsForKernel)，decision audit 增加 marketState/indexFreshness/buyThreshold 字段，strategy health 样本门控 (<8笔降级为CAUTIOUS)。
 
@@ -10,10 +12,10 @@ v3.4.3: **Kernel Closure** — 所有执行链路100%经过 decision_kernel (05f
 
 ```
 mosaic_server.js (HTTP 主服务器, 98+ API)
-├── mosaic/decision_kernel.js    # ★ v3.4.4 统一决策内核 — 6 hard blockers + session gate
-├── mosaic/pipeline_summary.js   # ★ v3.4.4 Pipeline持久化共享函数 (scheduler+server同源)
-├── mosaic/scheduler.js          # 状态机调度器 (~1900行) — 全自动
-├── mosaic/pipeline.js           # 主流程编排 (519行, EventEmitter+SSE)
+├── mosaic/decision_kernel.js    # ★ v3.4.5 统一决策内核 — 6 hard blockers + session gate + writeMarketSnapshot
+├── mosaic/pipeline_summary.js   # ★ v3.4.5 Pipeline持久化共享函数 (scheduler+server同源)
+├── mosaic/scheduler.js          # 状态机调度器 (~1950行) — 全自动
+├── mosaic/pipeline.js           # 主流程编排 (~530行, EventEmitter+SSE, 写入market_snapshot)
 ├── mosaic/simfolio.js           # 模拟交易引擎 (~2550行) — 服从kernel裁决
 ├── mosaic/config.js             # ★ 唯一配置入口 (507行)
 

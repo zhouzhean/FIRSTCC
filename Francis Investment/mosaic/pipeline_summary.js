@@ -1,5 +1,5 @@
 /**
- * Francis Investment · Pipeline Summary Saver v3.4.4
+ * Francis Investment · Pipeline Summary Saver v3.4.5
  *
  * Single shared function for persisting pipeline results. Called by both:
  *   1. scheduler._saveLastPipelineResult() — automated scans
@@ -113,7 +113,7 @@ function savePipelineSummary(result, type, dateStr, opts) {
       type: type || 'full',
       date: today,
       time: new Date().toISOString(),
-      version: opts.version || 'v3.4.4',
+      version: opts.version || 'v3.4.5',
       totalStocks: result.totalStocks || 0,
       candidates: result.candidates || 0,
       analyzed: result.analyzed || 0,

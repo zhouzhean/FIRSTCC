@@ -1,4 +1,4 @@
-// index_recorder.js — Records 上证/深证/北证50 intraday prices every 60s during trading hours
+// index_recorder.js v3.4.5 — Records 上证/深证/创业板/北证50 intraday prices every 60s during trading hours
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -6,7 +6,7 @@ const config = require('../config');
 
 const DATA_DIR = path.join(config.DATA_DIR, 'simfolio');
 
-const INDEX_URL = 'https://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_bj899050';
+const INDEX_URL = 'https://hq.sinajs.cn/list=s_sh000001,s_sz399001,s_sz399006,s_bj899050';
 const RECORD_INTERVAL_MS = 60000;
 
 class IndexRecorder {
@@ -56,8 +56,8 @@ class IndexRecorder {
       res.on('end', () => {
         try {
           const prices = this._parseSinaIndices(body);
-          if (prices.sh === null && prices.sz === null && prices.bj === null) return;
-          const point = { time: timeStr, sh: prices.sh, sz: prices.sz, bj: prices.bj };
+          if (prices.sh === null && prices.sz === null && prices.cy === null && prices.bj === null) return;
+          const point = { time: timeStr, sh: prices.sh, sz: prices.sz, cy: prices.cy, bj: prices.bj };
           this._appendToFile(dateStr, point);
         } catch (e) { /* silent */ }
       });
@@ -65,7 +65,7 @@ class IndexRecorder {
   }
 
   _parseSinaIndices(raw) {
-    const result = { sh: null, sz: null, bj: null };
+    const result = { sh: null, sz: null, cy: null, bj: null };
     const lines = raw.split('\n');
     for (const line of lines) {
       const m = line.match(/"([^"]*)"/);
@@ -75,6 +75,7 @@ class IndexRecorder {
       if (isNaN(price)) continue;
       if (line.indexOf('sh000001') >= 0) result.sh = price;
       else if (line.indexOf('sz399001') >= 0) result.sz = price;
+      else if (line.indexOf('sz399006') >= 0) result.cy = price;
       else if (line.indexOf('bj899050') >= 0) result.bj = price;
     }
     return result;
