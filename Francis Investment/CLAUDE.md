@@ -1,6 +1,22 @@
-# Francis Investment · A股量化交易系统 v3.4.9.1
+# Francis Investment · A股量化交易系统 v3.4.9.4.1
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+## v3.4.9.4.1: Evidence Cohort Production Acceptance — 9 files changed.
+- **P0-1 Manifest 路径统一**: prediction_ledger dataDir 统一为 report-engine/data 根目录。simfolio/mosaic_server/verification_runner 调用 readRunManifest/writeRunManifest 都传 DATA_ROOT，不传 data/simfolio。Manifest 文件落在 data 根而非 simfolio 子目录。
+- **P0-2 Canonical 由 Scheduler 任务身份决定**: Scheduler 启动 full pipeline 时从 reason 提取 scheduledSlot（如 `scheduled_09:30`→`'09:30'`）。makeTradingDecisions 不再用 `new Date()` 判断 canonical。只有 `scanType='full'` + `scheduledSlot='09:30'` 创建 manifest；10:00/11:00/13:00 full + 全部 mid 都是 intraday。
+- **P0-3 六层资格接入真实决策**: 每只候选股真实调用 `expectedReturn.meetsEvidenceThreshold(prediction, dataQualityPenalty)`，写入 executionCandidateEligible。`globalTradePermission = kernelDecision.canBuy && kernelDecision.maxBuysPerDay > 0`（非仅 verdict 字符串）。向后兼容旧调用方式（字符串 verdict）。
+- **P0-4 Cockpit/API 只统计有效当前 cohort**: 旧 250 条 `invalid_schema_v3492` 单独显示为 `quarantinedCount`，不计入 active cohort 的任何字段。`actualBought` 从 `decision_events_YYYY-MM-DD.jsonl` 按 predictionId 汇总（非 prediction ledger 的 wasBought 字段）。API 返回 `canonicalCohortCount`/`intradayCount`/`quarantinedCount` 三个独立数字。
+- **P0-5 测试与部署身份**: 测试开始前立即计算真实 data hash，全部结束后再计算一次——hash 一致。使用固定 fixture（无 Math.random）。真实测试覆盖 no-index/BLOCK/REDUCE/ALLOW/canonical-09:30/noncanonical-10:00。云端无 .git 时通过 `deploy_manifest.json` 记录 commit SHA + 每文件 hash。
+- **Test**: v3.4.9.4 → 58 passed; v3.4.9.4.1 → 66 passed (local + cloud both).
+
+## v3.4.9.4: Evidence Cohort Integrity — 8 files changed, 2 new modules.
+- **research_cohort.js (NEW)**: Pure module — normalizeResearchFeatureSnapshot, computeResearchEligibility (pure), computeAllEligibility (6-field), buildResearchSnapshot (dedup by code, sort E[R] DESC→compositeScore DESC→code ASC, top 50), hashCandidateSet (DJB2), _hashNormalizedSnapshot
+- **prediction_ledger.js (NEW)**: I/O module — buildLedgerEntry (full v3.4.9.4 fields: predictionId=`<runId>_<code>_T+3`, 6-field eligibility, data lineage), writeLedgerFile (idempotency + input drift detection), writeRunManifest/readRunManifest (daily_research_manifest), writeDecisionEvent (immutable decision_event JSONL)
+- **Eligibility semantics**: schemaValid → predictionValid → researchEligible → executionCandidateEligible → globalTradePermission → executionEligible。wasBought 不在 prediction ledger 中改写——追加不可变 decision_event。
+- **Canonical cohort**: 仅 09:30 full scan 是 canonical。daily_research_manifest_YYYY-MM-DD.json 跟踪 started→completed。Top-50 dedup by code（持最高 E[R]）。verification_runner 按 manifest.canonicalRunId 过滤 ledger entries。_countIndependentTradingDays 从 manifests 计数。
+- **Model lineage**: modelVersionId 从 model_registry.getBaselineParams().versionId（非 config.version）。codeVersion/buildCommit/parameterSetHash/featureSchemaVersion/featureCoverage/dataCutoffAt/quoteSource/quoteAsOf 全量记入。
+- **UI**: Cockpit "Research Cohort Integrity" 面板（Panel 10）显示 canonical runId/status/6-field counts/feature coverage/quarantined count。
 
 v3.4.9.1: **真实生产闭环P0修复** — 6 files changed.
 - **P0.1 统一研究快照**: buildResearchSnapshot()纯函数(Top-50按E[R]排序)在所有闸门之前调用, captureResearchSnapshot()每runId仅写一次, 删除了5处散落的_appendPredictionLedger调用(修复rankedTop50作用域bug→无账本落盘)
