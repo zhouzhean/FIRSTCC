@@ -724,7 +724,7 @@ function _aggregateDailyData() {
   }
 
   // Read last pipeline result
-  var lpPath = path.join(SIMFOLIO_DIR, 'last_pipeline_result.json');
+  var lpPath = path.join(SIMFOLIO_DIR, 'last_pipeline_result.legacy_untrusted.json');
   if (fs.existsSync(lpPath)) {
     try { aggregated.lastPipeline = JSON.parse(fs.readFileSync(lpPath, 'utf8')); } catch (e) {}
   }
@@ -813,7 +813,7 @@ function _aggregateAllData() {
   }
 
   // Last pipeline
-  var lpPath = path.join(SIMFOLIO_DIR, 'last_pipeline_result.json');
+  var lpPath = path.join(SIMFOLIO_DIR, 'last_pipeline_result.legacy_untrusted.json');
   if (fs.existsSync(lpPath)) {
     try { aggregated.lastPipeline = JSON.parse(fs.readFileSync(lpPath, 'utf8')); } catch (e) {}
   }

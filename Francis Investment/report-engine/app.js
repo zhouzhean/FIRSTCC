@@ -1190,7 +1190,7 @@ function renderQuantAnalysisReport(anal, date) {
   if (anal.factorSummary && anal.factorSummary.topSignals && anal.factorSummary.topSignals.length > 0) {
     var fs = anal.factorSummary;
     html += '<div style="background:#fff;border-radius:8px;padding:20px;margin-bottom:16px;border:1px solid #e2e5eb;">';
-    html += '<h3 style="font-size:14px;margin:0 0 12px;"> 全市场因子触发汇总</h3>';
+    html += '<h3 style="font-size:14px;margin:0 0 12px;"> 低价(≤20元)非创业板A股子策略因子触发汇总</h3>';
     html += '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;">';
     for (var si = 0; si < fs.topSignals.length; si++) {
       var sig = fs.topSignals[si];

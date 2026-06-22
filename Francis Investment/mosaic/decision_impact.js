@@ -85,6 +85,14 @@ function forThinkTankDefense(opts) {
       description: 'ThinkTankDefense 执行并提供了防御建议',
     };
   }
+  // v3.4.6: When score=0 but executed, explicitly say "已执行，无影响"
+  if (o.score !== undefined && o.score === 0) {
+    return {
+      impact: 'active_monitoring',
+      label: '已执行，无影响',
+      description: 'ThinkTankDefense 已执行，评分为0，对决策无影响',
+    };
+  }
   return {
     impact: 'active_monitoring',
     label: '监控中',
@@ -198,10 +206,17 @@ function classifyCausal(opts) {
       : null,
   };
 
-  // Downgrade to monitoring if module executed but produced zero delta
-  if (result.impact === 'active_effective' && result.decisionDelta === 0 && opts.directlyAffected === true) {
+  // v3.4.6: Explicitly set active_effective when delta != 0
+  if (result.decisionDelta !== 0 && opts.directlyAffected === true) {
+    result.impact = 'active_effective';
+    result.label = '有效影响';
+    result.description = '模块执行且改变决策（delta=' + result.decisionDelta + '）';
+  }
+
+  // Downgrade to monitoring if executed but delta is zero
+  if (result.impact === 'active_effective' && result.decisionDelta === 0) {
     result.impact = 'active_monitoring';
-    result.label = '无影响';
+    result.label = '已执行，无影响';
     result.description = '模块执行但输出值未改变决策（delta=0）';
   }
 

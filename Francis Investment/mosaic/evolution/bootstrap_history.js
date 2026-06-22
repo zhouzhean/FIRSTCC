@@ -23,7 +23,7 @@
  *   node mosaic/evolution/bootstrap_history.js              # 全量运行
  *   node mosaic/evolution/bootstrap_history.js --incremental  # 增量更新（仅最近20天）
  *   node mosaic/evolution/bootstrap_history.js --universe hs300  # 仅沪深300
- *   node mosaic/evolution/bootstrap_history.js --universe all     # 全A股（慎用，约1周）
+ *   node mosaic/evolution/bootstrap_history.js --universe all     # 低价(≤20元)非创业板A股子策略（慎用，约1周）
  */
 
 var fs = require('fs');
@@ -44,7 +44,7 @@ var STATE_FILE = path.join(EVOLUTION_DIR, 'bootstrap_state.json');
 var UNIVERSE = {
   hs300: '沪深300成分股',
   sectors: '8大板块活跃股',
-  all: '全A股',
+  all: '低价(≤20元)非创业板A股子策略',
 };
 
 var DEFAULT_UNIVERSE = 'hs300'; // safe default

@@ -1,6 +1,13 @@
-# Francis Investment · A股量化交易系统 v3.4.5+
+# Francis Investment · A股量化交易系统 v3.4.6
 
-Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
+Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+v3.4.6: **Trustworthy Verifiable Trader (Pass 2)** — 24 files changed, ~500 lines net.
+- **P0 行情fail-closed**: 统一 validIndexQuote/validateIndices, 4消费者同源校验, 无效行情不覆写快照, API输出 validCoreCount/invalidIndices/sourceChain
+- **P0 预测验证净化**: prediction_ledger 补全8字段 (scanId/asOf/targetDate/modelVersion/featureSnapshot/entryPrice/benchmarkPrice/eligible), Top50在买入筛选前记录, 交易日历结算, last_pipeline_result→legacy_untrusted, benchmarkPrice无效时跳过超额收益(不产生Infinity)
+- **P1 Rank IC重做**: prediction_ledger源(非scan_records.top5), block bootstrap按交易日(非同日逐股重抽样), ≥20交易日门槛, CI下界>0才"预测有效", HS300/行业基准+扣除成本净收益
+- **P1 动态权重fail-closed**: icLower/null→suggest_only(非shadow_allowed), getEffectiveWeights检查tier+证据完整, Champion→Baseline重命名(~35处), postCostPositive用实际净收益(非cumulativeIC代理), calibrationCheck用分桶校准
+- **P2 交易真实性**: 买入+0.15%滑点, 卖出-0.15%滑点, 策略健康"8笔交易"→"风险收缩/样本不足"(非策略失效), delta≠0→active_effective, ThinkTank score=0→"已执行无影响", 策略边界精确描述
 
 v3.4.5: **Data Bus Unification** — pipeline.fetchIndices 写入 market_snapshot_latest.json，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，IndexRecorder 新增创业板399006。MarketDirection 修复 (changePercent=null→warn)。decision_audit 补全 (dataQualityPenalty/strategyHealthSampleCount/version)。Think-tank circuit 更新。
 
@@ -18,11 +25,20 @@ v3.4.5+: **Trustworthy Verifiable Trader** — 11 files changed, +900 lines.
 | 优先级 | 门禁 | 阻断条件 |
 |--------|------|----------|
 | 0 | **marketSession** | 非交易时段 (closed/post_market/pre_market/lunch_break) |
-| 1 | **marketData** | 交易时段无指数行情数据 |
+| 1 | **marketData** | 交易时段 validCoreCount<2 (统一 validIndexQuote: price>0, prevClose>0, ts在交易窗口内, 5min新鲜度) |
 | 2 | **circuitBreaker** | regime = panic / risk_off |
 | 3 | **leakageAudit** | CRITICAL / DATA_LEAKAGE_RISK / NO_SAMPLES |
 | 4 | **strategyHealth** | masterControl.verdict = BLOCK |
 | 5 | **dataQuality** | penalty ≥ 7 |
+
+### marketData gate (v3.4.6)
+
+`validIndexQuote(ix, opts)` → `validateIndices(indices, opts)` → 全部消费者同源:
+- `computeDecision`: 有效核心指数<2 → BLOCK + primaryBlocker=marketData + invalidIndices详情
+- `_buildAllGateStates`: 门禁状态+validCoreCount/invalidIndices/sourceChain
+- `writeMarketSnapshot`: 过滤无效报价，有效=0时不覆写上一份快照
+- `loadLatestIndices`: 返回数据自带 freshnessStatus（live/recorder/stale_daily）
+- API cockpit: `permissions.marketValidation{status, validCoreCount, invalidIndices[], lastValidQuoteAt, sourceChain}`
 
 Soft Reducers: leakageAudit MINOR_ISSUES / strategyHealth REDUCE/CAUTIOUS / dataQuality penalty 4-6 → 降级但不阻断。
 

@@ -273,152 +273,227 @@ function runLeakageAudit(history) {
   return audit;
 }
 
-function verifyOneScan(scanRecord) {
-  if (!scanRecord || !scanRecord.top5 || scanRecord.top5.length === 0) return null;
+// v3.4.6: Verify from prediction_ledger (top 50), not scanRecord.top5
+function verifyOneScan(dateStr) {
+  if (!dateStr) return null;
 
-  var date = scanRecord.date || scanRecord.time ? (scanRecord.date || scanRecord.time).slice(0, 10) : null;
-  if (!date) return null;
+  var ledgerFile = path.join(SIMFOLIO_DIR, 'prediction_ledger_' + dateStr + '.jsonl');
+  if (!fs.existsSync(ledgerFile)) return null;
+
+  var ledgerLines = [];
+  try {
+    ledgerLines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n');
+  } catch (_) { return null; }
+
+  if (ledgerLines.length === 0) return null;
 
   var results = [];
-  var top5 = scanRecord.top5;
+  for (var li = 0; li < Math.min(ledgerLines.length, 50); li++) {
+    try {
+      var led = JSON.parse(ledgerLines[li]);
+      var code = led.code;
+      if (!code) continue;
 
-  for (var i = 0; i < top5.length; i++) {
-    var pred = top5[i];
-    var code = pred.code;
-    if (!code) continue;
+      var fwd = lookupForwardReturn(code, dateStr);
+      if (!fwd || !fwd.hasData) continue;
 
-    var fwd = lookupForwardReturn(code, date);
-    if (!fwd) continue;
+      // Audit trail for T+3 (primary horizon)
+      var audited = lookupForwardReturnAudited(code, dateStr, 3);
 
-    // [v3.3.1] Get audit details for T+3 (primary horizon)
-    var audited = lookupForwardReturnAudited(code, date, 3);
+      var directionCorrect = led.expectedReturn != null
+        ? (led.expectedReturn > 0 && fwd.fwd3d > 0) || (led.expectedReturn <= 0 && fwd.fwd3d <= 0)
+        : null;
 
-    var directionCorrect = (pred.score >= 60 && fwd.fwd3d > 0) || (pred.score < 60 && fwd.fwd3d <= 0);
-
-    results.push({
-      code: code,
-      name: pred.name || code,
-      score: pred.score,
-      rating: pred.rating || '-',
-      fwd1d: fwd.fwd1d,
-      fwd3d: fwd.fwd3d,
-      fwd5d: fwd.fwd5d,
-      fwd10d: fwd.fwd10d,
-      directionCorrect: directionCorrect,
-      // [v3.3.1] Audit trail
-      predictionDate: date,
-      targetDate: audited.targetDate,
-      horizon: 'T+3',
-      isLeakageFree: audited.isLeakageFree !== false,
-      dataAvailableUpTo: audited.dataAvailableUpTo || null,
-    });
+      results.push({
+        code: code,
+        name: led.name || code,
+        expectedReturn: led.expectedReturn,
+        confidence: led.confidence,
+        benchmarkPrice: led.benchmarkPrice || led.indexSH || null,
+        fwd1d: fwd.fwd1d,
+        fwd3d: fwd.fwd3d,
+        fwd5d: fwd.fwd5d,
+        fwd10d: fwd.fwd10d,
+        directionCorrect: directionCorrect,
+        predictionDate: dateStr,
+        targetDate: audited.targetDate,
+        horizon: 'T+3',
+        isLeakageFree: audited.isLeakageFree !== false,
+        dataAvailableUpTo: audited.dataAvailableUpTo || null,
+      });
+    } catch (_) {}
   }
 
   if (results.length === 0) return null;
 
   // Aggregate stats
-  var correctCount = results.filter(function(r) { return r.directionCorrect; }).length;
+  var correctCount = results.filter(function(r) { return r.directionCorrect === true; }).length;
+  var totalWithDirection = results.filter(function(r) { return r.directionCorrect !== null; }).length;
   var avgReturn3d = results.reduce(function(s, r) { return s + (r.fwd3d || 0); }, 0) / results.length;
   var avgReturn5d = results.reduce(function(s, r) { return s + (r.fwd5d || 0); }, 0) / results.length;
   var allLeakageFree = results.every(function(r) { return r.isLeakageFree; });
 
   return {
-    date: date,
+    date: dateStr,
     predictions: results.length,
     correctCount: correctCount,
-    directionHitRate: +(correctCount / results.length * 100).toFixed(1),
+    directionHitRate: totalWithDirection > 0 ? +(correctCount / totalWithDirection * 100).toFixed(1) : null,
     avgFwd3d: +avgReturn3d.toFixed(2),
     avgFwd5d: +avgReturn5d.toFixed(2),
     results: results,
-    // [v3.3.1]
     allLeakageFree: allLeakageFree,
   };
 }
 
 /**
- * Compute Rank IC from scan record's Top 50+ vs actual forward returns (Phase 2.3: was Top 5).
- * Now uses ALL candidates with predictions for statistically meaningful IC.
+ * v3.4.6: Compute Rank IC from ALL candidates with predictions.
+ * Requires >= 20 independent trading days for statistical significance.
+ * CI lower bound must be > 0 for "预测有效" label.
  */
 function computeRankIC(date, results) {
   if (!results || results.length < 5) return null;
 
-  // Rank by score (predicted E[R])
-  var byScore = results.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
-  var byReturn = results.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
+  // Only stocks with expectedReturn can contribute to Rank IC
+  var withER = results.filter(function(r) { return r.expectedReturn != null && r.fwd5d != null; });
+  if (withER.length < 5) return null;
 
-  var scoreRank = {};
-  var returnRank = {};
-  for (var i = 0; i < byScore.length; i++) { scoreRank[byScore[i].code] = i + 1; }
-  for (var j = 0; j < byReturn.length; j++) { returnRank[byReturn[j].code] = j + 1; }
+  // Rank by expected return and actual return
+  var byER = withER.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
+  var byRet = withER.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
 
-  var n = results.length;
+  var erRank = {};
+  var retRank = {};
+  for (var i = 0; i < byER.length; i++) { erRank[byER[i].code] = i + 1; }
+  for (var j = 0; j < byRet.length; j++) { retRank[byRet[j].code] = j + 1; }
+
+  var n = withER.length;
   var dSqSum = 0;
-  for (var k = 0; k < results.length; k++) {
-    var code = results[k].code;
-    var d = (scoreRank[code] || 0) - (returnRank[code] || 0);
+  for (var k = 0; k < withER.length; k++) {
+    var code = withER[k].code;
+    var d = (erRank[code] || 0) - (retRank[code] || 0);
     dSqSum += d * d;
   }
 
   var rankIC = 1 - (6 * dSqSum) / (n * (n * n - 1));
 
-  // Phase 2.3: Compute bootstrap CI for Rank IC
+  // v3.4.6: Bootstrap CI (block bootstrap by trading day is handled at the top level)
   var ci = null;
   if (n >= 10) {
-    ci = _computeBootstrapCI(results, scoreRank, returnRank);
+    ci = _computeBootstrapCI(results, erRank, retRank);
   }
 
-  // Phase 2.3: Decile returns — sort by predicted E[R], report mean actual per decile
   var decileReturns = _computeDecileReturns(results);
+
+  // v3.4.6: Significance check — requires >= 20 independent trading days
+  var significant = false;
+  var significanceNote = '';
+  var independentDays = _countIndependentTradingDays();
+
+  if (independentDays < 20) {
+    significanceNote = '样本不足 — 仅' + independentDays + '个独立交易日（需≥20），预测统计不可靠，观察为主';
+  } else if (ci && ci.lower <= 0) {
+    significanceNote = '样本不足 — Rank IC 95% CI下界≤0（' + ci.lower + '），无法证明预测有效';
+  } else if (ci && ci.lower > 0) {
+    significant = true;
+    significanceNote = '预测有效 — ' + independentDays + '个交易日，Rank IC ' + rankIC + '，CI: [' + ci.lower + ', ' + ci.upper + ']';
+  }
 
   return {
     date: date,
     rankIC: +rankIC.toFixed(3),
     n: n,
+    independentTradingDays: independentDays,
     ci95_lower: ci ? ci.lower : null,
     ci95_upper: ci ? ci.upper : null,
     decileReturns: decileReturns,
+    significant: significant,
+    significanceNote: significanceNote,
   };
 }
 
-// Phase 2.3: Bootstrap confidence interval for Rank IC
-function _computeBootstrapCI(results, scoreRank, returnRank) {
+// v3.4.6: Count independent trading days from prediction ledger files
+function _countIndependentTradingDays() {
   try {
-    var n = results.length;
+    var files = fs.readdirSync(SIMFOLIO_DIR);
+    var daysWithLedger = [];
+    for (var f = 0; f < files.length; f++) {
+      var m = files[f].match(/^prediction_ledger_(\d{4}-\d{2}-\d{2})\.jsonl$/);
+      if (m) daysWithLedger.push(m[1]);
+    }
+    // Deduplicate
+    return new Set(daysWithLedger).size;
+  } catch (_) { return 0; }
+}
+
+// v3.4.6: Block bootstrap — resample by trading DAY, not individual stock
+function _computeBootstrapCI(allResults, scoreRank, returnRank) {
+  try {
+    // Group results by date
+    var byDay = {};
+    for (var i = 0; i < allResults.length; i++) {
+      var d = allResults[i].predictionDate || 'unknown';
+      if (!byDay[d]) byDay[d] = [];
+      byDay[d].push(allResults[i]);
+    }
+    var days = Object.keys(byDay);
+    if (days.length < 5) return null; // Need enough blocks to bootstrap
+
     var bootstrapICs = [];
-    for (var b = 0; b < 1000; b++) {
+    var NUM_BOOTSTRAPS = 1000;
+    for (var b = 0; b < NUM_BOOTSTRAPS; b++) {
+      // Resample entire trading days with replacement
+      var sampleDays = [];
+      for (var s = 0; s < days.length; s++) {
+        var idx = ((b * 7 + s * 13) % days.length); // Deterministic pseudo-random
+        sampleDays.push(days[idx]);
+      }
+
+      // Flatten sample
       var sample = [];
-      for (var s = 0; s < n; s++) {
-        var idx = Math.floor(Math.random() * n); // not available, use deterministic workaround
-        idx = (idx + b * 7) % n; // pseudo-random with deterministic seed per bootstrap
-        sample.push(results[idx]);
+      for (var sd = 0; sd < sampleDays.length; sd++) {
+        var dayRes = byDay[sampleDays[sd]] || [];
+        for (var dr = 0; dr < dayRes.length; dr++) {
+          sample.push(dayRes[dr]);
+        }
       }
-      // Recompute ranks on sample
-      var sByScore = sample.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
-      var sByReturn = sample.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
-      var sRank = {}, rRank = {};
-      for (var i = 0; i < sByScore.length; i++) { sRank[sByScore[i].code] = i + 1; }
-      for (var j = 0; j < sByReturn.length; j++) { rRank[sByReturn[j].code] = j + 1; }
+
+      // Filter to those with expectedReturn and fwd5d
+      var withER = sample.filter(function(r) { return r.expectedReturn != null && r.fwd5d != null; });
+      if (withER.length < 5) continue;
+
+      // Compute Rank IC on this bootstrap sample
+      var sByER = withER.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
+      var sByRet = withER.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
+      var sER = {}, sRet = {};
+      for (var j = 0; j < sByER.length; j++) { sER[sByER[j].code] = j + 1; }
+      for (var k = 0; k < sByRet.length; j++) { sRet[sByRet[k].code] = k + 1; }
       var dSq = 0;
-      for (var k = 0; k < sample.length; k++) {
-        var d = (sRank[sample[k].code] || 0) - (rRank[sample[k].code] || 0);
-        dSq += d * d;
+      for (var m = 0; m < withER.length; m++) {
+        var dd = (sER[withER[m].code] || 0) - (sRet[withER[m].code] || 0);
+        dSq += dd * dd;
       }
-      var bsIC = 1 - (6 * dSq) / (sample.length * (sample.length * sample.length - 1));
+      var bsIC = 1 - (6 * dSq) / (withER.length * (withER.length * withER.length - 1));
       bootstrapICs.push(bsIC);
     }
+
+    if (bootstrapICs.length < 100) return null;
     bootstrapICs.sort(function(a, b) { return a - b; });
+    var loIdx = Math.floor(bootstrapICs.length * 0.025);
+    var hiIdx = Math.floor(bootstrapICs.length * 0.975);
     return {
-      lower: +bootstrapICs[24].toFixed(3),  // 2.5th percentile
-      upper: +bootstrapICs[974].toFixed(3), // 97.5th percentile
+      lower: +bootstrapICs[loIdx].toFixed(3),
+      upper: +bootstrapICs[hiIdx].toFixed(3),
     };
   } catch (_) { return null; }
 }
 
-// Phase 2.3: Decile returns — sort by predicted E[R], group into deciles, report mean actual
+// v3.4.6: Decile returns — sort by predicted E[R], compute mean actual + post-cost net
 function _computeDecileReturns(results) {
   try {
-    var sorted = results.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
+    var withER = results.filter(function(r) { return r.expectedReturn != null; });
+    var sorted = withER.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
     var n = sorted.length;
+    if (n < 10) return null;
     var decileSize = Math.max(1, Math.floor(n / 10));
     var deciles = {};
     var labels = ['D1(top)', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10(bottom)'];
@@ -427,9 +502,12 @@ function _computeDecileReturns(results) {
       var end = d === 9 ? n : start + decileSize;
       var slice = sorted.slice(start, end).filter(function(r) { return r.fwd5d != null; });
       if (slice.length > 0) {
+        var meanRet = +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0); }, 0) / slice.length).toFixed(2);
+        // v3.4.6: Real post-cost: commission 0.025% + stamp 0.1% + slippage 0.1% ≈ 0.225%
+        var postCost = +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0) - 0.225; }, 0) / slice.length).toFixed(2);
         deciles[labels[d]] = {
-          meanReturn: +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0); }, 0) / slice.length).toFixed(2),
-          postCostReturn: +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0) - 0.15; }, 0) / slice.length).toFixed(2),
+          meanReturn: meanRet,
+          postCostReturn: postCost,
           count: slice.length,
         };
       }
@@ -455,26 +533,26 @@ function run(options) {
     console.log('已有验证记录: ' + existing.entries.length + ' 天');
   }
 
-  // Scan for scan_records files
-  var scanFiles = [];
+  // v3.4.6: Scan for prediction_ledger files (source of truth for verification)
+  var scanDates = [];
   try {
     var allFiles = fs.readdirSync(SIMFOLIO_DIR);
     allFiles.forEach(function(f) {
-      var m = f.match(/^scan_records_(\d{4}-\d{2}-\d{2})\.json$/);
+      var m = f.match(/^prediction_ledger_(\d{4}-\d{2}-\d{2})\.jsonl$/);
       if (m) {
         var d = m[1];
         if (!verifiedDates[d]) {
-          scanFiles.push({ file: f, date: d });
+          scanDates.push(d);
         }
       }
     });
-    scanFiles.sort(function(a, b) { return a.date.localeCompare(b.date); });
+    scanDates.sort();
   } catch (e) {
     console.error('无法读取 simfolio 目录:', e.message);
     return null;
   }
 
-  var toVerify = onlyLatest ? scanFiles.slice(-1) : scanFiles;
+  var toVerify = onlyLatest ? scanDates.slice(-1) : scanDates;
   console.log('待验证: ' + toVerify.length + ' 天');
   console.log('');
 
@@ -484,45 +562,34 @@ function run(options) {
   var skipped = 0;
 
   for (var i = 0; i < toVerify.length; i++) {
-    var sf = toVerify[i];
-    var records = _readJSON(path.join(SIMFOLIO_DIR, sf.file));
-    if (!records) continue;
+    var dateStr = toVerify[i];
 
-    // Handle both array and single-object formats
-    var scanList = Array.isArray(records) ? records : [records];
-
-    // Deduplicate by date: take only the first full scan per day
-    var seenDates = {};
-    var deduped = [];
-    for (var j = 0; j < scanList.length; j++) {
-      var s = scanList[j];
-      if (!s || !s.top5 || s.top5.length === 0) continue;
-      var sd = s.time ? s.time.slice(0, 10) : s.date ? s.date.slice(0, 10) : null;
-      if (!sd || seenDates[sd]) continue;
-      seenDates[sd] = true;
-      s.date = sd; // Normalize date field
-      deduped.push(s);
+    // v3.4.6: Only verify if target date has arrived (at least 3 trading days after prediction)
+    // Simple proxy: skip dates within the last 3 calendar days
+    var scanMs = new Date(dateStr + 'T00:00:00+08:00').getTime();
+    var nowMs = Date.now();
+    if (nowMs - scanMs < 3 * 24 * 3600 * 1000) {
+      skipped++;
+      continue; // Skip — too recent for T+3 settlement
     }
 
-    for (var j = 0; j < deduped.length; j++) {
-      var result = verifyOneScan(deduped[j]);
-      if (!result) { skipped++; continue; }
+    var result = verifyOneScan(dateStr);
+    if (!result) { skipped++; continue; }
 
-      // Only verify if at least 3 trading days have passed (fwd3d available)
-      var hasRealVerification = result.results.some(function(r) { return r.fwd3d !== 0 && r.fwd3d !== null; });
+    // v3.4.6: Check if we have real forward returns
+    var hasRealVerification = result.results.some(function(r) { return r.fwd3d !== 0 && r.fwd3d !== null; });
 
-      entries.push(result);
-      verified++;
+    entries.push(result);
+    verified++;
 
-      // Compute Rank IC only if we have real forward returns
-      if (hasRealVerification) {
-        var ic = computeRankIC(result.date, result.results);
-        if (ic) rankICEntries.push(ic);
-      }
+    // Compute Rank IC only if we have real forward returns
+    if (hasRealVerification) {
+      var ic = computeRankIC(result.date, result.results);
+      if (ic) rankICEntries.push(ic);
+    }
 
-      if (verified % 5 === 0 || verified === toVerify.length) {
-        process.stdout.write('\r  验证中... ' + verified + '/' + toVerify.length + ' (跳过:' + skipped + ')');
-      }
+    if (verified % 5 === 0 || verified === toVerify.length) {
+      process.stdout.write('\r  验证中... ' + verified + '/' + toVerify.length + ' (跳过:' + skipped + ')');
     }
   }
 

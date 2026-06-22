@@ -1,5 +1,5 @@
 /**
- * download_klines.js — 批量下载全A股K线数据
+ * download_klines.js — 批量下载低价(≤20元)非创业板A股子策略K线数据
  *
  * 从腾讯 ifzq API 批量下载日K线（前复权）。
  * 跳过已有缓存，5 并发下载。

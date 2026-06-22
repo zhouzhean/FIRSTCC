@@ -345,11 +345,11 @@ header h1 {
 .ic-metric.hr-forward .ic-value { color: #00c853; }
 
 /* ══════ Shadow / Champion ══════ */
-.champion-section, .shadows-section {
+.baseline-section, .shadows-section {
   margin-bottom: 10px;
 }
 
-.champ-card {
+.baseline-card {
   background: rgba(184,148,44,0.06);
   border: 1px solid rgba(184,148,44,0.2);
   border-radius: 4px;

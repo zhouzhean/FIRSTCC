@@ -153,7 +153,11 @@ function savePipelineSummary(result, type, dateStr, opts) {
       }),
     };
 
-    var filePath = path.join(dir, 'last_pipeline_result.json');
+    // v3.4.6: Mark as legacy_untrusted — verification reads from prediction_ledger
+    summary.legacy_untrusted = true;
+    summary._warning = 'This file feeds the OLD verification path. NEW verification reads from prediction_ledger. Keep for cockpit/think-tank operational display only.';
+
+    var filePath = path.join(dir, 'last_pipeline_result.legacy_untrusted.json');
     fs.writeFileSync(filePath, JSON.stringify(summary, null, 2), 'utf8');
 
     // Also append to today's scan records
@@ -168,7 +172,17 @@ function savePipelineSummary(result, type, dateStr, opts) {
       totalStocks: result.totalStocks || 0,
       candidates: result.candidates || 0,
       analyzed: result.analyzed || 0,
+      // v3.4.6: Save top50 with expectedReturn + confidence for verification
       top5: (result.top5 || []).slice(0, 5).map(function(s) { return { code: s.code, name: s.name, score: s.compositeScore || s.score, rating: s.rating }; }),
+      top50: (result.top50 || result.top5 || []).slice(0, 50).map(function(s) {
+        return {
+          code: s.code, name: s.name,
+          score: s.compositeScore || s.score,
+          rating: s.rating,
+          expectedReturn: s.prediction ? s.prediction.expectedReturn : null,
+          confidence: s.prediction ? s.prediction.confidence : null,
+        };
+      }),
       signalCounts: signalCounts,
       avgScore: avgScore,
       maxScore: maxScore,

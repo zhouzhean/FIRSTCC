@@ -2,7 +2,7 @@
  * pipeline.js — Mosaic 量化分析主流程 v3.4.5
  *
  * 步骤：
- *   1. 采集全市场行情 → 筛选候选股票
+ *   1. 采集低价(≤20元)非创业板A股子策略行情 → 筛选候选股票
  *   2. 采集指数数据 → 判断市场方向
  *   3. 对候选股计算隐藏因子 + 综合评分
  *   4. 排序 → 按板块分配 → 生成 TOP5
@@ -127,7 +127,7 @@ class Pipeline extends EventEmitter {
       this._setProgress(5, '正在连接东方财富API...');
 
       // === Step 1: Fetch all stocks ===
-      this._setProgress(10, '正在获取全市场股票数据...');
+      this._setProgress(10, '正在获取低价(≤20元)非创业板A股子策略股票数据...');
       const allStocks = await marketData.fetchAllStocks();
       this._setProgress(25, '已获取 ' + allStocks.length + ' 只股票');
 

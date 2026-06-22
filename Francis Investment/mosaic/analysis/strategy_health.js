@@ -759,10 +759,10 @@ function computeMasterControlJudgment(context) {
   if (totalTradesForSample < MIN_SAMPLE_THRESHOLD && worstVerdict >= 2) {
     var origVerdict = verdictMap[Math.min(3, worstVerdict)];
     worstVerdict = 1;
-    reasons.push('[样本门控] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），原评级' + origVerdict + '降为CAUTIOUS。低样本统计不可靠，观察为主。');
+    reasons.push('[风险收缩/样本不足] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），原评级' + origVerdict + '降为CAUTIOUS。低样本不表示策略失效，只是观察阶段风险收缩，样本积累后可恢复评级。');
     recoveryConditions.push('累计' + MIN_SAMPLE_THRESHOLD + '笔以上交易后再评估');
   } else if (totalTradesForSample < MIN_SAMPLE_THRESHOLD && worstVerdict >= 1) {
-    reasons.push('[样本提示] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），当前评级仅供参考');
+    reasons.push('[样本提示] 仅' + totalTradesForSample + '笔交易（需' + MIN_SAMPLE_THRESHOLD + '笔以上），非策略问题，样本积累后可恢复');
   }
 
   const verdict = verdictMap[Math.min(3, worstVerdict)];

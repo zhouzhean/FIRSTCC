@@ -640,7 +640,7 @@ function checkAutoPause(pf, pipelineResults) {
   // 5. API exceptions (tracked in pipeline events)
   // Simplified: check recent error events
   try {
-    var eventsFile = path.join(SIMFOLIO_DIR, 'last_pipeline_result.json');
+    var eventsFile = path.join(SIMFOLIO_DIR, 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(eventsFile)) {
       var lastResult = JSON.parse(fs.readFileSync(eventsFile, 'utf8'));
       if (lastResult && lastResult.errors && lastResult.errors.length >= (apConfig.triggers.apiExceptions || 3)) {
@@ -728,18 +728,53 @@ function _appendPredictionLedger(candidates, context, scanType) {
     var _plBuildCommit = null;
     try { _plBuildCommit = require('./config').buildCommit; } catch (_) {}
 
+    // v3.4.6: Compute targetDate using trading calendar (T+3 trading days)
+    var _plTargetDate = null;
+    var _plHorizonTradingDays = 3;
+    try {
+      var _plBtDays = require('./evolution/bootstrap_history').generateTradingDays(
+        parseInt(_plToday.slice(0, 4), 10),
+        parseInt(_plToday.slice(0, 4), 10) + 1
+      );
+      if (_plBtDays) {
+        var _plTodayIdx = _plBtDays.indexOf(_plToday);
+        if (_plTodayIdx >= 0 && _plTodayIdx + _plHorizonTradingDays < _plBtDays.length) {
+          _plTargetDate = _plBtDays[_plTodayIdx + _plHorizonTradingDays];
+        }
+      }
+    } catch (_) {}
+
+    // v3.4.6: Feature snapshot hash (simple deterministic hash of factor scores)
+    function _hashFeatures(c) {
+      if (!c || !c.rawScores) return null;
+      try {
+        var keys = Object.keys(c.rawScores).sort();
+        var str = keys.map(function(k) { return k + ':' + (c.rawScores[k] || 0).toFixed(3); }).join('|');
+        var h = 0;
+        for (var i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
+        return String(h);
+      } catch (_) { return null; }
+    }
+
     var topN = Math.min((candidates || []).length, 50);
     for (var _pli = 0; _pli < topN; _pli++) {
       var c = candidates[_pli];
       var predId = _plBaseId + '_' + String(_pli).padStart(3, '0');
       var entry = {
         predictionId: predId,
+        scanId: _plScanIdx,
+        asOf: _plToday,
         timestamp: new Date().toISOString(),
         scanType: scanType || 'unknown',
+        horizonTradingDays: _plHorizonTradingDays,
+        targetDate: _plTargetDate,
+        modelVersion: 'v3.4.6',
         buildCommit: _plBuildCommit,
         code: c.code,
         name: c.name || '',
         price: c.price,
+        entryPrice: c.price || null,
+        featureSnapshot: _hashFeatures(c),
         compositeScore: c.compositeScore || 0,
         rating: c.rating || '--',
         factorScores: c.rawScores || null,
@@ -751,7 +786,9 @@ function _appendPredictionLedger(candidates, context, scanType) {
         marketRegime: (context && context.macroRegime) || null,
         dataFreshness: (context && context.indexFreshness) || 'unknown',
         indexSH: (context && context.indexValues && context.indexValues.sh) || null,
+        benchmarkPrice: (context && context.indexValues && context.indexValues.sh) || null,
         wasBought: (context && context.boughtCodes) ? (context.boughtCodes.indexOf(c.code) >= 0) : false,
+        eligible: (c.prediction && c.prediction.confidence >= 0.60 && c.prediction.predictedDims >= 3) ? true : false,
         dataQualityPenalty: (context && context.dataQualityPenalty) || 0,
         contribDims: (c.prediction && c.prediction.breakdown)
           ? Object.values(c.prediction.breakdown).filter(function(b) { return b && b.available; }).length
@@ -1517,6 +1554,9 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       // Rank by expected return
       const ranked = expectedReturn.rankByExpectedReturn(pipelineResults, predictionContext);
 
+      // v3.4.6: Save top 50 BEFORE any buy screening for the prediction ledger
+      var rankedTop50 = ranked.slice(0, 50);
+
       // Filter and extract
       // Phase 2.4: Dynamic minExpectedReturn — cost + slippage + 2×RMSE from verification
       const minExpectedReturn = expectedReturn.getMinExpectedReturn ?
@@ -1576,7 +1616,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       const checkWindow = dtConfig.checkWindow || 2;
       try {
         const simfolioDir = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
-        const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.json');
+        const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.legacy_untrusted.json');
         if (fs.existsSync(lastResultPath)) {
           const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
           if (lastResult.maxScore != null && lastResult.maxScore < weakTopScore) {
@@ -1813,9 +1853,9 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   } catch (_) { /* model_registry logging is advisory */ }
 
-  // Phase 2.1: Log predictions for the normal path — includes bought/unbought info
+  // Phase 2.1: Log predictions for the normal path — uses Top 50 BEFORE screening, cross-references boughtCodes
   var _plBoughtCodes = executedTrades.filter(function(t) { return t.action === 'buy'; }).map(function(t) { return t.code; });
-  _appendPredictionLedger(buyCandidates, { today: today, scanType: scanType, note: null, macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0, boughtCodes: _plBoughtCodes, indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown', indexValues: { sh: (indices && indices[0]) ? indices[0].price : null } }, scanType);
+  _appendPredictionLedger(rankedTop50, { today: today, scanType: scanType, note: null, macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0, boughtCodes: _plBoughtCodes, indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown', indexValues: { sh: (indices && indices[0]) ? indices[0].price : null } }, scanType);
 
   return {
     decisions: decisions,
@@ -2068,9 +2108,12 @@ function checkBuySignal(stockData, pf, isStrong, combinedMultiplier, macroContex
 // ---- Trade Execution ----
 
 function executeBuy(pf, decision, date) {
-  const amount = decision.shares * decision.price;
-  const fee = amount * config.SIMFOLIO.commissionRate + amount * config.SIMFOLIO.transferFeeRate;
-  const total = amount + fee;
+  // v3.4.6: Apply adverse slippage — buy at next executable price + 0.15% market impact
+  var slippageRate = 0.0015; // 0.15% default buy slippage
+  var effectivePrice = decision.price * (1 + slippageRate);
+  var amount = decision.shares * effectivePrice;
+  var fee = amount * config.SIMFOLIO.commissionRate + amount * config.SIMFOLIO.transferFeeRate;
+  var total = amount + fee;
 
   if (total > pf.cash) return null;
 
@@ -2081,23 +2124,25 @@ function executeBuy(pf, decision, date) {
     code: decision.code,
     name: decision.name,
     shares: decision.shares,
-    avgCost: decision.price,
+    avgCost: effectivePrice,           // v3.4.6: cost basis includes slippage
     currentPrice: decision.price,
-    peakPrice: decision.price,        // 移动止盈：历史最高价
-    trailingStopPrice: null,          // 移动止盈触发价（激活后设置）
+    peakPrice: decision.price,
+    trailingStopPrice: null,
     entryDate: date,
     entryReason: decision.reason,
   });
 
-  const trade = {
+  var trade = {
     date: date,
     time: new Date().toTimeString().slice(0, 8),
     action: 'buy',
     code: decision.code,
     name: decision.name,
     price: decision.price,
+    effectivePrice: +effectivePrice.toFixed(3),  // v3.4.6: slippage-adjusted price
+    slippagePct: slippageRate,
     shares: decision.shares,
-    amount: amount,
+    amount: +amount.toFixed(2),
     fee: Math.round(fee * 100) / 100,
     reason: decision.reason,
     analysisContext: decision.analysisContext || null,
@@ -2107,32 +2152,37 @@ function executeBuy(pf, decision, date) {
 }
 
 function executeSell(pf, decision, date) {
-  const position = pf.positions.find(p => p.code === decision.code);
+  var position = pf.positions.find(function(p) { return p.code === decision.code; });
   if (!position) return null;
 
-  const amount = decision.shares * decision.price;
-  const commission = amount * config.SIMFOLIO.commissionRate;
-  const stampTax = amount * config.SIMFOLIO.stampTaxRate;  // only on sell
-  const transferFee = amount * config.SIMFOLIO.transferFeeRate;
-  const fee = commission + stampTax + transferFee;
+  // v3.4.6: Apply adverse slippage — sell at next executable price - 0.15% market impact
+  var slippageRate = 0.0015; // 0.15% default sell slippage
+  var effectivePrice = decision.price * (1 - slippageRate);
+  var amount = decision.shares * effectivePrice;
+  var commission = amount * config.SIMFOLIO.commissionRate;
+  var stampTax = amount * config.SIMFOLIO.stampTaxRate;
+  var transferFee = amount * config.SIMFOLIO.transferFeeRate;
+  var fee = commission + stampTax + transferFee;
 
   pf.cash += amount - fee;
 
   // Remove position
-  pf.positions = pf.positions.filter(p => p.code !== decision.code);
+  pf.positions = pf.positions.filter(function(p) { return p.code !== decision.code; });
 
-  const pnl = amount - position.shares * position.avgCost - fee;
-  const pnlPct = (pnl / (position.shares * position.avgCost)) * 100;
+  var pnl = amount - position.shares * position.avgCost - fee;
+  var pnlPct = (pnl / (position.shares * position.avgCost)) * 100;
 
-  const trade = {
+  var trade = {
     date: date,
     time: new Date().toTimeString().slice(0, 8),
     action: 'sell',
     code: decision.code,
     name: decision.name,
     price: decision.price,
+    effectivePrice: +effectivePrice.toFixed(3),  // v3.4.6: slippage-adjusted
+    slippagePct: slippageRate,
     shares: decision.shares,
-    amount: amount,
+    amount: +amount.toFixed(2),
     fee: Math.round(fee * 100) / 100,
     pnl: Math.round(pnl * 100) / 100,
     pnlPct: Math.round(pnlPct * 100) / 100,

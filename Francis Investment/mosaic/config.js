@@ -417,8 +417,8 @@ module.exports = {
   // ---- v3.3.0: Shadow Mode + Model Registry ----
   SHADOW_MODE: {
     enabled: true,
-    promotionThreshold: 0.05,                       // Shadow IC 超过 champion 5% → 自动晋升
-    demotionThreshold: -0.10,                       // Champion IC 低于最佳 shadow 10% → 标记审查
+    promotionThreshold: 0.05,                       // Shadow IC 超过 baseline 5% → 自动晋升
+    demotionThreshold: -0.10,                       // Baseline IC 低于最佳 shadow 10% → 标记审查
     shadowLogMaxEntries: 500,                       // Shadow 预测日志最大条目数
     trackSectors: true,                             // 是否跟踪板块级别的 shadow 表现
     minEvaluationDays: 5,                           // Shadow 至少运行 5 天才能晋升
@@ -427,7 +427,7 @@ module.exports = {
     minForwardSamplesPerShadow: 100,                // Per-shadow forward samples (not total)
     minDirectionHitRate: 0.52,                      // >52% direction accuracy required
     requirePostCostPositive: true,                  // Avg return after costs > 0
-    maxDrawdownNotWorse: true,                      // Shadow drawdown <= champion drawdown
+    maxDrawdownNotWorse: true,                      // Shadow drawdown <= baseline drawdown
     requireCalibrationCheck: true,                  // High-conf predictions must be more accurate
   },
 

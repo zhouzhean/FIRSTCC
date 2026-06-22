@@ -206,7 +206,7 @@ function renderAll(data) {
   renderApiHealth(data);
   renderDataFiles(data.dataFiles);
   renderPredictionCapability(data);
-  renderShadowChampion(data);
+  renderShadowBaseline(data);
   renderLeakageAudit(data.leakageAudit);
   renderPermissions(data.permissions);
   renderTasks(data.tasks);
@@ -222,7 +222,7 @@ function renderAll(data) {
 function renderAllError(msg) {
   var panelIds = [
     'wnb-body', 'api-health-body', 'data-files-body', 'prediction-body',
-    'shadow-champion-body', 'leakage-body', 'permissions-body',
+    'shadow-baseline-body', 'leakage-body', 'permissions-body',
     'tasks-body', 'verify-body', 'calibration-body',
     'changelog-body', 'failures-body'
   ];
@@ -443,20 +443,20 @@ function icMetric(label, value, samples, cls) {
     '</span>';
 }
 
-// ══════ Panel 2: Shadow / Champion ══════
+// ══════ Panel 2: Shadow / Baseline ══════
 
-function renderShadowChampion(data) {
-  var el = document.getElementById('shadow-champion-body');
+function renderShadowBaseline(data) {
+  var el = document.getElementById('shadow-baseline-body');
   var models = data.models;
   var st = data.shadowTracking;
 
   var html = '';
 
-  // Champion Section
-  html += '<div class="champion-section">';
-  html += '<h3>Champion</h3>';
-  if (models && models.champion) {
-    var c = models.champion;
+  // Baseline Section
+  html += '<div class="baseline-section">';
+  html += '<h3>Baseline</h3>';
+  if (models && models.baseline) {
+    var c = models.baseline;
     html += '<div class="champ-card">' +
       '<div class="champ-id">' + esc(c.versionId) + ' <span class="champ-source">[' + esc(c.source || 'unknown') + ']</span></div>';
     if (c.params && Object.keys(c.params).length > 0) {
@@ -468,7 +468,7 @@ function renderShadowChampion(data) {
       '<span>Promoted: ' + (c.promotedAt ? c.promotedAt.slice(0, 10) : '--') + '</span>' +
       '</div></div>';
   } else {
-    html += '<div class="no-data">No champion yet</div>';
+    html += '<div class="no-data">No baseline yet</div>';
   }
   html += '</div>';
 
@@ -517,10 +517,10 @@ function renderShadowChampion(data) {
 
 function explainFailingCheck(check) {
   switch (check) {
-    case 'icExcess': return 'Rank IC not exceeding champion';
+    case 'icExcess': return 'Rank IC not exceeding baseline';
     case 'directionHitRate(>52%)': return 'Direction hit rate below 52%';
     case 'postCostPositive': return 'Post-cost return not positive';
-    case 'drawdownNotWorse': return 'Max drawdown worse than champion';
+    case 'drawdownNotWorse': return 'Max drawdown worse than baseline';
     case 'forwardSamples(≥100)': return 'Forward samples < 100';
     case 'calibrationCheck': return 'Confidence calibration not verified';
     case 'evaluationDays(≥5)': return 'Evaluation days < 5';

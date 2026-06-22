@@ -20,6 +20,138 @@ var decision_kernel = {};
 var _lastResult = null;
 var _lastResultTime = 0;
 
+// ========== v3.4.6: Unified Index Quote Validation ==========
+
+/**
+ * Validate a single index quote for price sanity and freshness.
+ * @param {Object} ix — index quote object {code, price, prevClose, fetchAt, freshnessStatus, source}
+ * @param {Object} opts
+ * @param {boolean} [opts.requireTimestampInSession] — reject if quote time outside trading hours
+ * @param {number}  [opts.maxAgeMinutes] — reject if quote older than this many minutes
+ * @returns {boolean}
+ */
+function validIndexQuote(ix, opts) {
+  if (!ix) return false;
+
+  // 1. price > 0
+  if (ix.price == null || isNaN(ix.price) || ix.price <= 0) return false;
+
+  // 2. prevClose > 0
+  if (ix.prevClose == null || isNaN(ix.prevClose) || ix.prevClose <= 0) return false;
+
+  // 3. Optional: timestamp must be within trading session
+  if (opts && opts.requireTimestampInSession) {
+    var ts = ix.fetchAt || ix.quoteDate || null;
+    if (!ts) return false;
+    try {
+      var t = new Date(ts);
+      if (isNaN(t.getTime())) return false;
+      var h = t.getHours();
+      var m = t.getMinutes();
+      // Trading session bounds (CST): 09:25-11:35, 12:55-15:05
+      var inMorning = h > 9 || (h === 9 && m >= 25);
+      var inMorningEnd = h < 11 || (h === 11 && m <= 35);
+      var inAfternoon = h > 12 || (h === 12 && m >= 55);
+      var inAfternoonEnd = h < 15 || (h === 15 && m <= 5);
+      if (!((inMorning && inMorningEnd) || (inAfternoon && inAfternoonEnd))) return false;
+    } catch (_) { return false; }
+  }
+
+  // 4. Optional: not stale
+  if (opts && opts.maxAgeMinutes) {
+    var fetchAt = ix.fetchAt || ix.time;
+    if (!fetchAt) return false;
+    try {
+      var ageMs = Date.now() - new Date(fetchAt).getTime();
+      if (ageMs > opts.maxAgeMinutes * 60000) return false;
+    } catch (_) { return false; }
+  }
+
+  return true;
+}
+
+/**
+ * Batch validate an indices array. Returns structured diagnostics.
+ *
+ * Core indices: 000001 (上证), 399001 (深证), 399006 (创业板). At least 2/3 must be valid.
+ *
+ * @param {Array} indices
+ * @param {Object} opts — passed through to validIndexQuote
+ * @returns {{ valid: Array, invalid: Array, validCoreCount: number, invalidIndices: Array, lastValidQuoteAt: string|null, sourceChain: string, allPassed: boolean }}
+ */
+function validateIndices(indices, opts) {
+  if (!indices || !Array.isArray(indices)) {
+    return {
+      valid: [], invalid: [],
+      validCoreCount: 0,
+      invalidIndices: [{ code: 'ALL', reason: 'indices is null or not an array' }],
+      lastValidQuoteAt: null,
+      sourceChain: 'none',
+      allPassed: false,
+    };
+  }
+
+  var CORE_CODES = ['000001', '399001', '399006'];
+  var valid = [];
+  var invalid = [];
+  var sources = {};
+
+  for (var i = 0; i < indices.length; i++) {
+    var ix = indices[i];
+    if (validIndexQuote(ix, opts)) {
+      valid.push(ix);
+      if (ix.source) sources[ix.source] = true;
+    } else {
+      invalid.push({
+        code: ix.code || 'unknown',
+        name: ix.name || '',
+        price: ix.price,
+        prevClose: ix.prevClose,
+        freshnessStatus: ix.freshnessStatus || 'unknown',
+        source: ix.source || 'unknown',
+        reason: !ix.price || ix.price <= 0 ? 'price_invalid'
+          : !ix.prevClose || ix.prevClose <= 0 ? 'prevClose_invalid'
+          : 'stale_or_out_of_session',
+      });
+    }
+  }
+
+  // Count valid core indices
+  var validCoreCount = 0;
+  for (var c = 0; c < CORE_CODES.length; c++) {
+    var found = valid.some(function(v) {
+      return v.code === CORE_CODES[c] || v.code === 'sh' + CORE_CODES[c] || v.code === 'sz' + CORE_CODES[c];
+    });
+    if (found) validCoreCount++;
+  }
+
+  // Find last valid quote time
+  var lastValidQuoteAt = null;
+  if (valid.length > 0) {
+    var newest = valid[0];
+    for (var v = 1; v < valid.length; v++) {
+      var vts = valid[v].fetchAt || valid[v].time || '';
+      var nts = newest.fetchAt || newest.time || '';
+      if (vts > nts) newest = valid[v];
+    }
+    lastValidQuoteAt = newest.fetchAt || newest.time || null;
+  }
+
+  var sourceKeys = Object.keys(sources);
+  sourceKeys.sort();
+  var sourceChain = sourceKeys.length > 0 ? sourceKeys.join('+') : 'none';
+
+  return {
+    valid: valid,
+    invalid: invalid,
+    validCoreCount: validCoreCount,
+    invalidIndices: invalid,
+    lastValidQuoteAt: lastValidQuoteAt,
+    sourceChain: sourceChain,
+    allPassed: validCoreCount >= 2 && valid.length >= 3,
+  };
+}
+
 /**
  * Priority-ordered hard blocker evaluation.
  *
@@ -148,37 +280,50 @@ function computeDecision(context) {
   //
   // During trading hours, missing indices always BLOCK — even if pipelineResults
   // exist from a past scan. The kernel must not approve buys on stale data.
-  var noMarketData = !indices || !Array.isArray(indices) || indices.length === 0;
-  var noPipeline = !pipelineResults || !Array.isArray(pipelineResults) || pipelineResults.length === 0;
+  // v3.4.6: Use unified validation — need at least 2/3 core indices with price>0, prevClose>0
+  var ixValidation = validateIndices(indices, {
+    requireTimestampInSession: !!isTradingSession,
+    maxAgeMinutes: isTradingSession ? 15 : null,
+  });
+  var noMarketData = ixValidation.validCoreCount < 2;
 
   if (noMarketData) {
     if (isTradingSession) {
-      // Trading session with no index data = data feed failure, not normal
+      // Trading session with insufficient index data = data feed failure, not normal
       result.canBuy = false;
       result.finalVerdict = 'BLOCK';
       result.finalVerdictLabel = '无行情数据/禁止开仓';
+      var invalidDesc = ixValidation.invalidIndices.map(function(inv) { return inv.code + '(' + inv.reason + ')'; }).join(', ');
       result.hardBlockers.push({
         gate: 'marketData',
-        reason: '交易时段指数行情数据缺失 — 可能数据源异常，禁止开仓。有管线结果(' + (noPipeline ? '无' : '有') + ')但指数是实时决策的必要条件。',
+        reason: '交易时段指数行情数据不满足最低要求（有效核心指数' + ixValidation.validCoreCount + '/3，至少需2个），无效指数: ' + (invalidDesc || '无') + '。数据源链: ' + ixValidation.sourceChain + '。禁止开仓。',
         severity: 'block',
       });
+      result._ixValidation = ixValidation;
       return finalize(result);
     }
-    // No marketState set (legacy caller) + no indices + no pipeline:
+    // No marketState set (legacy caller) + insufficient index validation:
     // conservative BLOCK — we don't know if market is open
+    var noPipeline = !pipelineResults || !Array.isArray(pipelineResults) || pipelineResults.length === 0;
     if (noPipeline) {
       result.canBuy = false;
       result.finalVerdict = 'BLOCK';
       result.finalVerdictLabel = '无数据/等待交易窗口';
+      var invDesc2 = ixValidation.invalidIndices.map(function(inv) { return inv.code + '(' + inv.reason + ')'; }).join(', ');
       result.hardBlockers.push({
         gate: 'marketData',
-        reason: '指数和管线数据均缺失，无法判断市场状态。等待下个交易窗口或手动运行管线。',
+        reason: '指数验证失败（有效核心' + ixValidation.validCoreCount + '/3）且管线数据缺失。无效: ' + (invDesc2 || '无') + '。等待下个交易窗口。',
         severity: 'block',
       });
+      result._ixValidation = ixValidation;
       return finalize(result);
     }
-    // marketState unknown + has pipeline but no indices:
+    // marketState unknown + has pipeline but indices insufficient:
     // let it fall through to remaining gate checks (legacy tolerance)
+    // but still pass validation info through for gate states
+    result._ixValidation = ixValidation;
+  } else {
+    result._ixValidation = ixValidation;
   }
 
   // ================================================================
@@ -419,9 +564,11 @@ function _buildAllGateStates(ctx, decision) {
   var ddStatus = ddLevel === 'halt' ? 'block' : (ddLevel === 'restrict' ? 'restrict' : (ddLevel === 'warn' ? 'warn' : 'pass'));
 
   // --- Market direction ---
-  // v3.4.5: changePercent=null is WARN (data incomplete), not pass/unknown.
-  // This happens when IndexRecorder provides price but no changePercent.
-  var shIdx = indices ? indices.find(function(i) { return i.code === '000001' || i.code === 'sh000001'; }) : null;
+  // v3.4.6: Use validated SH index from validation results (if available)
+  var ixValidation = ctx._ixValidation || (decision && decision._ixValidation) || validateIndices(indices);
+  var shIdx = ixValidation.valid
+    ? ixValidation.valid.find(function(i) { return i.code === '000001' || i.code === 'sh000001'; })
+    : (indices ? indices.find(function(i) { return i.code === '000001' || i.code === 'sh000001'; }) : null);
   var marketStatus = 'unknown';
   if (shIdx && shIdx.changePercent != null) {
     marketStatus = shIdx.changePercent < -0.5 ? 'block' : 'pass';
@@ -483,10 +630,12 @@ function _buildAllGateStates(ctx, decision) {
   }
 
   // --- Market data ---
-  var mdStatus = (!indices || indices.length === 0) ? 'block' : 'pass';
+  // v3.4.6: Use unified validation for fail-closed semantics
+  var _ixv = ixValidation || validateIndices(indices);
+  var mdStatus = (_ixv.validCoreCount < 2) ? 'block' : 'pass';
   var mdDescription = mdStatus === 'block'
-    ? '指数行情数据缺失，无法进行实时决策'
-    : '指数数据正常（' + indices.length + '只指数）';
+    ? '指数行情验证失败 — 有效核心指数' + _ixv.validCoreCount + '/3（需≥2），源链: ' + _ixv.sourceChain + '。无效: ' + _ixv.invalidIndices.map(function(inv) { return inv.code; }).join(',')
+    : '指数数据正常（' + _ixv.valid.length + '只有效，核心' + _ixv.validCoreCount + '/3，源链: ' + _ixv.sourceChain + '）';
 
   return {
     marketSession: {
@@ -497,6 +646,10 @@ function _buildAllGateStates(ctx, decision) {
     marketData: {
       status: mdStatus,
       indexCount: indices ? indices.length : 0,
+      validCoreCount: _ixv.validCoreCount,
+      invalidIndices: _ixv.invalidIndices.map(function(inv) { return { code: inv.code, reason: inv.reason }; }),
+      lastValidQuoteAt: _ixv.lastValidQuoteAt,
+      sourceChain: _ixv.sourceChain,
       description: mdDescription,
     },
     drawdown: {
@@ -795,7 +948,25 @@ function writeMarketSnapshot(indices, source) {
     var snapDir = path.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
     if (!fs.existsSync(snapDir)) fs.mkdirSync(snapDir, { recursive: true });
 
-    var enriched = indices.map(function(ix) {
+    // v3.4.6: Filter out invalid quotes BEFORE writing
+    var validIndices = indices.filter(function(ix) {
+      return validIndexQuote(ix, {});
+    });
+
+    if (validIndices.length === 0) {
+      // Do NOT overwrite the last valid snapshot. Log the attempt.
+      var snapshotPath = path.join(snapDir, 'market_snapshot_latest.json');
+      _recordCatchFailure({
+        source: 'decision_kernel.writeMarketSnapshot',
+        errorCode: 'NO_VALID_QUOTES',
+        errorMessage: 'All ' + indices.length + ' index quotes failed validation (price>0, prevClose>0). Snapshot NOT overwritten.',
+        lastSuccessAt: _lastSnapshotWriteSuccess,
+        fallbackUsed: fs.existsSync(snapshotPath) ? 'preserving_last_valid_snapshot' : 'no_previous_snapshot',
+      });
+      return;
+    }
+
+    var enriched = validIndices.map(function(ix) {
       return {
         code: ix.code,
         name: ix.name || '',
@@ -805,9 +976,9 @@ function writeMarketSnapshot(indices, source) {
         high: ix.high != null ? ix.high : null,
         low: ix.low != null ? ix.low : null,
         open: ix.open != null ? ix.open : null,
-        fetchAt: now.toISOString(),
-        quoteDate: today,
-        source: source || 'pipeline_eastmoney',
+        fetchAt: ix.fetchAt || now.toISOString(),
+        quoteDate: ix.quoteDate || today,
+        source: source || ix.source || 'pipeline_eastmoney',
         freshnessStatus: 'live',
       };
     });
@@ -817,6 +988,13 @@ function writeMarketSnapshot(indices, source) {
       time: now.toISOString(),
       source: source || 'pipeline_eastmoney',
       indices: enriched,
+      // v3.4.6: Proof of validation
+      validation: {
+        validCoreCount: validateIndices(indices).validCoreCount,
+        inputCount: indices.length,
+        validCount: validIndices.length,
+        filteredOut: indices.length - validIndices.length,
+      },
     };
 
     fs.writeFileSync(
@@ -842,5 +1020,7 @@ decision_kernel.setCachedResult = setCachedResult;
 decision_kernel._buildAllGateStates = _buildAllGateStates;
 decision_kernel.loadLatestIndices = loadLatestIndices;
 decision_kernel.writeMarketSnapshot = writeMarketSnapshot;
+decision_kernel.validIndexQuote = validIndexQuote;
+decision_kernel.validateIndices = validateIndices;
 
 module.exports = decision_kernel;

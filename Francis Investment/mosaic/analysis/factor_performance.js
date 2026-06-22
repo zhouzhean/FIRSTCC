@@ -42,8 +42,8 @@ function getAvailableDates() {
     if (m) dates.add(m[1]);
   }
 
-  // Fallback: last_pipeline_result.json date
-  const lastPath = path.join(DATA_DIR, 'last_pipeline_result.json');
+  // Fallback: last_pipeline_result.legacy_untrusted.json date
+  const lastPath = path.join(DATA_DIR, 'last_pipeline_result.legacy_untrusted.json');
   if (fs.existsSync(lastPath)) {
     try {
       const lp = JSON.parse(fs.readFileSync(lastPath, 'utf8'));
@@ -76,7 +76,7 @@ function loadScanRecords(date) {
   // If no records with signalCounts found, try last_pipeline_result as fallback
   const hasSignalCounts = records.some(r => r.signalCounts && Object.keys(r.signalCounts).length > 0);
   if (!hasSignalCounts) {
-    const lastPath = path.join(DATA_DIR, 'last_pipeline_result.json');
+    const lastPath = path.join(DATA_DIR, 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(lastPath)) {
       try {
         const lp = JSON.parse(fs.readFileSync(lastPath, 'utf8'));

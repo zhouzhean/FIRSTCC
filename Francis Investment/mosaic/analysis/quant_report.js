@@ -202,7 +202,7 @@ function generateTradeDeepDive(trade, pipelineResults, indices) {
       deepReason += '技术面评分' + rawScores.technical + '分，K线形态支持入场。';
     }
     if (signals.length === 0 && Object.keys(rawScores).length === 0) {
-      deepReason += '该标的在全市场扫描中位列前茅，综合量化评分表现突出。';
+      deepReason += '该标的在低价(≤20元)非创业板A股子策略扫描中位列前茅，综合量化评分表现突出。';
     }
   } else {
     deepReason = trade.name + '（' + trade.code + '）触发' +
@@ -282,7 +282,7 @@ function generateTradeDeepDive(trade, pipelineResults, indices) {
   if (isBuy) {
     var sc = scoreVal || 50;
     if (sc >= 80) {
-      risk = '低风险：评分' + sc + '分属全市场顶尖水平，信号强度高，但需关注行业轮动风险';
+      risk = '低风险：评分' + sc + '分属低价(≤20元)非创业板A股子策略顶尖水平，信号强度高，但需关注行业轮动风险';
       prediction = '短期目标价¥' + round2(trade.price * 1.08) + '（+8%），建议设置移动止盈保护';
     } else if (sc >= 65) {
       risk = '中等风险：评分' + sc + '分，信号质量良好。建议仓位控制在总资产15%以内';
@@ -389,7 +389,7 @@ function generateForwardPrediction(indices, pipelineResult, priorKnowledge) {
     if (maxScore >= 75) {
       outlook += '量化扫描发现高评分标的（最高' + maxScore + '分），市场存在结构性机会。';
     } else if (maxScore < 60) {
-      outlook += '当前全市场量化评分偏低（最高仅' + maxScore + '分），建议降低仓位等待更好入场时机。';
+      outlook += '当前低价(≤20元)非创业板A股子策略量化评分偏低（最高仅' + maxScore + '分），建议降低仓位等待更好入场时机。';
     }
     if (avgScore >= 55) {
       outlook += '平均评分' + avgScore + '分，整体质量尚可。';

@@ -93,7 +93,7 @@ function saveLastPipelineResult(result, type) {
         maxScore: allResults.length > 0 ? Math.max(...allResults.map(r => r.compositeScore || 0)) : 0,
         pipelineResultsForKernel: allResults.slice(0, 100).map(function(r) { return { code: r.code, name: r.name, compositeScore: r.compositeScore || 0, prediction: r.prediction ? { expectedReturn: r.prediction.expectedReturn, confidence: r.prediction.confidence, label: r.prediction.label } : null }; }),
       };
-      fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
+      fs.writeFileSync(path.join(dir, 'last_pipeline_result.legacy_untrusted.json'), JSON.stringify(summary, null, 2), 'utf8');
     } catch (_) {}
   }
   // P3: Record stock-level signals for prediction engine
@@ -913,7 +913,7 @@ function buildCockpitData() {
     var pipelineSummary = null;
     var pipelineResultsForKernel = null;
     try {
-      var lrFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
+      var lrFile = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
       if (require('fs').existsSync(lrFile)) {
         var lrData = JSON.parse(require('fs').readFileSync(lrFile, 'utf8'));
         pipelineSummary = {
@@ -977,6 +977,16 @@ function buildCockpitData() {
       leakageAuditChecks: gs.leakageAudit.totalChecks || 0,
       hasPositions: pf.positions && pf.positions.length > 0,
       positionCount: pf.positions ? pf.positions.length : 0,
+      // v3.4.6: Market data validation diagnostics
+      marketValidation: gs.marketData ? {
+        status: gs.marketData.status,
+        indexCount: gs.marketData.indexCount || 0,
+        validCoreCount: gs.marketData.validCoreCount || 0,
+        invalidIndices: gs.marketData.invalidIndices || [],
+        lastValidQuoteAt: gs.marketData.lastValidQuoteAt || null,
+        sourceChain: gs.marketData.sourceChain || 'unknown',
+        description: gs.marketData.description || '',
+      } : null,
     };
 
     // displayReasons already built by kernel finalize() — set as primary reasons
@@ -987,7 +997,7 @@ function buildCockpitData() {
 
     // Preserve effectiveMaxBuys from pipeline result if available
     try {
-      var lrFile2 = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.json');
+      var lrFile2 = require('path').join(__dirname, 'report-engine', 'data', 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
       if (require('fs').existsSync(lrFile2)) {
         var lrData2 = JSON.parse(require('fs').readFileSync(lrFile2, 'utf8'));
         if (lrData2.effectiveMaxBuys != null && result.permissions.maxBuysPerDay == null) {
@@ -1085,15 +1095,15 @@ function buildCockpitData() {
 
 // [v3.3.1] Build per-shadow tracking data for cockpit Panel 7
 // Must use the full shadow object (with cumulativeIC, _maxDrawdown, evaluationDays)
-// and the champion's current IC for promotion criteria check.
+// and the baseline's current IC for promotion criteria check.
 function buildShadowTracking(registryStatus) {
   var shadows = [];
   if (!registryStatus || !registryStatus.shadows) return { shadows: [], message: 'No shadow data' };
 
   try {
     var mr = require('./mosaic/evolution/model_registry');
-    var championIC = registryStatus.champion ? registryStatus.champion.cumulativeIC : null;
-    var championDrawdown = registryStatus.champion ? registryStatus.champion._maxDrawdown : null;
+    var baselineIC = registryStatus.baseline ? registryStatus.baseline.cumulativeIC : null;
+    var baselineDrawdown = registryStatus.baseline ? registryStatus.baseline._maxDrawdown : null;
 
     for (var i = 0; i < registryStatus.shadows.length; i++) {
       var s = registryStatus.shadows[i];
@@ -1101,7 +1111,7 @@ function buildShadowTracking(registryStatus) {
       try {
         // Must load the FULL internal shadow object (not just the flat API projection)
         // checkPromotionCriteria needs _maxDrawdown on the shadow
-        criteria = mr.checkPromotionCriteria(s, championIC, championDrawdown);
+        criteria = mr.checkPromotionCriteria(s, baselineIC, baselineDrawdown);
       } catch (_) {}
 
       // Also try to get forward samples directly
@@ -1123,7 +1133,7 @@ function buildShadowTracking(registryStatus) {
           ? (s.cumulativeIC > 0.05 ? 'up' : s.cumulativeIC < -0.05 ? 'down' : 'stable')
           : 'stable',
         failingChecks: criteria ? criteria.failingChecks || [] : [],
-        championIC: championIC,
+        baselineIC: baselineIC,
       });
     }
   } catch (_) {}
@@ -1202,7 +1212,7 @@ function buildChangeLog() {
     },
     {
       module: 'cockpit.html/css/js',
-      purpose: '8 面板可监督 UI: 系统版本/API健康/数据文件/预测能力/Shadow-Champion/泄漏审计/权限原因/变更日志',
+      purpose: '8 面板可监督 UI: 系统版本/API健康/数据文件/预测能力/Shadow-Baseline/泄漏审计/权限原因/变更日志',
       syntaxOk: true,
       interfaceVerified: false,
       hasRealData: false,
@@ -1856,7 +1866,7 @@ const server = http.createServer(async function(req, res) {
 
   // Expected Returns — latest pipeline predictions with E[R5d]
   if (pathname === '/api/predict/expected-returns') {
-    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(p)) {
       try {
         const lr = JSON.parse(fs.readFileSync(p, 'utf8'));
@@ -2065,11 +2075,11 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
-  if (pathname === '/api/model-registry/champion') {
+  if (pathname === '/api/model-registry/baseline') {
     try {
       const modelRegistry = require('./mosaic/evolution/model_registry');
-      const champion = modelRegistry.getChampionParams();
-      return jsonResponse(res, { ok: true, champion });
+      const baseline = modelRegistry.getBaselineParams();
+      return jsonResponse(res, { ok: true, baseline });
     } catch (e) {
       return jsonResponse(res, { ok: false, message: e.message });
     }
@@ -2531,7 +2541,7 @@ const server = http.createServer(async function(req, res) {
 
   // Last pipeline result (persisted, survives restarts)
   if (pathname === '/api/pipeline/last-result') {
-    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    const p = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(p)) {
       return jsonResponse(res, { ok: true, ...JSON.parse(fs.readFileSync(p, 'utf8')) });
     }
@@ -2546,7 +2556,7 @@ const server = http.createServer(async function(req, res) {
       data.scheduler = scheduler.getStatus();
     }
     // Include last pipeline result
-    const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+    const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(lastResultPath)) {
       try {
         data.lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
@@ -2699,7 +2709,7 @@ const server = http.createServer(async function(req, res) {
       // v3.4.3: Load pipelineResultsForKernel so think-tank kernel sees real candidates on restart
       var ttPipelineResults = null;
       try {
-        var ttLrPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        var ttLrPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
         if (fs.existsSync(ttLrPath)) {
           var ttLr = JSON.parse(fs.readFileSync(ttLrPath, 'utf8'));
           if (ttLr.pipelineResultsForKernel && ttLr.pipelineResultsForKernel.length > 0) {
@@ -2758,7 +2768,7 @@ const server = http.createServer(async function(req, res) {
 
     // 3. Last scan summary (with pre-fetched K-lines for speed)
     try {
-      const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+      const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
       if (fs.existsSync(lastResultPath)) {
         const lr = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
         data.lastScan = {
@@ -3264,7 +3274,7 @@ const server = http.createServer(async function(req, res) {
 
       // Send last pipeline result so think-tank shows previous scan data
       try {
-        const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        const lastResultPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
         if (fs.existsSync(lastResultPath)) {
           const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
           res.write('event: last_result\ndata: ' + JSON.stringify(lastResult) + '\n\n');

@@ -457,86 +457,40 @@ function verifyExpectedReturns(dateStr) {
       try { history = JSON.parse(fs.readFileSync(VERIFY_FILE, 'utf8')); } catch (_) {}
     }
 
-    // Check if we have a pipeline result from 5 calendar days ago
-    var targetDate = dateStr;
-    var foundDate = null;
-    var foundResult = null;
+    // v3.4.6: Load trading calendar from bootstrap_history.js
+    var tradingDays = null;
+    try {
+      tradingDays = require('../evolution/bootstrap_history').generateTradingDays(2021, 2027);
+    } catch (_) {}
+    if (!tradingDays) {
+      return { available: false, reason: '无法加载交易日历' };
+    }
 
-    // Look back up to 10 calendar days for the most recent pipeline scan
-    for (var d = 1; d <= 10; d++) {
-      var checkDate = new Date(dateStr + 'T00:00:00+08:00');
-      checkDate.setDate(checkDate.getDate() - d);
-      var checkDateStr = checkDate.toISOString().slice(0, 10);
-      var scanFile = path.join(DATA_DIR, 'scan_records_' + checkDateStr + '.json');
-      if (fs.existsSync(scanFile)) {
-        foundDate = checkDateStr;
-        // Also check if we have stock_factor_performance records for target date
-        var spfPath = path.join(DATA_DIR, 'stock_factor_performance.json');
-        if (fs.existsSync(spfPath)) {
-          var spf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
-          var dailyRecords = spf.dailyRecords || {};
-          if (dailyRecords[dateStr] && dailyRecords[checkDateStr]) {
-            foundResult = { fromDate: checkDateStr, toDate: dateStr, dailyRecords: dailyRecords };
-            break;
-          }
-        }
-        // Fallback: use pipeline result directly
-        var pipelinePath = path.join(DATA_DIR, 'last_pipeline_result.json');
-        // Note: this is the CURRENT result, not the historical one
-        // For now, just use scan dates for verification metadata
-        if (!foundResult && foundDate) break;
+    // v3.4.6: Find the trading day exactly 5 trading days before dateStr
+    var dateIdx = tradingDays.indexOf(dateStr);
+    if (dateIdx < 1) {
+      return { available: false, reason: '当前日期 ' + dateStr + ' 不在交易日历中' };
+    }
+
+    // Step back 5 trading days for the lookback window
+    var foundDate = null;
+    for (var step = 1; step <= 30; step++) {
+      var lookIdx = dateIdx - step;
+      if (lookIdx < 0) break;
+      var lookDate = tradingDays[lookIdx];
+      var ledgerFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + lookDate + '.jsonl');
+      if (fs.existsSync(ledgerFile)) {
+        foundDate = lookDate;
+        break;
       }
     }
 
     if (!foundDate) {
-      return { available: false, reason: '5天前无扫描记录' };
+      return { available: false, reason: '最近30个交易日内无prediction_ledger记录' };
     }
 
-    // For each stock that had an expected return prediction, compute actual return
-    var verifications = [];
-    try {
-      var scanFile = path.join(DATA_DIR, 'scan_records_' + foundDate + '.json');
-      if (fs.existsSync(scanFile)) {
-        var scanRecords = JSON.parse(fs.readFileSync(scanFile, 'utf8'));
-        // Use stock_factor_performance records for actual price comparison
-        var spfPath = path.join(DATA_DIR, 'stock_factor_performance.json');
-        if (fs.existsSync(spfPath)) {
-          var spf = JSON.parse(fs.readFileSync(spfPath, 'utf8'));
-          var fromRecords = (spf.dailyRecords || {})[foundDate] || [];
-          var toRecords = (spf.dailyRecords || {})[dateStr] || [];
-          for (var i = 0; i < fromRecords.length; i++) {
-            var fromRec = fromRecords[i];
-            var toRec = toRecords.find(function(r) { return r.code === fromRec.code; });
-            if (toRec && toRec.price && fromRec.price > 0) {
-              var actualReturn = (toRec.price - fromRec.price) / fromRec.price * 100;
-              // Find the expected return if we computed it
-              var pipelinePath = path.join(DATA_DIR, 'last_pipeline_result.json');
-              var expectedReturn = null;
-              if (fs.existsSync(pipelinePath)) {
-                try {
-                  var lr = JSON.parse(fs.readFileSync(pipelinePath, 'utf8'));
-                  if (lr.expectedReturns) {
-                    var match = lr.expectedReturns.find(function(e) { return e.code === fromRec.code; });
-                    if (match) expectedReturn = match.expectedReturn;
-                  }
-                } catch (_) {}
-              }
-              verifications.push({
-                code: fromRec.code,
-                name: fromRec.name,
-                fromDate: foundDate,
-                expectedReturn: expectedReturn,
-                actualReturn: +actualReturn.toFixed(2),
-                error: expectedReturn != null ? +(actualReturn - expectedReturn).toFixed(2) : null,
-                directionCorrect: expectedReturn != null ? (expectedReturn > 0) === (actualReturn > 0) : null,
-              });
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    // Phase 2.2: Also read from prediction_ledger for richer verification
+    // v3.4.6: Only settle outcomes for predictions whose targetDate has arrived
+    // Read from prediction_ledger (NOT legacy last_pipeline_result.json)
     var ledgerVerifications = [];
     try {
       var ledgerFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + foundDate + '.jsonl');
@@ -546,34 +500,66 @@ function verifyExpectedReturns(dateStr) {
         var spf2 = fs.existsSync(spfPath2) ? JSON.parse(fs.readFileSync(spfPath2, 'utf8')) : null;
         if (spf2) {
           var toRecs2 = (spf2.dailyRecords || {})[dateStr] || [];
-          var shIdxRecs = (spf2.dailyRecords || {})[dateStr] ? (spf2.dailyRecords[dateStr] || []) : [];
           for (var li = 0; li < ledgerLines.length; li++) {
             try {
               var led = JSON.parse(ledgerLines[li]);
+
+              // v3.4.6: Skip entries whose targetDate hasn't arrived
+              if (led.targetDate && led.targetDate > dateStr) continue;
+
               var toRec2 = toRecs2.find(function(r) { return r.code === led.code; });
-              var shRec = shIdxRecs.find(function(r) { return r.code === '000001_sh'; });
-              if (toRec2 && led.price > 0) {
-                var actualRet = (toRec2.price - led.price) / led.price * 100;
-                var benchmarkRet = shRec ? ((shRec.price - led.indexSH) / led.indexSH * 100) : null;
-                ledgerVerifications.push({
-                  predictionId: led.predictionId,
-                  code: led.code,
-                  name: led.name,
-                  expectedReturn: led.expectedReturn,
-                  actualReturn_3d: +actualRet.toFixed(2),
-                  benchmarkReturn: benchmarkRet ? +benchmarkRet.toFixed(2) : null,
-                  postCostReturn: +(actualRet - 0.15).toFixed(2),
-                  directionCorrect: led.expectedReturn != null ? (led.expectedReturn > 0) === (actualRet > 0) : null,
-                  wasBought: led.wasBought,
-                });
+              if (!toRec2 || !(led.price > 0)) continue;
+
+              var actualRet = (toRec2.price - led.price) / led.price * 100;
+
+              // v3.4.6: Guard benchmark — skip excess return if invalid
+              var benchmarkRet = null;
+              var benchmarkUnavailable = true;
+              if (led.benchmarkPrice != null && led.benchmarkPrice > 0 && toRec2.price != null && toRec2.price > 0) {
+                // Find SH index current price from spf records (not available in spf typically)
+                // Use indexSH from ledger as proxy
+                if (led.indexSH != null && led.indexSH > 0) {
+                  benchmarkRet = +(((toRec2.price - led.indexSH) / led.indexSH * 100)).toFixed(2);
+                } else {
+                  // Compare against the index at prediction time from spf
+                  var shRec = toRecs2.find(function(r) { return r.code === '000001_sh'; });
+                  if (shRec && shRec.price > 0 && led.benchmarkPrice > 0) {
+                    benchmarkRet = +(((shRec.price - led.benchmarkPrice) / led.benchmarkPrice * 100)).toFixed(2);
+                  }
+                }
+                if (benchmarkRet != null && !isNaN(benchmarkRet) && isFinite(benchmarkRet)) {
+                  benchmarkUnavailable = false;
+                } else {
+                  benchmarkRet = null;
+                }
               }
+
+              // Post-cost return with real costs: commission 0.025% + stamp 0.1% + slippage 0.1% ≈ 0.225%
+              var roundTripCost = 0.00225 * 100; // roughly 0.225%
+              var postCostRet = +(actualRet - roundTripCost).toFixed(2);
+
+              ledgerVerifications.push({
+                predictionId: led.predictionId,
+                code: led.code,
+                name: led.name,
+                asOf: led.asOf || foundDate,
+                targetDate: led.targetDate || null,
+                horizonTradingDays: led.horizonTradingDays || 3,
+                expectedReturn: led.expectedReturn,
+                actualReturn_3d: +actualRet.toFixed(2),
+                benchmarkReturn: benchmarkRet,
+                benchmarkUnavailable: benchmarkUnavailable,
+                postCostReturn: postCostRet,
+                directionCorrect: led.expectedReturn != null ? (led.expectedReturn > 0) === (actualRet > 0) : null,
+                wasBought: led.wasBought,
+              });
             } catch (_) {}
           }
         }
       }
     } catch (_) {}
 
-    // Phase 2.2: Write outcome ledger
+    // v3.4.6: Write outcome ledger
     if (ledgerVerifications.length > 0) {
       try {
         var outcomeDir = path.join(DATA_DIR, 'simfolio');
@@ -588,25 +574,29 @@ function verifyExpectedReturns(dateStr) {
       } catch (_) {}
     }
 
-    var directionCorrect = verifications.filter(function(v) { return v.directionCorrect === true; }).length;
-    var directionTotal = verifications.filter(function(v) { return v.directionCorrect !== null; }).length;
+    // Compute statistics from ledger verifications
+    var directionCorrect = ledgerVerifications.filter(function(v) { return v.directionCorrect === true; }).length;
+    var directionTotal = ledgerVerifications.filter(function(v) { return v.directionCorrect !== null; }).length;
     var directionHitRate = directionTotal > 0 ? +(directionCorrect / directionTotal).toFixed(2) : null;
-    var avgError = verifications.filter(function(v) { return v.error !== null; }).length > 0
-      ? +(verifications.filter(function(v) { return v.error !== null; }).reduce(function(s, v) { return s + v.error; }, 0) / verifications.filter(function(v) { return v.error !== null; }).length).toFixed(2)
+    var avgError = ledgerVerifications.filter(function(v) { return v.expectedReturn != null && v.actualReturn_3d != null; }).length > 0
+      ? +(ledgerVerifications.filter(function(v) { return v.expectedReturn != null && v.actualReturn_3d != null; })
+          .reduce(function(s, v) { return s + Math.abs(v.expectedReturn - v.actualReturn_3d); }, 0) /
+          ledgerVerifications.filter(function(v) { return v.expectedReturn != null && v.actualReturn_3d != null; }).length)
+          .toFixed(2)
       : null;
 
     var entry = {
       date: dateStr,
       fromDate: foundDate,
-      totalVerified: verifications.length,
-      ledgerVerified: ledgerVerifications.length,
+      source: 'prediction_ledger',  // v3.4.6: mark source; NO legacy last_pipeline_result
+      totalVerified: ledgerVerifications.length,
       directionCorrect: directionCorrect,
       directionTotal: directionTotal,
       directionHitRate: directionHitRate,
       avgError: avgError,
       summary: directionHitRate != null
-        ? '方向命中率: ' + Math.round(directionHitRate * 100) + '% (' + directionCorrect + '/' + directionTotal + '), 平均误差: ' + (avgError != null ? avgError.toFixed(1) + '%' : 'N/A')
-        : '已验证' + verifications.length + '只股票（无期望收益预测可对比）',
+        ? '方向命中率: ' + Math.round(directionHitRate * 100) + '% (' + directionCorrect + '/' + directionTotal + '), 平均误差: ' + (avgError != null ? avgError + '%' : 'N/A')
+        : '已验证' + ledgerVerifications.length + '只股票',
     };
 
     if (history.entries.length >= 30) history.entries = history.entries.slice(-29);

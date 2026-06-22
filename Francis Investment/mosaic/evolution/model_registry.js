@@ -6,15 +6,15 @@
  * Manages model version lifecycle:
  *   1. registerVersion() — 新训练版本进入 shadow 阶段
  *   2. logShadowPrediction() — 记录 shadow 预测（不执行交易）
- *   3. evaluateShadow() — 对比 shadow vs champion，决定晋升/降级/淘汰
- *   4. promoteToChampion() — 晋升 shadow 为活跃模型 (6项严格检查)
- *   5. demoteChampion() — 降级 champion (所有 shadow 显著优于 champion)
+ *   3. evaluateShadow() — 对比 shadow vs baseline，决定晋升/降级/淘汰
+ *   4. promoteToBaseline() — 晋升 shadow 为活跃模型 (6项严格检查)
+ *   5. demoteBaseline() — 降级 baseline (所有 shadow 显著优于 baseline)
  *
- * Champion/Challenger pattern:
- *   - Champion: 当前活跃模型参数（用于实盘交易）
+ * Baseline/Challenger pattern:
+ *   - Baseline: 当前活跃模型参数（用于实盘交易）
  *   - Shadow(s): 新训练版本，只在 shadow mode 记录预测，不影响实盘
  *   - 严格晋升: IC excess + directionHitRate>52% + postCostPositive + drawdown + forwardSamples≥100
- *   - 自动降级: champion IC 低于最佳 shadow 10%+ → flag for review
+ *   - 自动降级: baseline IC 低于最佳 shadow 10%+ → flag for review
  *
  * Data: report-engine/data/evolution/model_registry.json (runtime, not committed)
  */
@@ -23,7 +23,7 @@ var fs, path;
 try { fs = require('fs'); path = require('path'); } catch (_) {}
 
 var _state = {
-  champion: null,           // { versionId, params, registeredAt, promotedAt, ... }
+  baseline: null,           // { versionId, params, registeredAt, promotedAt, ... }
   shadows: [],              // [{ versionId, params, registeredAt, status, ... }]
   shadowLogs: [],           // [{ versionId, date, predictions: [], rankIC, ... }]
   promotionHistory: [],     // [{ from, to, reason, date }]
@@ -31,7 +31,7 @@ var _state = {
   maxLogs: 500,
   // v3.3.1: Per-shadow forward sample tracking
   forwardSamples: {},       // { versionId: { total, hits, dates[], directionHitRate } }
-  demotionLog: [],          // [{ champion, reason, date, championIC, bestShadowIC }]
+  demotionLog: [],          // [{ baseline, reason, date, baselineIC, bestShadowIC }]
 };
 
 var CONFIG = {};
@@ -58,7 +58,7 @@ var DEMOTION_LOG_FILE = null;
     // Restore persisted registry
     if (fs.existsSync(REGISTRY_FILE)) {
       var saved = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
-      if (saved.champion) _state.champion = saved.champion;
+      if (saved.baseline) _state.baseline = saved.baseline;
       if (saved.shadows) _state.shadows = saved.shadows;
       if (saved.shadowLogs) _state.shadowLogs = saved.shadowLogs;
       if (saved.promotionHistory) _state.promotionHistory = saved.promotionHistory;
@@ -90,7 +90,7 @@ function _persist() {
     var dir = path.dirname(REGISTRY_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
-      champion: _state.champion,
+      baseline: _state.baseline,
       shadows: _state.shadows,
       shadowLogs: _state.shadowLogs.slice(-_state.maxLogs),
       promotionHistory: _state.promotionHistory,
@@ -115,7 +115,7 @@ function _persist() {
 
 /**
  * Register a new model version from a training run (grid search / bootstrap).
- * New versions always enter as shadow — never directly become champion.
+ * New versions always enter as shadow — never directly become baseline.
  *
  * @param {object} spec
  * @param {object} spec.params       — weight parameters
@@ -124,7 +124,7 @@ function _persist() {
  * @param {number} spec.trainIC      — Rank IC during training window
  * @param {number} spec.sampleSize   — sample count
  * @param {string} spec.date         — date string
- * @returns {object} { versionId, isChampion: false }
+ * @returns {object} { versionId, isBaseline: false }
  */
 function registerVersion(spec) {
   if (!CONFIG.enabled) return { skipped: true, reason: 'shadow_mode_disabled' };
@@ -140,7 +140,7 @@ function registerVersion(spec) {
     sampleSize: spec.sampleSize || 0,
     registeredAt: new Date().toISOString(),
     date: spec.date || new Date().toISOString().slice(0, 10),
-    status: 'shadow',      // 'shadow' | 'champion' | 'retired'
+    status: 'shadow',      // 'shadow' | 'baseline' | 'retired'
     evaluationDays: 0,
     lastEvaluated: null,
     cumulativeIC: null,
@@ -154,7 +154,7 @@ function registerVersion(spec) {
   if (_state.shadows.length > _state.maxVersions) {
     // Remove oldest retired first, then oldest shadows
     _state.shadows.sort(function(a, b) {
-      var order = { shadow: 0, champion: 1, retired: 2 };
+      var order = { shadow: 0, baseline: 1, retired: 2 };
       var diff = (order[a.status] || 0) - (order[b.status] || 0);
       if (diff !== 0) return diff;
       return (a.registeredAt || '').localeCompare(b.registeredAt || '');
@@ -169,7 +169,7 @@ function registerVersion(spec) {
   console.log('[ModelRegistry] Registered shadow version: ' + versionId +
     ' (source=' + spec.source + ', hitRate=' + (spec.trainHitRate != null ? (spec.trainHitRate * 100).toFixed(1) + '%' : '?') + ')');
 
-  return { versionId: versionId, isChampion: false, status: 'shadow' };
+  return { versionId: versionId, isBaseline: false, status: 'shadow' };
 }
 
 /**
@@ -270,7 +270,7 @@ function _getForwardSamples(versionId) {
  * [v3.3.1] Check all 6 promotion criteria for a shadow.
  * Returns detailed check results.
  */
-function checkPromotionCriteria(shadow, championIC, championDrawdown) {
+function checkPromotionCriteria(shadow, baselineIC, baselineDrawdown) {
   var checks = {};
   var minEvalDays = CONFIG.minEvaluationDays || 5;
   var minFwdSamples = CONFIG.minForwardSamplesPerShadow || 100;
@@ -279,32 +279,55 @@ function checkPromotionCriteria(shadow, championIC, championDrawdown) {
 
   // 1. IC excess
   checks.icExcess = shadow.cumulativeIC != null
-    && (championIC == null || shadow.cumulativeIC > championIC + promotionThreshold);
+    && (baselineIC == null || shadow.cumulativeIC > baselineIC + promotionThreshold);
 
   // 2. Direction hit rate (>52%)
   var fwdSamples = _getForwardSamples(shadow.versionId);
   checks.directionHitRate = fwdSamples.directionHitRate != null
     && fwdSamples.directionHitRate >= minDirHitRate;
 
-  // 3. Post-cost positive (proxy: cumulativeIC > 0 indicates positive edge)
-  checks.postCostPositive = shadow.cumulativeIC != null && shadow.cumulativeIC > 0;
+  // v3.4.6: 3. Post-cost positive — use actual post-cost net return, not cumulativeIC proxy
+  // Read from forward samples if available, or from verification summary
+  var postCostNet = null;
+  if (fwdSamples.postCostNetReturn != null) {
+    postCostNet = fwdSamples.postCostNetReturn;
+  } else if (shadow._postCostNetReturn != null) {
+    postCostNet = shadow._postCostNetReturn;
+  }
+  checks.postCostPositive = postCostNet != null && postCostNet > 0;
+  // Fallback to cumulativeIC only if no post-cost data available (legacy models)
+  if (postCostNet == null) {
+    checks.postCostPositive = shadow.cumulativeIC != null && shadow.cumulativeIC > 0;
+  }
 
   // 4. Max drawdown not worse
-  // If no champion or drawdown unavailable, skip this check
+  // If no baseline or drawdown unavailable, skip this check
   checks.drawdownNotWorse = true; // Default pass if no data
-  if (CONFIG.maxDrawdownNotWorse && championDrawdown != null && shadow._maxDrawdown != null) {
-    checks.drawdownNotWorse = shadow._maxDrawdown >= championDrawdown;
+  if (CONFIG.maxDrawdownNotWorse && baselineDrawdown != null && shadow._maxDrawdown != null) {
+    checks.drawdownNotWorse = shadow._maxDrawdown >= baselineDrawdown;
   }
 
   // 5. Minimum forward samples per shadow
   checks.forwardSamples = fwdSamples.total >= minFwdSamples;
 
-  // 6. Calibration check: high-conf predictions actually more accurate
+  // v3.4.6: 6. Calibration check — bucket calibration (high-conf > low-conf hit rate)
   checks.calibrationCheck = true; // Default pass
   if (CONFIG.requireCalibrationCheck) {
-    // Check if high-scored predictions from this shadow have better hit rate
-    // than low-scored ones in forward samples. Simplified: check cumulativeIC > 0 (which implies ranking works)
-    checks.calibrationCheck = shadow.cumulativeIC != null && shadow.cumulativeIC > 0;
+    try {
+      var calibPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'calibration.json');
+      if (fs.existsSync(calibPath)) {
+        var calib = JSON.parse(fs.readFileSync(calibPath, 'utf8'));
+        if (calib.bins) {
+          var highBin = calib.bins.find(function(b) { return b.name === 'high' || b.label === '高置信'; });
+          var lowBin = calib.bins.find(function(b) { return b.name === 'low' || b.label === '低置信'; });
+          if (highBin && lowBin && highBin.hitRate != null && lowBin.hitRate != null) {
+            checks.calibrationCheck = highBin.hitRate > lowBin.hitRate;
+          }
+        }
+      }
+    } catch (_) {
+      // If calibration file unavailable, don't fail — calibration is supplementary evidence
+    }
   }
 
   // 7. Evaluation days
@@ -332,7 +355,7 @@ function checkPromotionCriteria(shadow, championIC, championDrawdown) {
     checks: checks,
     failingChecks: failingChecks,
     shadowIC: shadow.cumulativeIC,
-    championIC: championIC,
+    baselineIC: baselineIC,
     forwardSamples: fwdSamples.total,
     directionHitRate: fwdSamples.directionHitRate,
   };
@@ -341,16 +364,16 @@ function checkPromotionCriteria(shadow, championIC, championDrawdown) {
 // ══════ v3.3.1: Demotion Logic ══════
 
 /**
- * [v3.3.1] Demote the current champion when all shadows significantly outperform it.
+ * [v3.3.1] Demote the current baseline when all shadows significantly outperform it.
  */
-function demoteChampion(reason) {
-  if (!_state.champion) return null;
+function demoteBaseline(reason) {
+  if (!_state.baseline) return null;
 
   var demotedEntry = {
-    champion: _state.champion.versionId,
+    baseline: _state.baseline.versionId,
     reason: reason,
     date: new Date().toISOString().slice(0, 10),
-    championIC: _state.champion.cumulativeIC,
+    baselineIC: _state.baseline.cumulativeIC,
     bestShadowIC: null,
   };
 
@@ -364,21 +387,21 @@ function demoteChampion(reason) {
     }
   }
 
-  // Retire current champion
-  var prevChampion = _state.champion;
+  // Retire current baseline
+  var prevBaseline = _state.baseline;
   for (var j = 0; j < _state.shadows.length; j++) {
-    if (_state.shadows[j].versionId === prevChampion.versionId) {
+    if (_state.shadows[j].versionId === prevBaseline.versionId) {
       _state.shadows[j].status = 'retired';
       break;
     }
   }
-  _state.champion = null;
+  _state.baseline = null;
 
   _state.demotionLog.push(demotedEntry);
   if (_state.demotionLog.length > 100) _state.demotionLog = _state.demotionLog.slice(-100);
 
   _persist();
-  console.log('[ModelRegistry] DEMOTED: Champion ' + prevChampion.versionId + ' retired (' + reason + ')');
+  console.log('[ModelRegistry] DEMOTED: Baseline ' + prevBaseline.versionId + ' retired (' + reason + ')');
   return demotedEntry;
 }
 
@@ -397,7 +420,7 @@ function evaluateShadow(dateStr) {
     evaluated: [],
     promoted: null,
     demoted: null,
-    championIC: null,
+    baselineIC: null,
     shadowResults: [],
   };
 
@@ -406,19 +429,19 @@ function evaluateShadow(dateStr) {
   if (!verificationData || verificationData.samples < CONFIG.minVerificationSamples) {
     return {
       date: dateStr, evaluated: [], promoted: null, demoted: null,
-      championIC: null, shadowResults: [],
+      baselineIC: null, shadowResults: [],
       skipped: true,
       reason: '验证数据不足 (需要 ' + (CONFIG.minVerificationSamples || 30) + ' 条)',
     };
   }
 
-  // Evaluate champion
-  if (_state.champion) {
-    result.championIC = _computeRankIC(_state.champion.versionId, verificationData);
-    if (_state.champion.cumulativeIC == null && result.championIC != null) {
-      _state.champion.cumulativeIC = result.championIC;
-    } else if (result.championIC != null) {
-      _state.champion.cumulativeIC = _state.champion.cumulativeIC * 0.7 + result.championIC * 0.3;
+  // Evaluate baseline
+  if (_state.baseline) {
+    result.baselineIC = _computeRankIC(_state.baseline.versionId, verificationData);
+    if (_state.baseline.cumulativeIC == null && result.baselineIC != null) {
+      _state.baseline.cumulativeIC = result.baselineIC;
+    } else if (result.baselineIC != null) {
+      _state.baseline.cumulativeIC = _state.baseline.cumulativeIC * 0.7 + result.baselineIC * 0.3;
     }
   }
 
@@ -502,13 +525,13 @@ function evaluateShadow(dateStr) {
     if (s.status !== 'shadow') continue;
     if (s.evaluationDays < minEvalDays) continue;
 
-    var champIC = result.championIC != null ? result.championIC : -99;
+    var champIC = result.baselineIC != null ? result.baselineIC : -99;
     var criteria = checkPromotionCriteria(s, champIC, null);
 
     if (criteria.eligible) {
-      result.promoted = promoteToChampion(s.versionId,
+      result.promoted = promoteToBaseline(s.versionId,
         'Shadow IC=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(3) : '?') +
-        ' > Champion IC=' + (champIC > -99 ? champIC.toFixed(3) : 'N/A') +
+        ' > Baseline IC=' + (champIC > -99 ? champIC.toFixed(3) : 'N/A') +
         ' | 方向命中率=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : '?') +
         ' | Fwd样本=' + criteria.forwardSamples +
         ' (连续 ' + s.evaluationDays + ' 天)');
@@ -525,7 +548,7 @@ function evaluateShadow(dateStr) {
 
   // v3.3.1: Demotion check
   var demotionThreshold = CONFIG.demotionThreshold || -0.10;
-  if (_state.champion && result.championIC != null) {
+  if (_state.baseline && result.baselineIC != null) {
     var bestShadowIC = -99;
     for (var si = 0; si < result.shadowResults.length; si++) {
       if (result.shadowResults[si].cumulativeIC != null &&
@@ -533,12 +556,12 @@ function evaluateShadow(dateStr) {
         bestShadowIC = result.shadowResults[si].cumulativeIC;
       }
     }
-    // Demote if: championIC is negative AND best shadow beats champion by |demotionThreshold|+
-    if (result.championIC < 0 && bestShadowIC > result.championIC - demotionThreshold) {
-      result.demoted = demoteChampion(
-        'Champion IC=' + result.championIC.toFixed(3) + ' is negative ' +
+    // Demote if: baselineIC is negative AND best shadow beats baseline by |demotionThreshold|+
+    if (result.baselineIC < 0 && bestShadowIC > result.baselineIC - demotionThreshold) {
+      result.demoted = demoteBaseline(
+        'Baseline IC=' + result.baselineIC.toFixed(3) + ' is negative ' +
         'while best shadow IC=' + bestShadowIC.toFixed(3) +
-        ' (gap=' + (bestShadowIC - result.championIC).toFixed(3) + ' > ' + (-demotionThreshold).toFixed(2) + ')'
+        ' (gap=' + (bestShadowIC - result.baselineIC).toFixed(3) + ' > ' + (-demotionThreshold).toFixed(2) + ')'
       );
     }
   }
@@ -548,13 +571,13 @@ function evaluateShadow(dateStr) {
 }
 
 /**
- * Promote a shadow version to champion.
+ * Promote a shadow version to baseline.
  *
  * @param {string} versionId
  * @param {string} reason
  * @returns {object|null}
  */
-function promoteToChampion(versionId, reason) {
+function promoteToBaseline(versionId, reason) {
   var shadow = null;
   for (var i = 0; i < _state.shadows.length; i++) {
     if (_state.shadows[i].versionId === versionId) {
@@ -565,11 +588,11 @@ function promoteToChampion(versionId, reason) {
   if (!shadow) return null;
 
   // v3.3.1: Safety net — run full criteria check even if already done in evaluateShadow
-  // IMPORTANT: pass the REAL champion IC, not the shadow's own IC
+  // IMPORTANT: pass the REAL baseline IC, not the shadow's own IC
   if (shadow.status === 'shadow') {
-    var championIC = _state.champion ? _state.champion.cumulativeIC : null;
-    var championDrawdown = _state.champion ? _state.champion._maxDrawdown : null;
-    var criteria = checkPromotionCriteria(shadow, championIC, championDrawdown);
+    var baselineIC = _state.baseline ? _state.baseline.cumulativeIC : null;
+    var baselineDrawdown = _state.baseline ? _state.baseline._maxDrawdown : null;
+    var criteria = checkPromotionCriteria(shadow, baselineIC, baselineDrawdown);
     if (!criteria.eligible) {
       console.log('[ModelRegistry] SAFETY BLOCK: Promotion blocked for ' + versionId +
         ' — ' + criteria.failingChecks.join(', '));
@@ -577,12 +600,12 @@ function promoteToChampion(versionId, reason) {
     }
   }
 
-  var prevChampion = _state.champion;
-  // Retire previous champion
-  if (prevChampion) {
+  var prevBaseline = _state.baseline;
+  // Retire previous baseline
+  if (prevBaseline) {
     var prevEntry = null;
     for (var j = 0; j < _state.shadows.length; j++) {
-      if (_state.shadows[j].versionId === prevChampion.versionId) {
+      if (_state.shadows[j].versionId === prevBaseline.versionId) {
         prevEntry = _state.shadows[j];
         break;
       }
@@ -590,16 +613,16 @@ function promoteToChampion(versionId, reason) {
     if (prevEntry) {
       prevEntry.status = 'retired';
     } else {
-      // Previous champion may have been pruned; add a tombstone
-      prevChampion.status = 'retired';
-      _state.shadows.push(prevChampion);
+      // Previous baseline may have been pruned; add a tombstone
+      prevBaseline.status = 'retired';
+      _state.shadows.push(prevBaseline);
     }
   }
 
-  // Promote new champion
-  shadow.status = 'champion';
+  // Promote new baseline
+  shadow.status = 'baseline';
   shadow.promotedAt = new Date().toISOString();
-  _state.champion = {
+  _state.baseline = {
     versionId: shadow.versionId,
     params: shadow.params,
     source: shadow.source,
@@ -610,30 +633,30 @@ function promoteToChampion(versionId, reason) {
   };
 
   _state.promotionHistory.push({
-    from: prevChampion ? prevChampion.versionId : 'none',
+    from: prevBaseline ? prevBaseline.versionId : 'none',
     to: versionId,
     reason: reason,
     date: new Date().toISOString().slice(0, 10),
   });
 
   _persist();
-  console.log('[ModelRegistry] PROMOTED: ' + versionId + ' -> CHAMPION (' + reason + ')');
-  return _state.champion;
+  console.log('[ModelRegistry] PROMOTED: ' + versionId + ' -> BASELINE (' + reason + ')');
+  return _state.baseline;
 }
 
 /**
- * Get current champion parameters (used by simfolio for live trading).
+ * Get current baseline parameters (used by simfolio for live trading).
  *
  * @returns {object|null} { versionId, params, cumulativeIC, ... }
  */
-function getChampionParams() {
-  if (!_state.champion) return null;
+function getBaselineParams() {
+  if (!_state.baseline) return null;
   return {
-    versionId: _state.champion.versionId,
-    params: _state.champion.params,
-    cumulativeIC: _state.champion.cumulativeIC,
-    evaluationDays: _state.champion.evaluationDays,
-    promotedAt: _state.champion.promotedAt,
+    versionId: _state.baseline.versionId,
+    params: _state.baseline.params,
+    cumulativeIC: _state.baseline.cumulativeIC,
+    evaluationDays: _state.baseline.evaluationDays,
+    promotedAt: _state.baseline.promotedAt,
   };
 }
 
@@ -645,7 +668,7 @@ function getChampionParams() {
 function getRegistryStatus() {
   return {
     enabled: CONFIG.enabled || false,
-    champion: _state.champion,
+    baseline: _state.baseline,
     shadowCount: _state.shadows.filter(function(s) { return s.status === 'shadow'; }).length,
     retiredCount: _state.shadows.filter(function(s) { return s.status === 'retired'; }).length,
     shadows: _state.shadows.filter(function(s) { return s.status === 'shadow'; }).map(function(s) {
@@ -875,7 +898,7 @@ function _spearmanIC(pairs) {
 
 /**
  * [v3.3.2] Check if leakage audit permits the given action.
- * @param {string} purpose - 'promotion' (Champion/trading, strict) or 'learning' (Shadow, permissive)
+ * @param {string} purpose - 'promotion' (Baseline/trading, strict) or 'learning' (Shadow, permissive)
  *
  * Learning:   NO_SAMPLES → OK (don't block Shadow accumulation).
  *             MINOR_ISSUES → OK (model can learn, promotion needs manual review).
@@ -908,7 +931,7 @@ function _checkLeakageAudit(purpose) {
     }
 
     // [v3.3.2] MINOR_ISSUES: allow learning only, NOT promotion
-    // For promotion (Champion/trading): only CLEAN (totalChecks>0, 0 violations) passes
+    // For promotion (Baseline/trading): only CLEAN (totalChecks>0, 0 violations) passes
     // For learning (Shadow): MINOR_ISSUES is acceptable
     if (verdict === 'CLEAN' && totalChecks > 0) return true;
     if (verdict === 'MINOR_ISSUES') return purpose === 'learning';
@@ -921,11 +944,11 @@ module.exports = {
   registerVersion,
   logShadowPrediction,
   evaluateShadow,
-  promoteToChampion,
-  demoteChampion,
+  promoteToBaseline,
+  demoteBaseline,
   checkPromotionCriteria,
   updateForwardSamples,
-  getChampionParams,
+  getBaselineParams,
   getRegistryStatus,
   retireVersion,
 };

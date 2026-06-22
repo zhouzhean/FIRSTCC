@@ -337,7 +337,7 @@ function _aggregateExistingData() {
   }
 
   // 加载 last_pipeline_result
-  const lprPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+  const lprPath = path.join(DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
   if (fs.existsSync(lprPath)) {
     try {
       aggregated.lastPipeline = JSON.parse(fs.readFileSync(lprPath, 'utf8'));

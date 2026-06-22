@@ -888,7 +888,7 @@ class Scheduler extends EventEmitter {
       const { computeCompositeScore } = require('./factors/composite');
       const simfolio = require('./simfolio');
 
-      // 获取全市场数据，按成交额排序取 Top N
+      // 获取低价(≤20元)非创业板A股子策略数据，按成交额排序取 Top N
       const allStocks = await marketData.fetchAllStocks();
       const candidates = marketData.screenStocks(allStocks);
       const indices = await marketData.fetchIndices();
@@ -1440,7 +1440,7 @@ class Scheduler extends EventEmitter {
       // Get last pipeline result
       let lastResult = null;
       try {
-        const resultPath = path.join(config.DATA_DIR, 'simfolio', 'last_pipeline_result.json');
+        const resultPath = path.join(config.DATA_DIR, 'simfolio', 'last_pipeline_result.legacy_untrusted.json');
         if (fs.existsSync(resultPath)) {
           lastResult = JSON.parse(fs.readFileSync(resultPath, 'utf8'));
         }
@@ -1822,7 +1822,9 @@ class Scheduler extends EventEmitter {
           maxScore: allResults.length > 0 ? Math.max.apply(null, allResults.map(function(r) { return r.compositeScore || 0; })) : 0,
           pipelineResultsForKernel: allResults.slice(0, 100).map(function(rr) { return { code: rr.code, name: rr.name, compositeScore: rr.compositeScore || 0, prediction: rr.prediction ? { expectedReturn: rr.prediction.expectedReturn, confidence: rr.prediction.confidence, label: rr.prediction.label } : null }; }),
         };
-        fs.writeFileSync(path.join(dir, 'last_pipeline_result.json'), JSON.stringify(summary, null, 2), 'utf8');
+        summary.legacy_untrusted = true;
+        summary._warning = 'This file feeds the OLD verification path. Read prediction_ledger for verification.';
+        fs.writeFileSync(path.join(dir, 'last_pipeline_result.legacy_untrusted.json'), JSON.stringify(summary, null, 2), 'utf8');
       } catch (_) {}
     }
   }

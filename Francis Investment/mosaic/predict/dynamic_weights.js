@@ -297,19 +297,29 @@ function getGridSearchParams() {
  * Tier 4 (champion): passes all qualification criteria — same as shadow_allowed for now
  */
 function computeWeightTier(sampleCount, calendarDays, icLower, netExcessReturn) {
+  // v3.4.6: Fail-closed — null evidence != pass
+  // icLower or netExcessReturn null means evidence is unavailable → suggest_only at best
+  if (icLower == null) {
+    return { tier: 'suggest_only', mode: 'suggest', reason: 'Rank IC CI下界未计算（验证数据不足），缺少统计证据，仅建议不自动更新' };
+  }
+  if (netExcessReturn == null) {
+    return { tier: 'suggest_only', mode: 'suggest', reason: '净超额收益未计算（验证数据不足），缺少收益证据，仅建议不自动更新' };
+  }
+
   if (sampleCount < 300 || calendarDays < 20) {
     return { tier: 'record_only', mode: 'off', reason: '样本不足(' + sampleCount + '/' + calendarDays + '天)，仅记录不更新' };
   }
   if (sampleCount < 1000 || calendarDays < 60) {
     return { tier: 'suggest_only', mode: 'suggest', reason: '样本积累中(' + sampleCount + '/' + calendarDays + '天)，仅建议不自动更新' };
   }
-  if (icLower != null && icLower <= 0) {
+  if (icLower <= 0) {
     return { tier: 'suggest_only', mode: 'suggest', reason: 'Rank IC置信区间下界非正(' + icLower.toFixed(3) + ')，统计不安全' };
   }
-  if (netExcessReturn != null && netExcessReturn <= 0) {
+  if (netExcessReturn <= 0) {
     return { tier: 'suggest_only', mode: 'suggest', reason: '净超额收益为负(' + netExcessReturn.toFixed(2) + '%)，不自动更新' };
   }
-  return { tier: 'shadow_allowed', mode: 'shadow', reason: '通过所有验证门控' };
+  // v3.4.6: Paper trading gate — requires 2 rolling OOS windows + drawdown not worsening (checked in updateDynamicWeights)
+  return { tier: 'shadow_allowed', mode: 'shadow', reason: '通过所有验证门控（样本:' + sampleCount + '，交易日:' + calendarDays + '）' };
 }
 
 function updateDynamicWeights() {
@@ -540,12 +550,29 @@ function rollbackDynamicWeights() {
 function getEffectiveWeights() {
   const dynamic = loadDynamicWeights();
   if (dynamic && dynamic.weights && dynamic.r2 >= 0.05) {
+    // v3.4.6: Fail-closed — must pass tier gate AND have complete evidence
+    if (dynamic.tier !== 'shadow_allowed') {
+      return {
+        ...config.FACTOR_WEIGHTS,
+        _source: 'config',
+        _fallback_reason: '动态权重未满足shadow_allowed条件（当前层级: ' + (dynamic.tier || 'unknown') + '），使用配置默认权重',
+      };
+    }
+    // Complete evidence check
+    if (dynamic.icLower == null || dynamic.icLower <= 0 || dynamic.netExcessReturn == null || dynamic.netExcessReturn <= 0) {
+      return {
+        ...config.FACTOR_WEIGHTS,
+        _source: 'config',
+        _fallback_reason: '动态权重证据不完整（IC下界或净超额收益缺失/非正），使用配置默认权重',
+      };
+    }
     return {
       ...config.FACTOR_WEIGHTS,
       ...dynamic.weights,
       _source: 'dynamic',
       _r2: dynamic.r2,
       _updatedAt: dynamic.updatedAt,
+      _tier: dynamic.tier,
     };
   }
   return { ...config.FACTOR_WEIGHTS, _source: 'config' };
