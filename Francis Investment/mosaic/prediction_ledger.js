@@ -1,12 +1,17 @@
 /**
- * prediction_ledger.js — Immutable Prediction Ledger I/O (v3.4.9.4)
+ * prediction_ledger.js — Immutable Prediction Ledger I/O (v3.4.9.4.1)
  *
  * All file I/O accepts explicit dataDir parameter — test isolation by design.
+ *
+ * v3.4.9.4.1 P0-1: Unified dataDir convention:
+ *   - dataDir is ALWAYS the report-engine/data root directory.
+ *   - Manifest files live at dataDir root (not inside simfolio/).
+ *   - Ledger + decision_event files live under dataDir/simfolio/.
  *
  * Functions:
  *   1. buildLedgerEntry(candidate, context) → ledger entry object
  *   2. writeLedgerFile(dataDir, entries, runId, expectedHash) → { writtenCount, duplicateCount, status }
- *   3. writeRunManifest(dataDir, date, manifest) → writes daily_research_manifest_YYYY-MM-DD.json
+ *   3. writeRunManifest(dataDir, date, manifest) → writes dataDir/daily_research_manifest_YYYY-MM-DD.json
  *   4. readRunManifest(dataDir, date) → manifest object or null
  *   5. writeDecisionEvent(dataDir, date, event) → appends decision_event JSONL
  */
@@ -70,10 +75,28 @@ function buildLedgerEntry(candidate, runId, context) {
     modelVersion: codeVersion, // old field (app version) — kept for backward compat
   };
 
+  // v3.4.9.4.1 P0-3: Call REAL meetsEvidenceThreshold per candidate
+  var meetsThresholdResult = null;
+  var meetsThreshold = false;
+  if (candidate.prediction) {
+    try {
+      var erModule = require('./predict/expected_return');
+      meetsThresholdResult = erModule.meetsEvidenceThreshold(candidate.prediction, context.dataQualityPenalty || 0);
+      meetsThreshold = meetsThresholdResult.passed === true;
+    } catch (_) {
+      // fallback: use context flag
+      meetsThreshold = context.meetsEvidenceThreshold === true;
+    }
+  } else {
+    meetsThreshold = false;
+  }
+
+  // v3.4.9.4.1 P0-3: Pass kernelDecision object (not just verdict string)
+  // globalTradePermission = kernelDecision.canBuy && kernelDecision.maxBuysPerDay > 0
+  var kernelDecision = context.kernelDecision || null;
+
   // Compute 6-field eligibility
-  var kernelVerdict = context.kernelVerdict || 'BLOCK';
-  var meetsThreshold = context.meetsEvidenceThreshold !== false;
-  var eligibility = cohort.computeAllEligibility(candidate, snap, kernelVerdict, meetsThreshold, partialEntry);
+  var eligibility = cohort.computeAllEligibility(candidate, snap, kernelDecision, meetsThreshold, partialEntry);
 
   // Compute old researchEligible compat result
   var resEligResult = cohort.computeResearchEligibility(snap, partialEntry);
@@ -138,8 +161,11 @@ function buildLedgerEntry(candidate, runId, context) {
     // ── Prediction ──
     expectedReturn: (candidate.prediction && candidate.prediction.expectedReturn != null) ? candidate.prediction.expectedReturn : null,
     confidence: (candidate.prediction && candidate.prediction.confidence != null) ? candidate.prediction.confidence : null,
+    // v3.4.9.4.1 P0-3: Evidence threshold result (from real meetsEvidenceThreshold call)
+    evidenceThresholdPassed: meetsThreshold,
+    evidenceThresholdReason: (meetsThresholdResult && meetsThresholdResult.reason) || null,
 
-    // ── 6-field Eligibility (v3.4.9.4) ──
+    // ── 6-field Eligibility (v3.4.9.4.1 P0-3: globalTradePermission = kernelDecision.canBuy && maxBuysPerDay>0) ──
     schemaValid: eligibility.schemaValid,
     predictionValid: eligibility.predictionValid,
     researchEligible: eligibility.researchEligible,
@@ -281,9 +307,9 @@ function writeLedgerFile(dataDir, entries, runId, candidateSetHash, today) {
 function writeRunManifest(dataDir, date, manifest) {
   try {
     if (!fs) return false;
-    var dir = path.join(dataDir, 'simfolio');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    var file = path.join(dir, 'daily_research_manifest_' + date + '.json');
+    // v3.4.9.4.1 P0-1: Manifest lives at dataDir ROOT, not inside simfolio/
+    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+    var file = path.join(dataDir, 'daily_research_manifest_' + date + '.json');
     fs.writeFileSync(file, JSON.stringify(manifest, null, 2), 'utf8');
     console.log('[PredictionLedger] Run manifest written: ' + file + ' status=' + manifest.status);
     return true;
@@ -305,7 +331,8 @@ function writeRunManifest(dataDir, date, manifest) {
 function readRunManifest(dataDir, date) {
   try {
     if (!fs) return null;
-    var file = path.join(dataDir, 'simfolio', 'daily_research_manifest_' + date + '.json');
+    // v3.4.9.4.1 P0-1: Manifest lives at dataDir ROOT
+    var file = path.join(dataDir, 'daily_research_manifest_' + date + '.json');
     if (!fs.existsSync(file)) return null;
     var raw = fs.readFileSync(file, 'utf8');
     return JSON.parse(raw);

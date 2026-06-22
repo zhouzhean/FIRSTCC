@@ -23,7 +23,7 @@ try {
 var _testDataRoot = null;
 
 module.exports = {
-  version: 'v3.4.9.4',
+  version: 'v3.4.9.4.1',
   _testDataRoot: _testDataRoot,  // mutable: tests set this before requiring modules
   buildCommit: _buildCommit,
   buildTimestamp: _buildTimestamp,

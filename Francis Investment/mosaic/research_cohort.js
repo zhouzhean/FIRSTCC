@@ -133,13 +133,14 @@ function computeResearchEligibility(snapshot, entry) {
  *
  * @param {Object} candidate — pipeline result object
  * @param {Object} snapshot — normalized feature snapshot (from normalizeResearchFeatureSnapshot)
- * @param {string} kernelVerdict — kernel's finalVerdict: 'ALLOW'|'CAUTIOUS'|'REDUCE'|'BLOCK'
+ * @param {Object} kernelDecision — kernel's computeDecision result (needs canBuy, maxBuysPerDay, finalVerdict)
  * @param {boolean} meetsThreshold — does candidate meet evidence/strategy thresholds for buying?
+ *                                   v3.4.9.4.1 P0-3: from real expectedReturn.meetsEvidenceThreshold() call
  * @param {Object} entry — partially-built ledger entry (needs price + targetDate + modelVersionId)
  * @returns {Object} { schemaValid, predictionValid, researchEligible, executionCandidateEligible,
  *                     globalTradePermission, executionEligible, reasons: {schema:[],prediction:[],execution:[]} }
  */
-function computeAllEligibility(candidate, snapshot, kernelVerdict, meetsThreshold, entry) {
+function computeAllEligibility(candidate, snapshot, kernelDecision, meetsThreshold, entry) {
   var schemaReasons = [];
   var predictionReasons = [];
   var schemaValid = true;
@@ -211,10 +212,26 @@ function computeAllEligibility(candidate, snapshot, kernelVerdict, meetsThreshol
     }
   }
 
-  // ── Composite flags ──
+  // ── Composite flags (v3.4.9.4.1 P0-3: globalTradePermission uses kernel canBuy + maxBuysPerDay) ──
   var researchEligible = schemaValid && predictionValid;
-  var executionCandidateEligible = researchEligible && (meetsThreshold !== false);
-  var globalTradePermission = (kernelVerdict === 'ALLOW' || kernelVerdict === 'CAUTIOUS');
+  var executionCandidateEligible = researchEligible && (meetsThreshold === true);
+
+  // v3.4.9.4.1 P0-3: globalTradePermission = kernel allows buying (canBuy=true AND maxBuysPerDay>0)
+  // Backward compat: if kernelDecision is a string (old verdict), use string comparison
+  var kdCanBuy, kdHasSlots;
+  if (typeof kernelDecision === 'string') {
+    // Old-style calling convention: string verdict ('ALLOW'|'CAUTIOUS'|...)
+    kdCanBuy = (kernelDecision === 'ALLOW' || kernelDecision === 'CAUTIOUS');
+    kdHasSlots = true; // old behavior: didn't check maxBuysPerDay
+  } else if (kernelDecision && typeof kernelDecision === 'object') {
+    kdCanBuy = (kernelDecision.canBuy === true);
+    kdHasSlots = (kernelDecision.maxBuysPerDay > 0);
+  } else {
+    kdCanBuy = false;
+    kdHasSlots = false;
+  }
+  var globalTradePermission = kdCanBuy && kdHasSlots;
+
   var executionEligible = executionCandidateEligible && globalTradePermission;
 
   return {
@@ -227,7 +244,10 @@ function computeAllEligibility(candidate, snapshot, kernelVerdict, meetsThreshol
     reasons: {
       schema: schemaReasons.length > 0 ? schemaReasons : ['all_checks_passed'],
       prediction: predictionReasons.length > 0 ? predictionReasons : ['all_checks_passed'],
-      execution: !researchEligible ? ['research_ineligible'] : (!meetsThreshold ? ['threshold_not_met'] : (!globalTradePermission ? ['global_trade_blocked'] : ['eligible'])),
+      execution: !researchEligible ? ['research_ineligible']
+        : (!executionCandidateEligible ? ['threshold_not_met']
+        : (!globalTradePermission ? ['global_trade_blocked:' + (kdCanBuy ? 'no_slots' : 'no_buy_permission')]
+        : ['eligible'])),
     },
   };
 }

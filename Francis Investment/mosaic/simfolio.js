@@ -744,18 +744,16 @@ function _resolveDataPath(subPath) {
   return require('path').join(__dirname, '..', 'report-engine', 'data', subPath || '');
 }
 
-// === v3.4.9.4: Canonical Window Detection ===
-function _isDesignatedCanonicalWindow(scanType, now) {
+// === v3.4.9.4.1 P0-2: Canonical Window Detection — by scheduler task identity, NOT wall clock ===
+function _isDesignatedCanonicalWindow(scanType, scheduledSlot) {
   if (scanType !== 'full') return false;
-  var dt = now || new Date();
-  var h = dt.getHours();
-  var m = dt.getMinutes();
-  // Only the 09:30–10:00 window is the designated canonical cohort
-  return h === 9 && m >= 30 && m < 60;
+  // Only the 09:30 scheduled full scan is canonical. Other full scans (10:00, 11:00, 13:00) are intraday.
+  return scheduledSlot === '09:30';
 }
 
-// === v3.4.9.4: Immutable Prediction Ledger — delegates to prediction_ledger.js ===
-function _appendPredictionLedger(candidates, context, scanType) {
+// === v3.4.9.4.1 P0-3: Immutable Prediction Ledger — delegates to prediction_ledger.js ===
+// Now passes kernelDecision object + calls real meetsEvidenceThreshold per candidate
+function _appendPredictionLedger(candidates, context, scanType, kernelDecision, dqPenalty) {
   try {
     var pl = require('./prediction_ledger');
     var today = (context && context.today) || new Date().toISOString().slice(0, 10);
@@ -778,7 +776,7 @@ function _appendPredictionLedger(candidates, context, scanType) {
     } catch (_) {}
     if (!modelVersionId) modelVersionId = require('./config').version || 'unknown';
 
-    // Build entries with full v3.4.9.4 fields
+    // Build entries with full v3.4.9.4.1 fields
     var entries = [];
     var topN = Math.min((candidates || []).length, 50);
     for (var i = 0; i < topN; i++) {
@@ -789,10 +787,11 @@ function _appendPredictionLedger(candidates, context, scanType) {
         macroRegime: (context && context.macroRegime) || null,
         indexFreshness: (context && context.indexFreshness) || 'unknown',
         indexValues: (context && context.indexValues) || null,
-        dataQualityPenalty: (context && context.dataQualityPenalty) || 0,
+        dataQualityPenalty: dqPenalty != null ? dqPenalty : (context && context.dataQualityPenalty) || 0,
         note: (context && context.note) || null,
-        kernelVerdict: (context && context.kernelVerdict) || 'BLOCK',
-        meetsEvidenceThreshold: (context && context.meetsEvidenceThreshold) !== false,
+        // v3.4.9.4.1 P0-3: Pass full kernelDecision object for globalTradePermission
+        kernelDecision: kernelDecision || null,
+        meetsEvidenceThreshold: true, // fallback — real check inside buildLedgerEntry
         buildCommit: (context && context.buildCommit) || null,
         modelVersionId: modelVersionId,
         parameterSetHash: parameterSetHash,
@@ -864,7 +863,7 @@ function _markInvalidLedgerEntries(today) {
   }
 }
 
-function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel, runId) {
+function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel, runId, scheduledSlot) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
   const isFullScan = scanType === 'full';
@@ -911,9 +910,10 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     });
   } catch (_) { /* kernel unavailable — fall through to legacy gate chain */ }
 
-  // ==================== v3.4.9.4: CANONICAL COHORT + RESEARCH SNAPSHOT ====================
-  // v3.4.9.4: Only the 09:30 full scan is canonical. Other full scans and mid scans are intraday_observation.
-  var _isCanonical = scanType === 'full' && _isDesignatedCanonicalWindow(scanType, new Date());
+  // ==================== v3.4.9.4.1 P0-2: CANONICAL COHORT + RESEARCH SNAPSHOT ====================
+  // Only the 09:30 scheduled full scan is canonical. Other full scans (10:00/11:00/13:00) and all mid scans are intraday_observation.
+  // Canonical-ness is determined by scheduler task identity, NOT wall clock execution time.
+  var _isCanonical = _isDesignatedCanonicalWindow(scanType, scheduledSlot);
 
   // Dedup by code, sort by expectedReturn DESC → compositeScore DESC → code ASC, top 50
   var _researchSnapshot = cohort.buildResearchSnapshot(pipelineResults || []);
@@ -963,13 +963,12 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     boughtCodes: [],
     indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown',
     indexValues: { sh: (indices && indices[0]) ? indices[0].price : null },
-    kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : null,
     primaryBlocker: kernelDecision ? kernelDecision.primaryBlocker : null,
     gateStates: kernelDecision ? kernelDecision.gateStates : null,
     meetsEvidenceThreshold: true,
     quoteSource: 'unknown',
     quoteAsOf: null,
-  }, scanType);
+  }, scanType, kernelDecision, dqReport ? dqReport.penalty : 0);
 
   // v3.4.9.4: Update run manifest to completed AFTER ledger write (canonical scans only)
   if (_manifestWritten && _plCaptureResult.status !== 'error' &&
@@ -2873,7 +2872,7 @@ module.exports = {
   loadStopLossCooldowns,
   // v3.4.9.3: Mark legacy ledger entries with hash-only featureSnapshot
   _markInvalidLedgerEntries,
-  // v3.4.9.4: Test isolation — exposes data path resolver for test infrastructure
+  // v3.4.9.4.1: Test isolation — exposes data path resolver + canonical detection
   _resolveDataPath,
   _isDesignatedCanonicalWindow,
 };

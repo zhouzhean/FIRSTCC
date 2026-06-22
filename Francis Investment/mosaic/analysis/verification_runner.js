@@ -277,10 +277,10 @@ function runLeakageAudit(history) {
 function verifyOneScan(dateStr) {
   if (!dateStr) return null;
 
-  // v3.4.9.4: Read canonical runId from daily research manifest
+  // v3.4.9.4.1 P0-1: Manifest at DATA_DIR root (not simfolio/)
   var manifest = null;
   try {
-    manifest = require('../prediction_ledger').readRunManifest(SIMFOLIO_DIR, dateStr);
+    manifest = require('../prediction_ledger').readRunManifest(DATA_DIR, dateStr);
   } catch (_) {}
   if (!manifest || !manifest.canonicalRunId) {
     // For backward compat: if no manifest, fall back to old behavior (scan first 50)
@@ -568,21 +568,21 @@ function computeRankIC(date, results) {
   };
 }
 
-// v3.4.9.4: Count independent trading days from daily research manifests
+// v3.4.9.4.1 P0-1: Count independent trading days from daily research manifests at DATA_DIR root
 // Each completed manifest with researchEligibleCount > 0 counts as one independent day.
 function _countIndependentTradingDays() {
   try {
-    var files = fs.readdirSync(SIMFOLIO_DIR);
     var canonicalDays = new Set();
-    // v3.4.9.4: Primary source — daily research manifests
+    // v3.4.9.4.1 P0-1: Primary source — daily research manifests at DATA_DIR root
+    var dataFiles = fs.readdirSync(DATA_DIR);
     var hasManifests = false;
-    for (var f = 0; f < files.length; f++) {
-      var mm = files[f].match(/^daily_research_manifest_(\d{4}-\d{2}-\d{2})\.json$/);
+    for (var f = 0; f < dataFiles.length; f++) {
+      var mm = dataFiles[f].match(/^daily_research_manifest_(\d{4}-\d{2}-\d{2})\.json$/);
       if (!mm) continue;
       hasManifests = true;
       var mDate = mm[1];
       try {
-        var manifest = JSON.parse(fs.readFileSync(path.join(SIMFOLIO_DIR, files[f]), 'utf8'));
+        var manifest = JSON.parse(fs.readFileSync(path.join(DATA_DIR, dataFiles[f]), 'utf8'));
         if (manifest.status === 'completed' && manifest.researchEligibleCount > 0) {
           canonicalDays.add(mDate);
         }
@@ -590,17 +590,17 @@ function _countIndependentTradingDays() {
     }
     if (hasManifests) return canonicalDays.size;
 
-    // Fallback: no manifests yet (pre-v3.4.9.4 data) — count from ledger entries
-    for (var g = 0; g < files.length; g++) {
-      var lm = files[g].match(/^prediction_ledger_(\d{4}-\d{2}-\d{2})\.jsonl$/);
+    // Fallback: no manifests yet (pre-v3.4.9.4 data) — count from ledger entries in simfolio/
+    var simFiles = fs.readdirSync(SIMFOLIO_DIR);
+    for (var g = 0; g < simFiles.length; g++) {
+      var lm = simFiles[g].match(/^prediction_ledger_(\d{4}-\d{2}-\d{2})\.jsonl$/);
       if (!lm) continue;
       var dateStr = lm[1];
       try {
-        var lines = fs.readFileSync(path.join(SIMFOLIO_DIR, files[g]), 'utf8').trim().split('\n').filter(Boolean);
+        var lines = fs.readFileSync(path.join(SIMFOLIO_DIR, simFiles[g]), 'utf8').trim().split('\n').filter(Boolean);
         for (var l = 0; l < lines.length; l++) {
           try {
             var entry = JSON.parse(lines[l]);
-            // v3.4.9.3: Exclude entries marked as invalid schema
             if (entry.ingestionStatus === 'invalid_schema_v3492') continue;
             if (entry.canonical && entry.researchEligible) {
               canonicalDays.add(dateStr);

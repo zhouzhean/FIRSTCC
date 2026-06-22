@@ -961,6 +961,20 @@ function renderCohortIntegrity(data) {
 
   var html = '';
   var m = data.manifest;
+  var counts = data.counts || {};
+
+  // v3.4.9.4.1 P0-4: Three cohort categories row
+  html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">' +
+    '<div style="flex:1;min-width:90px;text-align:center;padding:8px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">' +
+    '<div style="font-size:20px;font-weight:700;color:#1e293b;">' + (data.canonicalCohortCount || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Canonical</div></div>' +
+    '<div style="flex:1;min-width:90px;text-align:center;padding:8px;background:#fefce8;border-radius:4px;border:1px solid #e2e8f0;">' +
+    '<div style="font-size:20px;font-weight:700;color:#a16207;">' + (data.intradayCount || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Intraday</div></div>' +
+    '<div style="flex:1;min-width:90px;text-align:center;padding:8px;background:#fee2e2;border-radius:4px;border:1px solid #e2e8f0;">' +
+    '<div style="font-size:20px;font-weight:700;color:#dc2626;">' + (data.quarantinedCount || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Quarantined</div></div>' +
+    '</div>';
 
   // Canonical runId + status
   html += '<div style="margin-bottom:10px;">';
@@ -979,33 +993,35 @@ function renderCohortIntegrity(data) {
   }
   html += '</div>';
 
-  // Counts row
-  var counts = data.counts || {};
+  // v3.4.9.4.1 P0-4: 6-field eligibility counts (current valid cohort only, quarantined excluded)
   html += '<div class="ps-counts" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#1e293b;">' + (data.ledgerTotal || 0) + '</div>' +
-    '<div style="font-size:9px;color:#64748b;">Ledger</div></div>' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#16a34a;">' + (counts.schemaValid || 0) + '</div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#1e293b;">' + (data.ledgerTotal || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Total</div></div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#16a34a;">' + (counts.schemaValid || 0) + '</div>' +
     '<div style="font-size:9px;color:#64748b;">Schema</div></div>' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#fefce8;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#a16207;">' + (counts.researchEligible || 0) + '</div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#fefce8;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#a16207;">' + (counts.researchEligible || 0) + '</div>' +
     '<div style="font-size:9px;color:#64748b;">Research</div></div>' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#eff6ff;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#2563eb;">' + (counts.executionCandidateEligible || 0) + '</div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#eff6ff;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#2563eb;">' + (counts.executionCandidateEligible || 0) + '</div>' +
     '<div style="font-size:9px;color:#64748b;">Exec.Cand.</div></div>' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#fee2e2;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#dc2626;">' + (counts.globalBlocked || 0) + '</div>' +
-    '<div style="font-size:9px;color:#64748b;">GlobalBlock</div></div>' +
-    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
-    '<div style="font-size:16px;font-weight:700;color:#16a34a;">' + (counts.actualBought || 0) + '</div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#fee2e2;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#dc2626;">' + (counts.globalBlocked || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Blocked</div></div>' +
+    '<div style="flex:1;min-width:70px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
+    '<div style="font-size:14px;font-weight:700;color:#16a34a;">' + (counts.actualBought || 0) + '</div>' +
     '<div style="font-size:9px;color:#64748b;">Bought</div></div>' +
     '</div>';
 
   // Detail rows
   html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:4px;">';
   html += '<div class="metric-row"><span style="font-size:10px;">Missing E[R]</span><span style="font-size:10px;' + (counts.missingExpectedReturn > 0 ? 'color:#dc2626;' : '') + '">' + (counts.missingExpectedReturn || 0) + '</span></div>';
-  html += '<div class="metric-row"><span style="font-size:10px;">Old Format Quarantined</span><span style="font-size:10px;' + (counts.oldFormatQuarantined > 0 ? 'color:#f59e0b;' : '') + '">' + (counts.oldFormatQuarantined || 0) + '</span></div>';
+  // v3.4.9.4.1 P0-4: Quarantined shown separately here
+  if (data.quarantinedCount > 0) {
+    html += '<div class="metric-row"><span style="font-size:10px;">Quarantined (old format)</span><span style="font-size:10px;color:#f59e0b;">' + data.quarantinedCount + '</span></div>';
+  }
 
   // Feature coverage
   if (data.featureCoverage && Object.keys(data.featureCoverage).length > 0) {

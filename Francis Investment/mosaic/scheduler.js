@@ -659,13 +659,15 @@ class Scheduler extends EventEmitter {
         // v3.4.9: Generate stable runId BEFORE any gate decisions
         this._scanCounter++;
         var runId = this._sessionId + '_' + 'full' + '_' + this._scanCounter;
+        // v3.4.9.4.1 P0-2: Extract scheduled slot from reason (e.g. 'scheduled_09:30' → '09:30')
+        var scheduledSlot = (reason && reason.indexOf('scheduled_') === 0) ? reason.slice('scheduled_'.length) : 'unknown';
 
         const pf = simfolio.loadPortfolio();
         const crossMarket = require('./analysis/cross_market');
         const macroContext = { riskState: crossMarket.getCachedRiskState() };
         // v3.4.2: Pass market state so kernel can distinguish "market closed" vs "data anomaly"
         var stateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
-        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext, this._state, stateLabels[this._state] || this._state, runId);
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext, this._state, stateLabels[this._state] || this._state, runId, scheduledSlot);
         this._logEvent('trade_complete', {
           decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
           executed: tradeResult.executed ? tradeResult.executed.length : 0,
@@ -1029,7 +1031,7 @@ class Scheduler extends EventEmitter {
           const macroContext = { riskState: crossMarket.getCachedRiskState() };
           // v3.4.2: Pass market state
           var midStateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state, midRunId);
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state, midRunId, null);
           // v3.4.2: trade_complete event for mid-scan (was missing — only full scan had it)
           this._logEvent('trade_complete', {
             decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,

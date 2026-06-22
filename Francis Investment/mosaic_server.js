@@ -648,7 +648,7 @@ function handleSimfolioTrade(res) {
   } catch (_) {}
 
   const pf = simfolio.loadPortfolio();
-  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices, 'full', macroContext, mktState, mktLabel);
+  const result = simfolio.makeTradingDecisions(pf, pipeline.result.allResults, pipeline.result.indices, 'full', macroContext, mktState, mktLabel, null, null);
 
   return jsonResponse(res, {
     ok: true,
@@ -2211,27 +2211,46 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
-  // === [v3.4.9.4]: Research Cohort Integrity API ===
+  // === [v3.4.9.4.1]: Research Cohort Integrity API (P0-4: separated counting) ===
   if (pathname === '/api/cohort-integrity') {
     try {
       var ciToday = new Date().toISOString().slice(0, 10);
       var ciRes = { ok: true, date: ciToday, hasManifest: false, manifest: null,
+        // v3.4.9.4.1 P0-4: Three separate cohort categories
+        canonicalCohortCount: 0, intradayCount: 0, quarantinedCount: 0,
         counts: { schemaValid: 0, predictionValid: 0, researchEligible: 0,
           executionCandidateEligible: 0, globalBlocked: 0, executionEligible: 0,
-          actualBought: 0, missingExpectedReturn: 0, oldFormatQuarantined: 0 },
+          actualBought: 0, missingExpectedReturn: 0 },
         featureCoverage: {} };
 
-      // Read daily manifest
+      // v3.4.9.4.1 P0-1: Manifest at DATA_DIR root (not simfolio/)
       try {
         var pl = require('./mosaic/prediction_ledger');
-        var manifest = pl.readRunManifest(path.join(DATA_DIR, 'simfolio'), ciToday);
+        var manifest = pl.readRunManifest(DATA_DIR, ciToday);
         if (manifest) {
           ciRes.hasManifest = true;
           ciRes.manifest = manifest;
         }
       } catch (_) {}
 
-      // Read today's ledger and aggregate 6-field eligibility counts
+      // v3.4.9.4.1 P0-4: Read decision_events to get actualBought by predictionId
+      var boughtPredIds = {};
+      try {
+        var deFile = path.join(DATA_DIR, 'simfolio', 'decision_events_' + ciToday + '.jsonl');
+        if (fs.existsSync(deFile)) {
+          var deLines = fs.readFileSync(deFile, 'utf8').trim().split('\n').filter(Boolean);
+          for (var dei = 0; dei < deLines.length; dei++) {
+            try {
+              var deEntry = JSON.parse(deLines[dei]);
+              if (deEntry.wasBought === true && deEntry.predictionId) {
+                boughtPredIds[deEntry.predictionId] = true;
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+
+      // Read today's leader and aggregate counts, separating quarantined from active cohort
       var plFile2 = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + ciToday + '.jsonl');
       if (fs.existsSync(plFile2)) {
         var ciLines = fs.readFileSync(plFile2, 'utf8').trim().split('\n').filter(Boolean);
@@ -2239,15 +2258,31 @@ const server = http.createServer(async function(req, res) {
         for (var ci = 0; ci < ciLines.length; ci++) {
           try {
             var cie = JSON.parse(ciLines[ci]);
+
+            // v3.4.9.4.1 P0-4: Quarantined entries (old format) — count separately, don't mix with current cohort
+            if (cie.ingestionStatus === 'invalid_schema_v3492') {
+              ciRes.quarantinedCount++;
+              continue; // Do NOT count in any other field
+            }
+
+            // v3.4.9.4.1 P0-4: Active cohort: separate canonical vs intraday
+            if (cie.canonical === true) {
+              ciRes.canonicalCohortCount++;
+            } else {
+              ciRes.intradayCount++;
+            }
+
+            // Only count active (non-quarantined) entries in these stats
             if (cie.schemaValid) ciRes.counts.schemaValid++;
             if (cie.predictionValid) ciRes.counts.predictionValid++;
             if (cie.researchEligible) ciRes.counts.researchEligible++;
             if (cie.executionCandidateEligible) ciRes.counts.executionCandidateEligible++;
             if (!cie.globalTradePermission) ciRes.counts.globalBlocked++;
             if (cie.executionEligible) ciRes.counts.executionEligible++;
-            if (cie.wasBought) ciRes.counts.actualBought++;
             if (cie.expectedReturn == null) ciRes.counts.missingExpectedReturn++;
-            if (cie.ingestionStatus === 'invalid_schema_v3492') ciRes.counts.oldFormatQuarantined++;
+            // v3.4.9.4.1 P0-4: actualBought from decision_events (NOT prediction ledger wasBought)
+            if (cie.predictionId && boughtPredIds[cie.predictionId]) ciRes.counts.actualBought++;
+
             // Feature coverage distribution
             var fc = cie.featureCoverage != null ? cie.featureCoverage.toFixed(2) : '?';
             ciRes.featureCoverage[fc] = (ciRes.featureCoverage[fc] || 0) + 1;
