@@ -19,7 +19,7 @@ try {
 }
 
 module.exports = {
-  version: 'v3.4.5',
+  version: 'v3.4.6',
   buildCommit: _buildCommit,
   buildTimestamp: _buildTimestamp,
   BASE_DIR,
