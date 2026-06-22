@@ -388,37 +388,155 @@ async function fetchIndices() {
     try {
       const res = await fetchJSON(idxUrl);
       if (res && res.data) {
+        // Phase 1.1: != null — 0 is valid for changePercent/volume/turnover
+        var idxPrice = (res.data.f2 != null && res.data.f2 > 0) ? res.data.f2 : null;
+        var idxPrevClose = (res.data.f18 != null && res.data.f18 > 0) ? res.data.f18 : null;
+        // Per-index validation: reject if price or prevClose missing/invalid
+        if (!idxPrice || !idxPrevClose) {
+          _recordIndexFailure(code, names[code] || code, 'INVALID_PRICE_PREVCLOSE', res.data);
+          continue;
+        }
         indices.push({
           code: code.split('.')[1],
           name: names[code] || code,
-          price: res.data.f2 || null,
-          changePercent: res.data.f3 || null,
-          change: res.data.f4 || null,
-          volume: res.data.f5 || null,
-          turnover: res.data.f6 || null,
-          high: res.data.f15 || null,
-          low: res.data.f16 || null,
-          open: res.data.f17 || null,
-          prevClose: res.data.f18 || null,
+          price: idxPrice,
+          changePercent: (res.data.f3 != null) ? res.data.f3 : null,
+          change: res.data.f4 != null ? res.data.f4 : null,
+          volume: res.data.f5 != null ? res.data.f5 : null,
+          turnover: res.data.f6 != null ? res.data.f6 : null,
+          high: (res.data.f15 != null) ? res.data.f15 : null,
+          low: (res.data.f16 != null) ? res.data.f16 : null,
+          open: res.data.f17 != null ? res.data.f17 : null,
+          prevClose: idxPrevClose,
         });
       }
-    } catch (e) { /* skip failed index */ }
+    } catch (e) {
+      _recordIndexFailure(code, names[code] || code, 'FETCH_ERR', null, e.message);
+    }
     await delay(100);
   }
 
-  // If Eastmoney failed, try Tencent for indices
-  if (indices.length === 0) {
-    indices.push(...(await fetchIndicesTencent()));
+  // Phase 1.2: Per-index fallback cascade — Tencent and Sina per missing index
+  var emCodes = indices.map(function(ix) { return ix.code; });
+  for (var _tc = 0; _tc < codes.length; _tc++) {
+    var _tcode = codes[_tc];
+    var _tShort = _tcode.split('.')[1];
+    if (emCodes.indexOf(_tShort) >= 0) continue;
+    var tencentIdx = await _fetchTencentIndex(_tShort);
+    if (tencentIdx) { indices.push(tencentIdx); continue; }
+    var sinaIdx = await _fetchSinaIndex(_tShort);
+    if (sinaIdx) { indices.push(sinaIdx); }
+  }
+
+  // Validity gate: at least 2/3 core indices (000001, 399001, 399006)
+  var coreCodes = ['000001', '399001', '399006'];
+  var corePresent = 0;
+  for (var _ci = 0; _ci < coreCodes.length; _ci++) {
+    if (indices.some(function(ix) { return ix.code.replace(/^(s_)?(sh|sz)/, '') === coreCodes[_ci]; })) {
+      corePresent++;
+    }
+  }
+  if (corePresent < 2) {
+    for (var _cj = 0; _cj < coreCodes.length; _cj++) {
+      if (!indices.some(function(ix) { return ix.code.replace(/^(s_)?(sh|sz)/, '') === coreCodes[_cj]; })) {
+        var _sinaLast = await _fetchSinaIndex(coreCodes[_cj]);
+        if (_sinaLast) indices.push(_sinaLast);
+      }
+    }
   }
 
   // Normalize codes: remove sh/sz/s_ prefixes for consistent lookup
-  for (const idx of indices) {
+  for (var _nk = 0; _nk < indices.length; _nk++) {
+    var idx = indices[_nk];
     if (idx.code) {
       idx.code = idx.code.replace(/^(s_)?(sh|sz)/, '');
     }
   }
 
   return indices;
+}
+
+// === Phase 1.1/1.2 helpers: per-index failure recording and per-index Tencent/Sina fetch ===
+
+var _indexFailures = [];
+function _recordIndexFailure(code, name, errorCode, resData, errMsg) {
+  _indexFailures.push({
+    timestamp: new Date().toISOString(),
+    code: code, name: name || code,
+    errorCode: errorCode || 'UNKNOWN',
+    errorMessage: errMsg || '',
+    source: 'fetchIndices',
+  });
+  try {
+    var _fFs = require('fs');
+    var _fPath = require('path');
+    var _fDir = _fPath.join(__dirname, '..', '..', 'report-engine', 'data', 'simfolio');
+    if (!_fFs.existsSync(_fDir)) _fFs.mkdirSync(_fDir, { recursive: true });
+    _fFs.appendFileSync(_fPath.join(_fDir, 'catch_failures.jsonl'),
+      JSON.stringify({ timestamp: new Date().toISOString(), source: 'fetchIndices.' + code, errorCode: errorCode || 'UNKNOWN', errorMessage: errMsg || '', fallbackUsed: 'tencent_or_sina' }) + '\n', 'utf8');
+  } catch (_) {}
+}
+
+async function _fetchTencentIndex(code) {
+  var tencentMap = { '000001': 'sh000001', '399001': 'sz399001', '399006': 'sz399006', '000688': 'sh000688' };
+  var tencentNames = { 'sh000001': '上证指数', 'sz399001': '深证成指', 'sz399006': '创业板指', 'sh000688': '科创50' };
+  var tkey = tencentMap[code];
+  if (!tkey) return null;
+  try {
+    var text = await fetchRaw(TENCENT_BASE + tkey, 'https://gu.qq.com/');
+    var re = /v_(s[hz]\d+)\s*=\s*"([^"]*)"/;
+    var match = re.exec(text);
+    if (!match) return null;
+    var fields = match[2].split('~');
+    if (fields.length < 35) return null;
+    var tPrice = parseFloat(fields[3]);
+    var tPrevClose = parseFloat(fields[4]);
+    if (!tPrice || tPrice <= 0 || !tPrevClose || tPrevClose <= 0) return null;
+    return {
+      code: tkey, name: tencentNames[tkey] || code,
+      price: tPrice,
+      changePercent: parseFloat(fields[32]) || null,
+      change: parseFloat(fields[31]) || null,
+      volume: parseFloat(fields[6]) || null,
+      turnover: (parseFloat(fields[37]) || 0) * 10000,
+      high: parseFloat(fields[33]) || null,
+      low: parseFloat(fields[34]) || null,
+      open: parseFloat(fields[5]) || null,
+      prevClose: tPrevClose,
+    };
+  } catch (_) { return null; }
+}
+
+async function _fetchSinaIndex(code) {
+  var sinaMap = { '000001': 's_sh000001', '399001': 's_sz399001', '399006': 's_sz399006', '000688': 's_sh000688' };
+  var sinaNames = { 's_sh000001': '上证指数', 's_sz399001': '深证成指', 's_sz399006': '创业板指', 's_sh000688': '科创50' };
+  var skey = sinaMap[code];
+  if (!skey) return null;
+  try {
+    var text = await fetchRaw(SINA_BASE + skey);
+    var re = /var hq_str_(s_\w+)\s*=\s*"([^"]*)"/;
+    var match = re.exec(text);
+    if (!match) return null;
+    var fields = match[2].split(',');
+    if (fields.length < 4) return null;
+    var sPrice = parseFloat(fields[3]);
+    var sPrevClose = parseFloat(fields[2]);
+    if (!sPrice || sPrice <= 0 || !sPrevClose || sPrevClose <= 0) return null;
+    return {
+      code: skey, name: sinaNames[skey] || code,
+      price: sPrice,
+      changePercent: parseFloat(fields[1]) > 0
+        ? parseFloat(((sPrice - parseFloat(fields[1])) / parseFloat(fields[1]) * 100).toFixed(2))
+        : null,
+      change: null,
+      volume: parseFloat(fields[8]) || null,
+      turnover: parseFloat(fields[9]) || null,
+      high: parseFloat(fields[4]) || null,
+      low: parseFloat(fields[5]) || null,
+      open: parseFloat(fields[1]) || null,
+      prevClose: sPrevClose,
+    };
+  } catch (_) { return null; }
 }
 
 /**
@@ -458,6 +576,7 @@ async function fetchIndicesTencent() {
     }
     return indices;
   } catch (e) {
+    _recordIndexFailure('tencent_batch', 'ALL', 'TENCENT_BATCH_ERR', null, e.message);
     return [];
   }
 }
@@ -501,6 +620,7 @@ async function fetchIndicesSina() {
     }
     return indices;
   } catch (e) {
+    _recordIndexFailure('sina_batch', 'ALL', 'SINA_BATCH_ERR', null, e.message);
     return [];
   }
 }
@@ -775,12 +895,21 @@ function screenStocks(allStocks, options = {}) {
     excludeST = true,
     exclude300 = true,
     exclude688 = false,
+    useTurnoverFilter = true,  // Phase 1.6: allow disabling intraday turnover filter
+    prevDayTurnoverMap = null, // Phase 1.6: legacy previous-day turnover for early-morning
   } = options;
 
   return allStocks.filter(s => {
     if (!s.price || s.price <= 0) return false;
     if (s.price > maxPrice) return false;
-    if (!s.turnover || s.turnover < minTurnover) return false;
+    // Phase 1.6: Use prevDayTurnover when intraday turnover is unreliable (early-morning)
+    if (useTurnoverFilter) {
+      if (prevDayTurnoverMap && prevDayTurnoverMap[s.code]) {
+        if (prevDayTurnoverMap[s.code] < minTurnover) return false;
+      } else if (!s.turnover || s.turnover < minTurnover) {
+        return false;
+      }
+    }
     // PE filter: skip stocks with PE > maxPE (亏损股pe=null, 保留)
     if (maxPE != null && s.pe != null && s.pe > maxPE) return false;
     if (excludeST && s.isST) return false;
@@ -788,6 +917,45 @@ function screenStocks(allStocks, options = {}) {
     if (exclude688 && s.code.startsWith('688')) return false;
     return true;
   });
+}
+
+/**
+ * Phase 1.6: Load previous-day turnover from daily K-line files.
+ * Used for early-morning liquidity filtering (intraday turnover at 09:30 is near zero).
+ * Returns Map<code, turnover> or empty Map on failure.
+ */
+function loadPrevDayTurnover() {
+  try {
+    var fs = require('fs');
+    var path = require('path');
+    var klinesDir = path.join(__dirname, '..', '..', 'report-engine', 'data', 'klines');
+    var map = {};
+    // Use last trading day's kline data — look at known index files to find the date
+    var idxFile = path.join(__dirname, '..', '..', 'report-engine', 'data', 'market_history', 'indices', 'sh000001.json');
+    if (!fs.existsSync(idxFile)) return null;
+    var idxData = JSON.parse(fs.readFileSync(idxFile, 'utf8'));
+    if (!Array.isArray(idxData) || idxData.length < 2) return null;
+    var prevDayEntry = idxData[idxData.length - 2]; // yesterday (last trading day)
+    if (!prevDayEntry || !prevDayEntry.date) return null;
+    var prevDay = prevDayEntry.date;
+    // Load individual stock K-line files for that date
+    var stockFiles = fs.readdirSync(klinesDir).filter(function(f) { return f.endsWith('.json'); });
+    for (var si = 0; si < stockFiles.length; si++) {
+      try {
+        var fp = path.join(klinesDir, stockFiles[si]);
+        var stockData = JSON.parse(fs.readFileSync(fp, 'utf8'));
+        if (!Array.isArray(stockData)) continue;
+        var prevDayEntry2 = stockData.find(function(d) { return d.date === prevDay; });
+        if (prevDayEntry2 && prevDayEntry2.turnover) {
+          var code = stockFiles[si].replace('.json', '');
+          map[code] = prevDayEntry2.turnover;
+        }
+      } catch (_) { /* skip individual file errors */ }
+    }
+    return Object.keys(map).length > 0 ? map : null;
+  } catch (_) {
+    return null;
+  }
 }
 
 // ---- Exports ----
@@ -800,4 +968,5 @@ module.exports = {
   fetchKline,
   fetchStockDetail,
   screenStocks,
+  loadPrevDayTurnover,   // Phase 1.6
 };

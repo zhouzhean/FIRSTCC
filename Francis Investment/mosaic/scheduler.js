@@ -13,6 +13,23 @@ const { IndexRecorder } = require('./collectors/index_recorder');
 const STATE_FILE = path.join(config.DATA_DIR, 'simfolio', 'scheduler_state.json');
 const SC = config.SCHEDULER;
 
+// Phase 1.7: Catch audit helper — appends failure record to catch_failures.jsonl
+function _auditCatch(source, err) {
+  try {
+    var _acDir = path.join(config.DATA_DIR, 'simfolio');
+    if (!fs.existsSync(_acDir)) fs.mkdirSync(_acDir, { recursive: true });
+    var _acEntry = {
+      timestamp: new Date().toISOString(),
+      source: source || 'scheduler.unknown',
+      errorCode: (err && err.code) || 'UNKNOWN',
+      errorMessage: (err && err.message) || '',
+      lastSuccessAt: null,
+      fallbackUsed: null,
+    };
+    fs.appendFileSync(path.join(_acDir, 'catch_failures.jsonl'), JSON.stringify(_acEntry) + '\n', 'utf8');
+  } catch (_) {}
+}
+
 class Scheduler extends EventEmitter {
   constructor() {
     super();
@@ -703,7 +720,7 @@ class Scheduler extends EventEmitter {
             };
             fs.writeFileSync(gateStatePath, JSON.stringify(gateState, null, 2), 'utf8');
 
-            // [v3.4.1] Decision audit log — records kernelDecision directly (P0-2 fix)
+            // [v3.4.5] Decision audit log — standardized no-buy reasons + complete field set
             try {
               var buyCandidates = tradeResult.buyCandidates || [];
               var executedBuys = (tradeResult.executed || []).filter(function(t) { return t.action === 'buy'; });
@@ -714,8 +731,33 @@ class Scheduler extends EventEmitter {
                 (tradeResult.strategyHealthReduce || tradeResult.leakageReduceActive ? 'REDUCE' :
                   (executedBuys.length > 0 ? 'ALLOW' : 'CAUTIOUS')));
 
+              // v3.4.5: Standardized no-buy reasons via shared module
+              var noBuyReasons = null;
+              try {
+                var nbr = require('./no_buy_reasons');
+                var _maxER_full = buyCandidates.length > 0
+                  ? Math.max.apply(null, buyCandidates.map(function(c) {
+                      return (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : -999;
+                    })) : null;
+                noBuyReasons = nbr.deriveNoBuyReasons({
+                  kernelDecision: kd,
+                  executionResult: tradeResult,
+                  candidateCount: buyCandidates.length,
+                  buyCount: executedBuys.length,
+                  maxExpectedReturn: _maxER_full,
+                });
+              } catch (nbrErr) {
+                try {
+                  var _nbrErrEntry = { timestamp: new Date().toISOString(), source: 'scheduler._runFullPipeline.noBuyReasons', errorCode: 'DERIVE_ERR', errorMessage: nbrErr.message || '' };
+                  require('fs').appendFileSync(require('path').join(__dirname, '..', 'report-engine', 'data', 'simfolio', 'catch_failures.jsonl'), JSON.stringify(_nbrErrEntry) + '\n', 'utf8');
+                } catch (_) {}
+              }
+
               var note = '';
-              if (kd && kd.hardBlockers && kd.hardBlockers.length > 0) {
+              if (noBuyReasons && noBuyReasons.primaryNoBuyReason) {
+                var nbrMeta = noBuyReasons.reasonLabels.join(' → ');
+                note = noBuyReasons.reasonLabels[0] + (noBuyReasons.reasonLabels.length > 1 ? '（' + noBuyReasons.reasonLabels.slice(1).join(', ') + '）' : '');
+              } else if (kd && kd.hardBlockers && kd.hardBlockers.length > 0) {
                 note = '今天不买入：' + kd.hardBlockers.map(function(b) { return b.gate; }).join('+');
               } else if (kd && kd.softReducers && kd.softReducers.length > 0) {
                 note = '今天限制买入：' + kd.softReducers.map(function(r) { return r.gate; }).join('+');
@@ -740,7 +782,7 @@ class Scheduler extends EventEmitter {
                 }
               } catch (_) {}
 
-              // v3.4.4: Load buy threshold from config
+              // v3.4.5: Load buy threshold from config
               var buyThreshold = null;
               try {
                 var cfg = require('./config');
@@ -758,7 +800,7 @@ class Scheduler extends EventEmitter {
               var auditEntry = {
                 timestamp: new Date().toISOString(),
                 scanType: 'full',
-                version: 'v3.4.5',
+                version: cfg ? (cfg.version || 'v3.4.5') : 'v3.4.5',
                 // Funnel
                 totalStocks: result.totalStocks || 0,
                 candidates: result.candidates || 0,
@@ -778,6 +820,9 @@ class Scheduler extends EventEmitter {
                 softReducers: kd ? kd.softReducers.map(function(r) { return r.gate; }) : [],
                 primaryBlocker: kd ? kd.primaryBlocker : null,
                 allActiveGates: kd ? kd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
+                // v3.4.5: Standardized no-buy reasons
+                primaryNoBuyReason: noBuyReasons ? noBuyReasons.primaryNoBuyReason : null,
+                secondaryReasons: noBuyReasons ? noBuyReasons.secondaryReasons : [],
                 // v3.4.4: Context metadata
                 marketState: this._state || 'unknown',
                 indexFreshness: indexFreshness,
@@ -813,9 +858,11 @@ class Scheduler extends EventEmitter {
           error: tradeErr.message,
           stack: tradeErr.stack ? tradeErr.stack.split('\n').slice(1, 3).map(function(s){return s.trim();}).join(' -> ') : '(no stack)',
         });
+        _auditCatch('scheduler._runFullPipeline.trade', tradeErr);
       }
     } catch (err) {
       this._logEvent('pipeline_error', { error: err.message, reason });
+      _auditCatch('scheduler._runFullPipeline', err);
     } finally {
       this._opsRunning = false;
     }
@@ -1073,10 +1120,33 @@ class Scheduler extends EventEmitter {
                 if (midKd.gateStates.strategyHealth) midShSampleCount = midKd.gateStates.strategyHealth.totalTrades;
               }
 
+              // v3.4.5: Standardized no-buy reasons
+              var midNoBuyReasons = null;
+              try {
+                var midNbr = require('./no_buy_reasons');
+                var _maxER_mid = midBuyCandidates.length > 0
+                  ? Math.max.apply(null, midBuyCandidates.map(function(c) {
+                      return (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : -999;
+                    })) : null;
+                midNoBuyReasons = midNbr.deriveNoBuyReasons({
+                  kernelDecision: midKd,
+                  executionResult: tradeResult,
+                  candidateCount: midBuyCandidates.length,
+                  buyCount: midExecutedBuys.length,
+                  maxExpectedReturn: _maxER_mid,
+                });
+              } catch (midNbrErr) {
+                // Phase 1.3: Log this failure explicitly — no more silent swallows
+                try {
+                  var _midErrEntry = { timestamp: new Date().toISOString(), source: 'scheduler._runMidScan.noBuyReasons', errorCode: 'DERIVE_ERR', errorMessage: midNbrErr.message || '' };
+                  require('fs').appendFileSync(require('path').join(__dirname, '..', 'report-engine', 'data', 'simfolio', 'catch_failures.jsonl'), JSON.stringify(_midErrEntry) + '\n', 'utf8');
+                } catch (_) {}
+              }
+
               _appendDecisionAudit({
                 timestamp: new Date().toISOString(),
                 scanType: 'mid',
-                version: 'v3.4.5',
+                version: midCfg ? (midCfg.version || 'v3.4.5') : 'v3.4.5',
                 totalStocks: results.length > 0 ? candidates.length : 0,
                 candidates: candidates.length,
                 analyzed: results.length,
@@ -1093,6 +1163,9 @@ class Scheduler extends EventEmitter {
                 softReducers: midKd ? midKd.softReducers.map(function(r) { return r.gate; }) : [],
                 primaryBlocker: midKd ? midKd.primaryBlocker : null,
                 allActiveGates: midKd ? midKd.allActiveBlockers.map(function(g) { return g.gate + ':' + g.status; }) : [],
+                // v3.4.5: Standardized no-buy reasons
+                primaryNoBuyReason: midNoBuyReasons ? midNoBuyReasons.primaryNoBuyReason : null,
+                secondaryReasons: midNoBuyReasons ? midNoBuyReasons.secondaryReasons : [],
                 // v3.4.4: Context metadata
                 marketState: this._state || 'unknown',
                 indexFreshness: midIndexFreshness,
@@ -1127,10 +1200,12 @@ class Scheduler extends EventEmitter {
             error: tradeErr.message,
             stack: tradeErr.stack ? tradeErr.stack.split('\n').slice(1, 3).map(function(s){return s.trim();}).join(' -> ') : '(no stack)',
           });
+          _auditCatch('scheduler._runMidScan.trade', tradeErr);
         }
       }
     } catch (err) {
       this._logEvent('midscan_error', { error: err.message });
+      _auditCatch('scheduler._runMidScan', err);
     } finally {
       this._opsRunning = false;
     }
@@ -1714,7 +1789,7 @@ class Scheduler extends EventEmitter {
     try {
       var psum = require('./pipeline_summary');
       psum.savePipelineSummary(result, type, this._todayDate, {
-        version: 'v3.4.4',
+        version: config.version || 'v3.4.5',
       });
     } catch (e) {
       // Fallback: inline save if shared module unavailable

@@ -7,7 +7,21 @@ const BASE_DIR = path.join(__dirname, '..');
 const REPORT_ENGINE_DIR = path.join(BASE_DIR, 'report-engine');
 const DATA_DIR = path.join(REPORT_ENGINE_DIR, 'data');
 
+// Build identity — populated at module load (Phase 0.1)
+var _buildCommit = null;
+var _buildTimestamp = null;
+try {
+  var _cp = require('child_process');
+  _buildCommit = _cp.execSync('git rev-parse HEAD', { cwd: BASE_DIR, encoding: 'utf8', timeout: 5000 }).trim();
+  _buildTimestamp = new Date().toISOString();
+} catch (_) {
+  // git not available (e.g., scp-only deploy) — leave null
+}
+
 module.exports = {
+  version: 'v3.4.5',
+  buildCommit: _buildCommit,
+  buildTimestamp: _buildTimestamp,
   BASE_DIR,
   REPORT_ENGINE_DIR,
   DATA_DIR,

@@ -336,13 +336,14 @@ function verifyOneScan(scanRecord) {
 }
 
 /**
- * Compute Rank IC from scan record's top5 vs actual forward returns
+ * Compute Rank IC from scan record's Top 50+ vs actual forward returns (Phase 2.3: was Top 5).
+ * Now uses ALL candidates with predictions for statistically meaningful IC.
  */
 function computeRankIC(date, results) {
-  if (!results || results.length < 3) return null;
+  if (!results || results.length < 5) return null;
 
-  // Rank by score
-  var byScore = results.slice().sort(function(a, b) { return b.score - a.score; });
+  // Rank by score (predicted E[R])
+  var byScore = results.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
   var byReturn = results.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
 
   var scoreRank = {};
@@ -359,12 +360,82 @@ function computeRankIC(date, results) {
   }
 
   var rankIC = 1 - (6 * dSqSum) / (n * (n * n - 1));
+
+  // Phase 2.3: Compute bootstrap CI for Rank IC
+  var ci = null;
+  if (n >= 10) {
+    ci = _computeBootstrapCI(results, scoreRank, returnRank);
+  }
+
+  // Phase 2.3: Decile returns — sort by predicted E[R], report mean actual per decile
+  var decileReturns = _computeDecileReturns(results);
+
   return {
     date: date,
     rankIC: +rankIC.toFixed(3),
-    samples: n,
-    interpretation: rankIC > 0.2 ? '强正相关' : rankIC > 0.1 ? '弱正相关' : rankIC > 0 ? '微正相关' : rankIC > -0.1 ? '微负相关' : '负相关',
+    n: n,
+    ci95_lower: ci ? ci.lower : null,
+    ci95_upper: ci ? ci.upper : null,
+    decileReturns: decileReturns,
   };
+}
+
+// Phase 2.3: Bootstrap confidence interval for Rank IC
+function _computeBootstrapCI(results, scoreRank, returnRank) {
+  try {
+    var n = results.length;
+    var bootstrapICs = [];
+    for (var b = 0; b < 1000; b++) {
+      var sample = [];
+      for (var s = 0; s < n; s++) {
+        var idx = Math.floor(Math.random() * n); // not available, use deterministic workaround
+        idx = (idx + b * 7) % n; // pseudo-random with deterministic seed per bootstrap
+        sample.push(results[idx]);
+      }
+      // Recompute ranks on sample
+      var sByScore = sample.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
+      var sByReturn = sample.slice().sort(function(a, b) { return (b.fwd5d || 0) - (a.fwd5d || 0); });
+      var sRank = {}, rRank = {};
+      for (var i = 0; i < sByScore.length; i++) { sRank[sByScore[i].code] = i + 1; }
+      for (var j = 0; j < sByReturn.length; j++) { rRank[sByReturn[j].code] = j + 1; }
+      var dSq = 0;
+      for (var k = 0; k < sample.length; k++) {
+        var d = (sRank[sample[k].code] || 0) - (rRank[sample[k].code] || 0);
+        dSq += d * d;
+      }
+      var bsIC = 1 - (6 * dSq) / (sample.length * (sample.length * sample.length - 1));
+      bootstrapICs.push(bsIC);
+    }
+    bootstrapICs.sort(function(a, b) { return a - b; });
+    return {
+      lower: +bootstrapICs[24].toFixed(3),  // 2.5th percentile
+      upper: +bootstrapICs[974].toFixed(3), // 97.5th percentile
+    };
+  } catch (_) { return null; }
+}
+
+// Phase 2.3: Decile returns — sort by predicted E[R], group into deciles, report mean actual
+function _computeDecileReturns(results) {
+  try {
+    var sorted = results.slice().sort(function(a, b) { return (b.expectedReturn || 0) - (a.expectedReturn || 0); });
+    var n = sorted.length;
+    var decileSize = Math.max(1, Math.floor(n / 10));
+    var deciles = {};
+    var labels = ['D1(top)', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7', 'D8', 'D9', 'D10(bottom)'];
+    for (var d = 0; d < 10; d++) {
+      var start = d * decileSize;
+      var end = d === 9 ? n : start + decileSize;
+      var slice = sorted.slice(start, end).filter(function(r) { return r.fwd5d != null; });
+      if (slice.length > 0) {
+        deciles[labels[d]] = {
+          meanReturn: +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0); }, 0) / slice.length).toFixed(2),
+          postCostReturn: +(slice.reduce(function(s, r) { return s + (r.fwd5d || 0) - 0.15; }, 0) / slice.length).toFixed(2),
+          count: slice.length,
+        };
+      }
+    }
+    return deciles;
+  } catch (_) { return null; }
 }
 
 // ====== 主流程 ======

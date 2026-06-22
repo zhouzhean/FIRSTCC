@@ -31,6 +31,76 @@ const DATA_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'simf
  * @param {number} context.minScore - Pipeline 最低分（用于百分位计算）
  * @returns {object} { expectedReturn, breakdown, confidence }
  */
+/**
+ * Phase 2.4: Evidence threshold — predictions below this bar are advisory only.
+ *
+ * Requirements:
+ *   - confidence >= 0.60
+ *   - at least 3 feature dimensions have data
+ *   - data quality penalty < 4 (normal)
+ *
+ * @param {Object} prediction — { confidence, breakdown, contribDims }
+ * @param {number} [dataQualityPenalty] — from data_quality.checkAllDataSources
+ * @returns {{ passed: boolean, reason: string|null, advisoryOnly: boolean }}
+ */
+function meetsEvidenceThreshold(prediction, dataQualityPenalty) {
+  if (!prediction) {
+    return { passed: false, reason: 'no_prediction', advisoryOnly: true };
+  }
+
+  var failures = [];
+
+  // 1. Confidence >= 0.60
+  if (!prediction.confidence || prediction.confidence < 0.60) {
+    failures.push('confidence_below_0.60(' + (prediction.confidence || 0).toFixed(2) + ')');
+  }
+
+  // 2. >= 3 dimensions contributed data
+  var dims = 0;
+  if (prediction.breakdown) {
+    for (var key in prediction.breakdown) {
+      if (prediction.breakdown[key] && prediction.breakdown[key].available) dims++;
+    }
+  }
+  if (dims < 3) {
+    failures.push('insufficient_dims(' + dims + '/6)');
+  }
+
+  // 3. Data quality normal
+  if (dataQualityPenalty != null && dataQualityPenalty >= 4) {
+    failures.push('data_quality_degraded(penalty=' + dataQualityPenalty + ')');
+  }
+
+  var advisoryOnly = failures.length > 0;
+  return {
+    passed: !advisoryOnly,
+    reason: failures.length > 0 ? failures.join(', ') : null,
+    advisoryOnly: advisoryOnly,
+  };
+}
+
+/**
+ * Phase 2.4: Dynamic minimum expected return based on cost + slippage + historical error.
+ * Reads verification_summary.json for historical RMSE, falls back to config value.
+ */
+function getMinExpectedReturn() {
+  try {
+    var vsPath = require('path').join(__dirname, '..', '..', 'report-engine', 'data', 'verification', 'verification_summary.json');
+    if (require('fs').existsSync(vsPath)) {
+      var vs = JSON.parse(require('fs').readFileSync(vsPath, 'utf8'));
+      if (vs.overall && vs.overall.rmse != null) {
+        var costBps = 0.30;    // commission + stamp tax + transfer
+        var slippageBps = 0.30; // default slippage estimate
+        var histRmse = vs.overall.rmse;
+        return +(costBps + slippageBps + 2 * histRmse).toFixed(2);
+      }
+    }
+  } catch (_) {}
+  // Fallback to config
+  var cfg = require('../config');
+  return (cfg.PREDICTION && cfg.PREDICTION.minExpectedReturn) || 0;
+}
+
 function computeExpectedReturn(stock, context) {
   const ctx = context || {};
   const weights = (config.PREDICTION && config.PREDICTION.expectedReturnWeights) || DEFAULT_WEIGHTS;
@@ -466,6 +536,58 @@ function verifyExpectedReturns(dateStr) {
       }
     } catch (_) {}
 
+    // Phase 2.2: Also read from prediction_ledger for richer verification
+    var ledgerVerifications = [];
+    try {
+      var ledgerFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + foundDate + '.jsonl');
+      if (fs.existsSync(ledgerFile)) {
+        var ledgerLines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n');
+        var spfPath2 = path.join(DATA_DIR, 'stock_factor_performance.json');
+        var spf2 = fs.existsSync(spfPath2) ? JSON.parse(fs.readFileSync(spfPath2, 'utf8')) : null;
+        if (spf2) {
+          var toRecs2 = (spf2.dailyRecords || {})[dateStr] || [];
+          var shIdxRecs = (spf2.dailyRecords || {})[dateStr] ? (spf2.dailyRecords[dateStr] || []) : [];
+          for (var li = 0; li < ledgerLines.length; li++) {
+            try {
+              var led = JSON.parse(ledgerLines[li]);
+              var toRec2 = toRecs2.find(function(r) { return r.code === led.code; });
+              var shRec = shIdxRecs.find(function(r) { return r.code === '000001_sh'; });
+              if (toRec2 && led.price > 0) {
+                var actualRet = (toRec2.price - led.price) / led.price * 100;
+                var benchmarkRet = shRec ? ((shRec.price - led.indexSH) / led.indexSH * 100) : null;
+                ledgerVerifications.push({
+                  predictionId: led.predictionId,
+                  code: led.code,
+                  name: led.name,
+                  expectedReturn: led.expectedReturn,
+                  actualReturn_3d: +actualRet.toFixed(2),
+                  benchmarkReturn: benchmarkRet ? +benchmarkRet.toFixed(2) : null,
+                  postCostReturn: +(actualRet - 0.15).toFixed(2),
+                  directionCorrect: led.expectedReturn != null ? (led.expectedReturn > 0) === (actualRet > 0) : null,
+                  wasBought: led.wasBought,
+                });
+              }
+            } catch (_) {}
+          }
+        }
+      }
+    } catch (_) {}
+
+    // Phase 2.2: Write outcome ledger
+    if (ledgerVerifications.length > 0) {
+      try {
+        var outcomeDir = path.join(DATA_DIR, 'simfolio');
+        if (!fs.existsSync(outcomeDir)) {
+          var fs3 = require('fs');
+          fs3.mkdirSync(outcomeDir, { recursive: true });
+        }
+        var outcomeFile = path.join(outcomeDir, 'outcome_ledger.jsonl');
+        for (var oi = 0; oi < ledgerVerifications.length; oi++) {
+          fs.appendFileSync(outcomeFile, JSON.stringify(ledgerVerifications[oi]) + '\n', 'utf8');
+        }
+      } catch (_) {}
+    }
+
     var directionCorrect = verifications.filter(function(v) { return v.directionCorrect === true; }).length;
     var directionTotal = verifications.filter(function(v) { return v.directionCorrect !== null; }).length;
     var directionHitRate = directionTotal > 0 ? +(directionCorrect / directionTotal).toFixed(2) : null;
@@ -477,6 +599,7 @@ function verifyExpectedReturns(dateStr) {
       date: dateStr,
       fromDate: foundDate,
       totalVerified: verifications.length,
+      ledgerVerified: ledgerVerifications.length,
       directionCorrect: directionCorrect,
       directionTotal: directionTotal,
       directionHitRate: directionHitRate,
@@ -499,7 +622,7 @@ function verifyExpectedReturns(dateStr) {
       fs.writeFileSync(VERIFY_FILE, JSON.stringify(history, null, 2), 'utf8');
     } catch (_) {}
 
-    return { available: true, entry: entry };
+    return { available: true, entry: entry, ledgerCount: ledgerVerifications.length };
   } catch (e) {
     return { available: false, reason: e.message };
   }
@@ -581,5 +704,7 @@ module.exports = {
   verifyExpectedReturns,
   calibrateProbabilities,
   computeSuggestedPositionSize,
+  meetsEvidenceThreshold,   // Phase 2.4
+  getMinExpectedReturn,     // Phase 2.4
   DEFAULT_WEIGHTS,
 };

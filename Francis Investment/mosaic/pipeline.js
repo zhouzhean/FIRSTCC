@@ -133,7 +133,17 @@ class Pipeline extends EventEmitter {
 
       // === Step 2: Screen candidates ===
       this._setProgress(30, '正在筛选候选股票（价格<' + config.FILTER.maxPrice + '元, 成交额>1亿）...');
-      const candidates = marketData.screenStocks(allStocks, config.FILTER);
+      // Phase 1.6: During 09:30-10:00, use previous-day turnover for liquidity filter
+      var screenOpts = Object.assign({}, config.FILTER);
+      var now = new Date();
+      var isEarlyMorning = (now.getHours() === 9 || (now.getHours() === 10 && now.getMinutes() < 1));
+      if (isEarlyMorning) {
+        screenOpts.prevDayTurnoverMap = marketData.loadPrevDayTurnover();
+        if (screenOpts.prevDayTurnoverMap) {
+          this._setProgress(31, '早盘阶段：使用昨日成交额替代日内成交额筛选');
+        }
+      }
+      const candidates = marketData.screenStocks(allStocks, screenOpts);
       this._setProgress(40, '筛选出 ' + candidates.length + ' 只候选股票');
 
       // === Step 3: Fetch market indices ===

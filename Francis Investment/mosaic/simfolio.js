@@ -713,6 +713,56 @@ function getAutoPauseStatus() {
   };
 }
 
+// === Phase 2.1: Immutable Prediction Ledger — append-only, crash-safe ===
+var _ledgerScanIndex = 0;
+function _appendPredictionLedger(candidates, context, scanType) {
+  try {
+    var _plFs = require('fs');
+    var _plPath = require('path');
+    var _plToday = (context && context.today) || new Date().toISOString().slice(0, 10);
+    var _plDir = _plPath.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+    if (!_plFs.existsSync(_plDir)) _plFs.mkdirSync(_plDir, { recursive: true });
+    var _plFile = _plPath.join(_plDir, 'prediction_ledger_' + _plToday + '.jsonl');
+    var _plScanIdx = _ledgerScanIndex++;
+    var _plBaseId = _plToday + '_' + (scanType || 'S') + '_' + String(_plScanIdx).padStart(3, '0');
+    var _plBuildCommit = null;
+    try { _plBuildCommit = require('./config').buildCommit; } catch (_) {}
+
+    var topN = Math.min((candidates || []).length, 50);
+    for (var _pli = 0; _pli < topN; _pli++) {
+      var c = candidates[_pli];
+      var predId = _plBaseId + '_' + String(_pli).padStart(3, '0');
+      var entry = {
+        predictionId: predId,
+        timestamp: new Date().toISOString(),
+        scanType: scanType || 'unknown',
+        buildCommit: _plBuildCommit,
+        code: c.code,
+        name: c.name || '',
+        price: c.price,
+        compositeScore: c.compositeScore || 0,
+        rating: c.rating || '--',
+        factorScores: c.rawScores || null,
+        hiddenSignals: (c.hiddenSignals || []).map(function(s) { return s.id || s; }),
+        signalCount: (c.hiddenSignals || []).length,
+        expectedReturn: (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : null,
+        confidence: (c.prediction && c.prediction.confidence != null) ? c.prediction.confidence : null,
+        horizon: 'T+3',
+        marketRegime: (context && context.macroRegime) || null,
+        dataFreshness: (context && context.indexFreshness) || 'unknown',
+        indexSH: (context && context.indexValues && context.indexValues.sh) || null,
+        wasBought: (context && context.boughtCodes) ? (context.boughtCodes.indexOf(c.code) >= 0) : false,
+        dataQualityPenalty: (context && context.dataQualityPenalty) || 0,
+        contribDims: (c.prediction && c.prediction.breakdown)
+          ? Object.values(c.prediction.breakdown).filter(function(b) { return b && b.available; }).length
+          : 0,
+        contextNote: (context && context.note) || null,
+      };
+      _plFs.appendFileSync(_plFile, JSON.stringify(entry) + '\n', 'utf8');
+    }
+  } catch (_) { /* Ledger write is advisory; never crash the main flow */ }
+}
+
 function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
@@ -1055,6 +1105,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
+    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'thinktank_defensive', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
 
     return {
       decisions: sellDecisions,
@@ -1144,6 +1195,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
+    // Phase 2.1: Log predictions even during BLOCK — learn from what would have been predicted
+    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'leakage_audit_block', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
     return {
       decisions: laSellDecisions,
       executed: laExecutedTrades,
@@ -1202,6 +1255,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
+    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'strategy_health_block', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
     return {
       decisions: shSellDecisions,
       executed: shExecutedTrades,
@@ -1241,6 +1295,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
+    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'strategy_health_reduce', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
     return {
       decisions: srSellDecisions,
       executed: srExecutedTrades,
@@ -1463,11 +1518,23 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       const ranked = expectedReturn.rankByExpectedReturn(pipelineResults, predictionContext);
 
       // Filter and extract
-      const minExpectedReturn = (config.PREDICTION && config.PREDICTION.minExpectedReturn) || 0;
+      // Phase 2.4: Dynamic minExpectedReturn — cost + slippage + 2×RMSE from verification
+      const minExpectedReturn = expectedReturn.getMinExpectedReturn ?
+        expectedReturn.getMinExpectedReturn() :
+        ((config.PREDICTION && config.PREDICTION.minExpectedReturn) || 0);
       buyThreshold = minExpectedReturn;  // v3.4.2: prediction threshold for audit
       buyCandidates = ranked
         .filter(r => {
           if (pf.positions.some(p => p.code === r.code)) return false;
+          // Phase 2.4: Evidence threshold check — weak predictions are advisory only
+          if (r.prediction && expectedReturn.meetsEvidenceThreshold) {
+            var evidenceCheck = expectedReturn.meetsEvidenceThreshold(r.prediction, dqReport ? dqReport.penalty : 0);
+            if (!evidenceCheck.passed) {
+              r.prediction.advisoryOnly = true;
+              r.prediction.evidenceFailure = evidenceCheck.reason;
+              return false; // Exclude from buy ranking
+            }
+          }
           if (!r.prediction || r.prediction.expectedReturn < minExpectedReturn) return false;
           const candidateSector = classifySector(r.name);
           if (candidateSector !== '其他') {
@@ -1745,6 +1812,10 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       }
     }
   } catch (_) { /* model_registry logging is advisory */ }
+
+  // Phase 2.1: Log predictions for the normal path — includes bought/unbought info
+  var _plBoughtCodes = executedTrades.filter(function(t) { return t.action === 'buy'; }).map(function(t) { return t.code; });
+  _appendPredictionLedger(buyCandidates, { today: today, scanType: scanType, note: null, macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0, boughtCodes: _plBoughtCodes, indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown', indexValues: { sh: (indices && indices[0]) ? indices[0].price : null } }, scanType);
 
   return {
     decisions: decisions,

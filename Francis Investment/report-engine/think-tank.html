@@ -937,12 +937,26 @@ function renderVerdict(verdict, decisionGates, positions, lastScan) {
   // Loop impact summary
   if (verdict.loopImpact && verdict.loopImpact.length > 0) {
     var LOOP_COLORS = {1:'#7c3aed',2:'#2563eb',3:'#0891b2',4:'#d97706',5:'#dc2626',6:'#16a34a',7:'#b8942c'};
+    // v3.4.5: Decision impact badges
+    var IMPACT_LABEL_MAP = {
+      active_effective: { label: '有效', color: '#6ee7b7', bg: '#065f46' },
+      active_monitoring: { label: '监控', color: '#93c5fd', bg: '#1e3a5f' },
+      degraded: { label: '降级', color: '#fcd34d', bg: '#78350f' },
+      off: { label: '待命', color: '#6b7280', bg: '#1f2937' },
+    };
     var pillHtml = '';
     for (var li = 0; li < verdict.loopImpact.length; li++) {
       var imp = verdict.loopImpact[li];
       var lc = LOOP_COLORS[imp.loop] || '#64748b';
+      // Decision impact badge
+      var diBadge = '';
+      if (imp.decisionImpact) {
+        var di = imp.decisionImpact;
+        var dim = IMPACT_LABEL_MAP[di.impact] || IMPACT_LABEL_MAP.off;
+        diBadge = ' <span class="impact-pill" style="font-size:9px;padding:0 4px;border-radius:2px;background:'+dim.bg+';color:'+dim.color+';" title="'+(di.description||'')+'">'+dim.label+'</span>';
+      }
       pillHtml += '<span class="loop-impact-pill" style="border-color:'+lc+'30;background:'+lc+'08;color:'+lc+';">'+
-        imp.name+': '+imp.effect+'</span>';
+        imp.name+': '+imp.effect+diBadge+'</span>';
     }
     html += '<div class="loop-impact-list">'+pillHtml+'</div>';
   }

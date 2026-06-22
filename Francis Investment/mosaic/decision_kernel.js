@@ -608,6 +608,28 @@ function setCachedResult(result) {
  *           fetchAt, quoteDate, freshnessStatus}] or null on failure.
  * Used by cockpit, think-tank, kernel, data_quality, and strategy_health.
  */
+// === Catch audit helper (Phase 0.2) — appends failure record to catch_failures.jsonl ===
+var _lastSnapshotWriteSuccess = null;
+var _lastIndicesLoadSuccess = null;
+
+function _recordCatchFailure(detail) {
+  try {
+    var _cfFs = require('fs');
+    var _cfPath = require('path');
+    var _cfDir = _cfPath.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
+    if (!_cfFs.existsSync(_cfDir)) _cfFs.mkdirSync(_cfDir, { recursive: true });
+    var _cfEntry = {
+      timestamp: new Date().toISOString(),
+      source: detail.source,
+      errorCode: detail.errorCode || 'UNKNOWN',
+      errorMessage: detail.errorMessage || '',
+      lastSuccessAt: detail.lastSuccessAt || null,
+      fallbackUsed: detail.fallbackUsed || null,
+    };
+    _cfFs.appendFileSync(_cfPath.join(_cfDir, 'catch_failures.jsonl'), JSON.stringify(_cfEntry) + '\n', 'utf8');
+  } catch (_) { /* Last resort: cannot log the logger failure */ }
+}
+
 function loadLatestIndices() {
   try {
     var fs = require('fs');
@@ -628,7 +650,7 @@ function loadLatestIndices() {
     if (fs.existsSync(snapshotFile)) {
       try {
         snapshotData = JSON.parse(fs.readFileSync(snapshotFile, 'utf8'));
-      } catch (_) {}
+      } catch (_) { /* snapshot parse failure logged below in per-index tier decisions */ }
     }
 
     // === Tier 2: IndexRecorder intraday file ===
@@ -640,7 +662,7 @@ function loadLatestIndices() {
         if (Array.isArray(raw) && raw.length > 0) {
           recorderData = raw[raw.length - 1];
         }
-      } catch (_) {}
+      } catch (_) { /* recorder parse failure — will fall through to Tier 3 */ }
     }
 
     // === Build results: each index independently ===
@@ -721,13 +743,32 @@ function loadLatestIndices() {
               freshnessStatus: 'stale_daily',
             });
           }
-        } catch (_) {}
+        } catch (e) {
+          _recordCatchFailure({
+            source: 'decision_kernel.loadLatestIndices.klineParse',
+            errorCode: 'PARSE_ERR',
+            errorMessage: e.message || 'kline parse failure for ' + idxDef.code,
+            lastSuccessAt: _lastIndicesLoadSuccess,
+            fallbackUsed: null,
+          });
+        }
       }
       // If nothing found, this index is simply not in results (missing)
     }
 
-    return results.length > 0 ? results : null;
-  } catch (_) {
+    if (results.length > 0) {
+      _lastIndicesLoadSuccess = new Date().toISOString();
+      return results;
+    }
+    return null;
+  } catch (e) {
+    _recordCatchFailure({
+      source: 'decision_kernel.loadLatestIndices',
+      errorCode: e.code || 'LOAD_ERR',
+      errorMessage: e.message || 'unknown',
+      lastSuccessAt: _lastIndicesLoadSuccess,
+      fallbackUsed: null,
+    });
     return null;
   }
 }
@@ -783,8 +824,15 @@ function writeMarketSnapshot(indices, source) {
       JSON.stringify(snapshot, null, 2),
       'utf8'
     );
-  } catch (_) {
-    // Silent — snapshot write is advisory
+    _lastSnapshotWriteSuccess = now.toISOString();
+  } catch (e) {
+    _recordCatchFailure({
+      source: 'decision_kernel.writeMarketSnapshot',
+      errorCode: e.code || 'WRITE_ERR',
+      errorMessage: e.message || 'snapshot write failure',
+      lastSuccessAt: _lastSnapshotWriteSuccess,
+      fallbackUsed: null,
+    });
   }
 }
 

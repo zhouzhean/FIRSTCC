@@ -55,7 +55,7 @@ function saveLastPipelineResult(result, type) {
   try {
     var psum = require('./mosaic/pipeline_summary');
     psum.savePipelineSummary(result, type || 'full', new Date().toISOString().slice(0, 10), {
-      version: 'v3.4.5',
+      version: config.version || 'v3.4.5',
     });
   } catch (e) {
     // Fallback: inline save (legacy — same as before v3.4.5)
@@ -164,54 +164,80 @@ function getNextScanTime() {
 function _buildLoopImpact(data) {
   const loopImpact = [];
   try {
+    var di; // decision impact module (lazy load)
+    var gotDI = false;
+    function getDI() { if (!gotDI) { try { di = require('./mosaic/decision_impact'); } catch(e){} gotDI = true; } return di; }
+
     if (data.predictionHealth && data.predictionHealth.loops) {
       const loops = data.predictionHealth.loops;
       // Loop 1: weekend verify
       if (loops['1_weekendVerify'] && loops['1_weekendVerify'].status === 'active') {
         const l1 = loops['1_weekendVerify'];
         if (l1.process && l1.process.crossMarketRisk) {
-          loopImpact.push({ loop: 1, name: '周末验证', effect: '跨市场防御激活' });
+          var wc = getDI() ? getDI().forWeekendContext({ available: true, analyzedToday: true }) : null;
+          loopImpact.push({ loop: 1, name: '周末验证', effect: '跨市场防御激活', decisionImpact: wc || { impact: 'active_effective', label: '有效影响' } });
         }
         if (l1.process && l1.process.sectorPreference) {
-          loopImpact.push({ loop: 1, name: '周末验证', effect: '板块偏好注入' });
+          loopImpact.push({ loop: 1, name: '周末验证', effect: '板块偏好注入', decisionImpact: { impact: 'active_effective', label: '有效影响' } });
+        }
+        if (!l1.process || (!l1.process.crossMarketRisk && !l1.process.sectorPreference)) {
+          var wc2 = getDI() ? getDI().forWeekendContext({ available: true, analyzedToday: false }) : null;
+          loopImpact.push({ loop: 1, name: '周末验证', effect: '监控中，无新上下文', decisionImpact: wc2 || { impact: 'active_monitoring', label: '监控中' } });
         }
       }
       // Loop 2: NB weight
       if (loops['2_nbWeight'] && loops['2_nbWeight'].status) {
         const l2 = loops['2_nbWeight'];
         const nbStatus = l2.status;
+        var nbImpact = null;
         if (nbStatus === 'active') {
-          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向信号活跃，权重正常' });
+          nbImpact = getDI() ? getDI().forNorthBound({ available: true, usedInDecision: true }) : null;
+          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向信号活跃，权重正常', decisionImpact: nbImpact || { impact: 'active_effective', label: '有效影响' } });
         } else if (nbStatus === 'degraded') {
-          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向偏冷，触发评分降权' });
+          nbImpact = getDI() ? getDI().forNorthBound({ available: false }) : null;
+          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向偏冷，触发评分降权', decisionImpact: nbImpact || { impact: 'degraded', label: '不可用' } });
+        } else {
+          nbImpact = getDI() ? getDI().forNorthBound({ available: false }) : null;
+          loopImpact.push({ loop: 2, name: '北向权重', effect: '北向数据不可用', decisionImpact: nbImpact || { impact: 'degraded', label: '不可用' } });
         }
       }
       // Loop 3: knowledge base
       if (loops['3_knowledgeBase'] && loops['3_knowledgeBase'].status === 'active') {
         const kb = loops['3_knowledgeBase'];
         const activeF = (kb.process && kb.process.activeFactors) || 0;
-        loopImpact.push({ loop: 3, name: '知识库', effect: activeF + '个因子追踪中' });
+        var kbImpact = getDI() ? getDI().classify({ moduleEnabled: true, hasData: activeF > 0, directlyAffected: activeF > 0 }) : null;
+        loopImpact.push({ loop: 3, name: '知识库', effect: activeF + '个因子追踪中', decisionImpact: kbImpact || (activeF > 0 ? { impact: 'active_effective', label: '有效影响' } : { impact: 'active_monitoring', label: '监控中' }) });
       }
       // Loop 4: think-tank defense
       if (loops['4_thinkTankDefense'] && loops['4_thinkTankDefense'].process) {
         const p4 = loops['4_thinkTankDefense'].process;
         if (p4.blocked) {
-          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御触发(' + p4.totalScore + '分)，拦截买入' });
+          var ttImpact = getDI() ? getDI().forThinkTankDefense({ executed: true, hasData: true, defenseActive: true }) : null;
+          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御触发(' + p4.totalScore + '分)，拦截买入', decisionImpact: ttImpact || { impact: 'active_effective', label: '有效影响' } });
         } else if (p4.totalScore > 0) {
-          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御正常(' + p4.totalScore + '/' + (p4.threshold||2) + ')' });
+          var ttImpact2 = getDI() ? getDI().forThinkTankDefense({ executed: true, hasData: true, defenseActive: false }) : null;
+          loopImpact.push({ loop: 4, name: '思维舱防御', effect: '防御正常(' + p4.totalScore + '/' + (p4.threshold||2) + ')', decisionImpact: ttImpact2 || { impact: 'active_monitoring', label: '监控中' } });
         }
+      } else {
+        // ThinkTankDefense NOT executed
+        var ttImpact3 = getDI() ? getDI().forThinkTankDefense({ executed: false, hasData: false }) : null;
+        loopImpact.push({ loop: 4, name: '思维舱防御', effect: '未执行，未参与本次决策', decisionImpact: ttImpact3 || { impact: 'off', label: '未执行' } });
       }
       // Loop 5: trade attribution
       if (loops['5_tradeAttribution'] && loops['5_tradeAttribution'].status === 'active') {
         const a5 = loops['5_tradeAttribution'];
         const adjCount = (a5.process && a5.process.adjustmentsTriggered) || 0;
         const tr = a5.input && a5.input.totalAttributions || 0;
-        loopImpact.push({ loop: 5, name: '归因反馈', effect: tr + '条记录，' + adjCount + '次调整' });
+        var taImpact = getDI() ? getDI().classify({ moduleEnabled: true, hasData: tr > 0, directlyAffected: adjCount > 0 }) : null;
+        loopImpact.push({ loop: 5, name: '归因反馈', effect: tr + '条记录，' + adjCount + '次调整', decisionImpact: taImpact || (adjCount > 0 ? { impact: 'active_effective', label: '有效影响' } : { impact: 'active_monitoring', label: '监控中' }) });
       }
       // Loop 6: dynamic weights
       if (loops['6_dynamicWeights'] && loops['6_dynamicWeights'].status === 'active') {
         const a6 = loops['6_dynamicWeights'];
-        loopImpact.push({ loop: 6, name: '动态权重', effect: 'R²=' + ((a6.process.r2||0)*100).toFixed(0) + '%，OLS学习生效' });
+        var r2 = (a6.process && a6.process.r2) || 0;
+        var sampleCount = (a6.process && a6.process.sampleCount) || 0;
+        var dwImpact = getDI() ? getDI().forDynamicWeights({ enabled: true, sampleCount: sampleCount }) : null;
+        loopImpact.push({ loop: 6, name: '动态权重', effect: 'R²=' + (r2*100).toFixed(0) + '%，' + sampleCount + '样本', decisionImpact: dwImpact || { impact: 'active_monitoring', label: '等待样本' } });
       }
     }
   } catch (_) {}
@@ -382,7 +408,7 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: '3.4.5',
+    version: config.version || '3.4.5',
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -723,7 +749,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: 'v3.4.5',
+    systemVersion: config.version || 'v3.4.5',
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,

@@ -288,6 +288,30 @@ function getGridSearchParams() {
  *
  * @returns {object} { updated, weights, r2, sampleCount, message }
  */
+/**
+ * Phase 3.1: Compute weight tier based on sample maturity and statistical evidence.
+ *
+ * Tier 1 (record_only): < 300 samples or < 20 calendar days — record only, no weight update
+ * Tier 2 (suggest_only): 300-999 samples, or IC CI lower ≤ 0, or net excess ≤ 0 — suggest only
+ * Tier 3 (shadow_allowed): 1000+ samples, 60+ days, IC positive, net excess positive — auto-update
+ * Tier 4 (champion): passes all qualification criteria — same as shadow_allowed for now
+ */
+function computeWeightTier(sampleCount, calendarDays, icLower, netExcessReturn) {
+  if (sampleCount < 300 || calendarDays < 20) {
+    return { tier: 'record_only', mode: 'off', reason: '样本不足(' + sampleCount + '/' + calendarDays + '天)，仅记录不更新' };
+  }
+  if (sampleCount < 1000 || calendarDays < 60) {
+    return { tier: 'suggest_only', mode: 'suggest', reason: '样本积累中(' + sampleCount + '/' + calendarDays + '天)，仅建议不自动更新' };
+  }
+  if (icLower != null && icLower <= 0) {
+    return { tier: 'suggest_only', mode: 'suggest', reason: 'Rank IC置信区间下界非正(' + icLower.toFixed(3) + ')，统计不安全' };
+  }
+  if (netExcessReturn != null && netExcessReturn <= 0) {
+    return { tier: 'suggest_only', mode: 'suggest', reason: '净超额收益为负(' + netExcessReturn.toFixed(2) + '%)，不自动更新' };
+  }
+  return { tier: 'shadow_allowed', mode: 'shadow', reason: '通过所有验证门控' };
+}
+
 function updateDynamicWeights() {
   // Read grid search best params
   var gridParams = getGridSearchParams();
@@ -296,12 +320,33 @@ function updateDynamicWeights() {
 
   const trainingData = collectTrainingData(lookbackDays);
 
+  // Phase 3.1: Compute tier from samples and verification data
+  var calendarDays = trainingData.calendarDays || Math.max(1, Math.ceil(trainingData.sampleCount / 5));
+  var icLower = null;
+  var netExcess = null;
+  try {
+    var vsPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'verification', 'verification_summary.json');
+    if (fs.existsSync(vsPath)) {
+      var vs = JSON.parse(require('fs').readFileSync(vsPath, 'utf8'));
+      if (vs.overall && vs.overall.rankIC && vs.overall.rankIC.ci_lower != null) {
+        icLower = vs.overall.rankIC.ci_lower;
+      }
+      if (vs.overall && vs.overall.postCostNetReturn != null) {
+        netExcess = vs.overall.postCostNetReturn;
+      }
+    }
+  } catch (_) {}
+  var tier = computeWeightTier(trainingData.sampleCount, calendarDays, icLower, netExcess);
+
   if (!trainingData.available) {
     return {
       updated: false,
       weights: null,
       r2: null,
       sampleCount: trainingData.sampleCount || 0,
+      calendarDays: calendarDays,
+      tier: tier.tier,
+      tierReason: tier.reason,
       message: trainingData.reason || '数据不足',
       gridParams: gridParams,
     };
@@ -314,6 +359,9 @@ function updateDynamicWeights() {
       weights: null,
       r2: null,
       sampleCount: trainingData.sampleCount,
+      calendarDays: calendarDays,
+      tier: tier.tier,
+      tierReason: tier.reason,
       message: '回归方程奇异，无法求解',
       gridParams: gridParams,
     };
@@ -325,7 +373,69 @@ function updateDynamicWeights() {
       weights: null,
       r2: +regression.r2.toFixed(3),
       sampleCount: trainingData.sampleCount,
+      calendarDays: calendarDays,
+      tier: tier.tier,
+      tierReason: tier.reason,
       message: 'R²过小(' + regression.r2.toFixed(3) + ')，模型无解释力，保持默认权重',
+      gridParams: gridParams,
+    };
+  }
+
+  // Phase 3.1: Only update weights if tier allows it
+  if (tier.tier === 'record_only') {
+    // Save suggested weights to a separate file for inspection, but don't activate
+    var suggestedPath = DYNAMIC_WEIGHTS_FILE.replace('.json', '_suggested.json');
+    try {
+      var dir2 = path.dirname(suggestedPath);
+      if (!fs.existsSync(dir2)) fs.mkdirSync(dir2, { recursive: true });
+      fs.writeFileSync(suggestedPath, JSON.stringify({
+        suggestedAt: new Date().toISOString(),
+        tier: tier.tier,
+        tierReason: tier.reason,
+        weights: coefficientsToWeights(regression.beta),
+        r2: +regression.r2.toFixed(3),
+        sampleCount: trainingData.sampleCount,
+        calendarDays: calendarDays,
+      }, null, 2), 'utf8');
+    } catch (_) {}
+    return {
+      updated: false,
+      weights: null,
+      r2: +regression.r2.toFixed(3),
+      sampleCount: trainingData.sampleCount,
+      calendarDays: calendarDays,
+      tier: tier.tier,
+      tierReason: tier.reason,
+      message: tier.reason + '（建议权重已保存至suggested文件）',
+      gridParams: gridParams,
+    };
+  }
+
+  if (tier.tier === 'suggest_only') {
+    // Save suggestion but don't auto-apply
+    var suggestedPath2 = DYNAMIC_WEIGHTS_FILE.replace('.json', '_suggested.json');
+    try {
+      var dir3 = path.dirname(suggestedPath2);
+      if (!fs.existsSync(dir3)) fs.mkdirSync(dir3, { recursive: true });
+      fs.writeFileSync(suggestedPath2, JSON.stringify({
+        suggestedAt: new Date().toISOString(),
+        tier: tier.tier,
+        tierReason: tier.reason,
+        weights: coefficientsToWeights(regression.beta),
+        r2: +regression.r2.toFixed(3),
+        sampleCount: trainingData.sampleCount,
+        calendarDays: calendarDays,
+      }, null, 2), 'utf8');
+    } catch (_) {}
+    return {
+      updated: false,
+      weights: null,
+      r2: +regression.r2.toFixed(3),
+      sampleCount: trainingData.sampleCount,
+      calendarDays: calendarDays,
+      tier: tier.tier,
+      tierReason: tier.reason,
+      message: tier.reason + '（建议权重已保存，手动审核后可通过 /apply 激活）',
       gridParams: gridParams,
     };
   }
@@ -353,6 +463,14 @@ function updateDynamicWeights() {
   const existingWeights = existingData ? existingData.weights : null;
   const smoothed = emaSmooth(existingWeights, newWeights, emaAlpha);
 
+  // Phase 3.1: Backup old weights before updating (enables rollback)
+  if (existingData && existingData.weights) {
+    try {
+      var backupFile = DYNAMIC_WEIGHTS_FILE.replace('.json', '_backup.json');
+      fs.writeFileSync(backupFile, JSON.stringify(existingData, null, 2), 'utf8');
+    } catch (_) {}
+  }
+
   // Save
   const weightsData = {
     weights: smoothed,
@@ -360,11 +478,13 @@ function updateDynamicWeights() {
     r2: +regression.r2.toFixed(3),
     rawR2: +regression.r2.toFixed(4),
     sampleCount: trainingData.sampleCount,
+    calendarDays: calendarDays,
     updatedAt: new Date().toISOString(),
     rawWeights: newWeights,
     lookbackDays: lookbackDays,
     emaAlpha: emaAlpha,
     gridParams: gridParams,
+    tier: tier.tier,
     message: '基于' + trainingData.sampleCount + '条数据更新(lookback=' + lookbackDays + ', α=' + emaAlpha + ')，R²=' + regression.r2.toFixed(3),
   };
 
@@ -383,9 +503,35 @@ function updateDynamicWeights() {
     weights: smoothed,
     r2: +regression.r2.toFixed(3),
     sampleCount: trainingData.sampleCount,
+    calendarDays: calendarDays,
+    tier: tier.tier,
+    tierReason: tier.reason,
     message: weightsData.message,
     gridParams: gridParams,
   };
+}
+
+/**
+ * Phase 3.1: Rollback to previous dynamic weights.
+ * Restores from the backup created before the last update.
+ */
+function rollbackDynamicWeights() {
+  try {
+    var backupFile = DYNAMIC_WEIGHTS_FILE.replace('.json', '_backup.json');
+    if (!fs.existsSync(backupFile)) {
+      return { success: false, message: '无可回滚的备份文件' };
+    }
+    fs.copyFileSync(backupFile, DYNAMIC_WEIGHTS_FILE);
+    var restored = JSON.parse(fs.readFileSync(DYNAMIC_WEIGHTS_FILE, 'utf8'));
+    return {
+      success: true,
+      message: '已回滚权重至' + (restored.updatedAt || '上一版本'),
+      weights: restored.weights,
+      r2: restored.r2,
+    };
+  } catch (e) {
+    return { success: false, message: '回滚失败: ' + e.message };
+  }
 }
 
 /**
@@ -410,4 +556,6 @@ module.exports = {
   getEffectiveWeights,
   loadDynamicWeights,
   collectTrainingData,
+  computeWeightTier,       // Phase 3.1
+  rollbackDynamicWeights,  // Phase 3.1
 };
