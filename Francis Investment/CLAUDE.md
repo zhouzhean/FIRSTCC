@@ -1,8 +1,13 @@
-# Francis Investment · A股量化交易系统 v3.4.5
+# Francis Investment · A股量化交易系统 v3.4.5+
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全自动日内交易+24/7自主学习进化+报告引擎。
 
-v3.4.5: **Data Bus Unification** — pipeline.fetchIndices 写入 market_snapshot_latest.json，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，IndexRecorder 新增创业板399006。MarketDirection 修复 (changePercent=null→warn)。decision_audit 补全 (dataQualityPenalty/strategyHealthSampleCount/version)。Think-tank circuit 更新 (节点子标签, Loop7服务端补全, 数据总线状态条)。
+v3.4.5: **Data Bus Unification** — pipeline.fetchIndices 写入 market_snapshot_latest.json，loadLatestIndices 每指数独立 freshnessStatus (live/recorder/stale_daily)，IndexRecorder 新增创业板399006。MarketDirection 修复 (changePercent=null→warn)。decision_audit 补全 (dataQualityPenalty/strategyHealthSampleCount/version)。Think-tank circuit 更新。
+
+v3.4.5+: **Trustworthy Verifiable Trader** — 11 files changed, +900 lines.
+- **P0**: buildCommit追踪, silent catch→catch_failures.jsonl, Eastmoney price=0 bug修复, 每指数EM→Tencent→Sina级联, 2/3核心指数门槛, midTradeResult bug修复, expected_return_below_zero修复, strategy_health_reduce新增, 早盘昨日成交额替代日内筛选
+- **P1**: 不可改写Prediction Ledger (Top50, 5个返回路径全量记录), Outcome Ledger (含基准/行业/扣除成本后净收益), Rank IC Bootstrap CI+十分位收益, 证据门槛 (conf≥0.60, ≥3维度, 数据质量正常)→advisoryOnly
+- **P2**: 动态权重3级门控 (record_only<300/suggest_only<1000/shadow_allowed≥1000+IC显著+净超额为正), 一键回滚, classifyCausal (决策delta审计)
 
 ## Unified Decision Kernel (v3.4.5)
 
