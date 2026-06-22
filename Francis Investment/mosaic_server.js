@@ -55,7 +55,7 @@ function saveLastPipelineResult(result, type) {
   try {
     var psum = require('./mosaic/pipeline_summary');
     psum.savePipelineSummary(result, type || 'full', new Date().toISOString().slice(0, 10), {
-      version: config.version || 'v3.4.5',
+      version: (require('./mosaic/config').version || 'v3.4.5'),
     });
   } catch (e) {
     // Fallback: inline save (legacy — same as before v3.4.5)
@@ -408,7 +408,9 @@ function apiStatus() {
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: config.version || '3.4.5',
+    version: (require('./mosaic/config').version || 'v3.4.5'),
+    buildCommit: (require('./mosaic/config').buildCommit || null),
+    buildTimestamp: (require('./mosaic/config').buildTimestamp || null),
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -749,7 +751,7 @@ function buildCockpitData() {
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: config.version || 'v3.4.5',
+    systemVersion: (require('./mosaic/config').version || 'v3.4.5'),
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
