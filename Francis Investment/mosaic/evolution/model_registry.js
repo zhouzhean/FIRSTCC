@@ -58,8 +58,22 @@ var DEMOTION_LOG_FILE = null;
     // Restore persisted registry
     if (fs.existsSync(REGISTRY_FILE)) {
       var saved = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
+      // v3.4.8: Migrate old champion→baseline
+      if (!saved.baseline && saved.champion) {
+        saved.baseline = saved.champion;
+        console.log('[ModelRegistry] Migrated champion→baseline: ' + saved.baseline.versionId);
+      }
       if (saved.baseline) _state.baseline = saved.baseline;
-      if (saved.shadows) _state.shadows = saved.shadows;
+      if (saved.shadows) {
+        // v3.4.8: Migrate any shadow with status='champion' → 'baseline'
+        for (var si = 0; si < saved.shadows.length; si++) {
+          if (saved.shadows[si].status === 'champion') {
+            saved.shadows[si].status = 'baseline';
+            console.log('[ModelRegistry] Migrated shadow champion→baseline: ' + saved.shadows[si].versionId);
+          }
+        }
+        _state.shadows = saved.shadows;
+      }
       if (saved.shadowLogs) _state.shadowLogs = saved.shadowLogs;
       if (saved.promotionHistory) _state.promotionHistory = saved.promotionHistory;
       if (saved.forwardSamples) _state.forwardSamples = saved.forwardSamples;
@@ -294,11 +308,9 @@ function checkPromotionCriteria(shadow, baselineIC, baselineDrawdown) {
   } else if (shadow._postCostNetReturn != null) {
     postCostNet = shadow._postCostNetReturn;
   }
+  // v3.4.9: postCostNet MUST be available — no cumulativeIC fallback
+  // When post-cost data is missing, the check FAILS. Models must prove real returns.
   checks.postCostPositive = postCostNet != null && postCostNet > 0;
-  // Fallback to cumulativeIC only if no post-cost data available (legacy models)
-  if (postCostNet == null) {
-    checks.postCostPositive = shadow.cumulativeIC != null && shadow.cumulativeIC > 0;
-  }
 
   // 4. Max drawdown not worse
   // If no baseline or drawdown unavailable, skip this check
@@ -519,7 +531,11 @@ function evaluateShadow(dateStr) {
     });
   }
 
-  // v3.3.1: Promotion with full criteria check
+  // v3.4.9: Promotion — locked unless allowAutoPromotion is explicitly true.
+  // When locked, generate a review proposal for manual approval.
+  var allowAuto = CONFIG.allowAutoPromotion === true;
+  var proposals = [];
+
   for (var j = 0; j < _state.shadows.length; j++) {
     var s = _state.shadows[j];
     if (s.status !== 'shadow') continue;
@@ -529,40 +545,81 @@ function evaluateShadow(dateStr) {
     var criteria = checkPromotionCriteria(s, champIC, null);
 
     if (criteria.eligible) {
-      result.promoted = promoteToBaseline(s.versionId,
-        'Shadow IC=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(3) : '?') +
-        ' > Baseline IC=' + (champIC > -99 ? champIC.toFixed(3) : 'N/A') +
-        ' | 方向命中率=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : '?') +
-        ' | Fwd样本=' + criteria.forwardSamples +
-        ' (连续 ' + s.evaluationDays + ' 天)');
-      break;
+      proposals.push({
+        versionId: s.versionId,
+        eligible: true,
+        criteria: criteria,
+        reason: 'Shadow Kendall τ=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(4) : '?') +
+          ' vs Baseline τ=' + (champIC > -99 ? champIC.toFixed(4) : 'N/A') +
+          ' | dirHR=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : '?') +
+          ' | fwdSamples=' + criteria.forwardSamples +
+          ' | evalDays=' + (s.evaluationDays || 0),
+      });
+
+      if (allowAuto) {
+        result.promoted = promoteToBaseline(s.versionId,
+          'Shadow IC=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(4) : '?') +
+          ' > Baseline IC=' + (champIC > -99 ? champIC.toFixed(4) : 'N/A') +
+          ' | 方向命中率=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : '?') +
+          ' | Fwd样本=' + criteria.forwardSamples +
+          ' (连续 ' + s.evaluationDays + ' 天)');
+        break;
+      }
     } else if (s.evaluationDays >= minEvalDays && criteria.failingChecks.length > 0) {
-      // Log blocked promotions for debugging
+      // Log blocked promotions for debugging + review proposals
+      proposals.push({
+        versionId: s.versionId,
+        eligible: false,
+        failingChecks: criteria.failingChecks,
+        criteria: criteria,
+        reason: 'failing=' + criteria.failingChecks.join(',') +
+          ' (τ=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(4) : 'null') +
+          ', dirHR=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : 'null') +
+          ', fwdSamples=' + criteria.forwardSamples + ')',
+      });
       console.log('[ModelRegistry] Promotion blocked for ' + s.versionId +
         ': failing=' + criteria.failingChecks.join(',') +
-        ' (IC=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(3) : 'null') +
+        ' (τ=' + (s.cumulativeIC != null ? s.cumulativeIC.toFixed(4) : 'null') +
         ', dirHR=' + (criteria.directionHitRate != null ? (criteria.directionHitRate * 100).toFixed(1) + '%' : 'null') +
         ', fwdSamples=' + criteria.forwardSamples + ')');
     }
   }
 
-  // v3.3.1: Demotion check
-  var demotionThreshold = CONFIG.demotionThreshold || -0.10;
-  if (_state.baseline && result.baselineIC != null) {
-    var bestShadowIC = -99;
-    for (var si = 0; si < result.shadowResults.length; si++) {
-      if (result.shadowResults[si].cumulativeIC != null &&
-          result.shadowResults[si].cumulativeIC > bestShadowIC) {
-        bestShadowIC = result.shadowResults[si].cumulativeIC;
+  // v3.4.9: Write review proposal for manual approval
+  if (proposals.length > 0) {
+    try {
+      var proposalDir = path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution');
+      if (!fs.existsSync(proposalDir)) fs.mkdirSync(proposalDir, { recursive: true });
+      var proposalFile = path.join(proposalDir, 'promotion_proposal_' + new Date().toISOString().slice(0, 10) + '.json');
+      fs.writeFileSync(proposalFile, JSON.stringify({
+        generatedAt: new Date().toISOString(),
+        allowAutoPromotion: allowAuto,
+        baseline: _state.baseline ? { versionId: _state.baseline.versionId, cumulativeIC: _state.baseline.cumulativeIC } : null,
+        proposals: proposals,
+      }, null, 2), 'utf8');
+      console.log('[ModelRegistry] Review proposal saved: ' + proposals.length + ' models');
+    } catch (_) {}
+    result.proposals = proposals;
+  }
+
+  // v3.4.9: Demotion — also locked behind allowAutoPromotion
+  if (allowAuto) {
+    var demotionThreshold = CONFIG.demotionThreshold || -0.10;
+    if (_state.baseline && result.baselineIC != null) {
+      var bestShadowIC = -99;
+      for (var si = 0; si < result.shadowResults.length; si++) {
+        if (result.shadowResults[si].cumulativeIC != null &&
+            result.shadowResults[si].cumulativeIC > bestShadowIC) {
+          bestShadowIC = result.shadowResults[si].cumulativeIC;
+        }
       }
-    }
-    // Demote if: baselineIC is negative AND best shadow beats baseline by |demotionThreshold|+
-    if (result.baselineIC < 0 && bestShadowIC > result.baselineIC - demotionThreshold) {
-      result.demoted = demoteBaseline(
-        'Baseline IC=' + result.baselineIC.toFixed(3) + ' is negative ' +
-        'while best shadow IC=' + bestShadowIC.toFixed(3) +
-        ' (gap=' + (bestShadowIC - result.baselineIC).toFixed(3) + ' > ' + (-demotionThreshold).toFixed(2) + ')'
-      );
+      if (result.baselineIC < 0 && bestShadowIC > result.baselineIC - demotionThreshold) {
+        result.demoted = demoteBaseline(
+          'Baseline IC=' + result.baselineIC.toFixed(3) + ' is negative ' +
+          'while best shadow IC=' + bestShadowIC.toFixed(3) +
+          ' (gap=' + (bestShadowIC - result.baselineIC).toFixed(3) + ' > ' + (-demotionThreshold).toFixed(2) + ')'
+        );
+      }
     }
   }
 

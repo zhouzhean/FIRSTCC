@@ -50,6 +50,9 @@ class Scheduler extends EventEmitter {
     this._usOpsRunning = false;     // 美股操作锁
     this._weekendAnalysisRunning = false; // 周末分析运行标记 (DEPRECATED v2.9)
     this._historyWeekendActive = false;   // 历史复盘周末持续运行标记
+    this._sessionId = Date.now().toString(36); // v3.4.9: stable session ID for runId
+    this._scanCounter = 0;               // v3.4.9: per-scan counter (resets on new day)
+    this._lastQuoteRefresh = 0;          // v3.4.9: last market quote refresh time
     this._broadcastSSE = null;      // SSE 广播函数引用
   }
 
@@ -145,12 +148,23 @@ class Scheduler extends EventEmitter {
       this._scheduledOps = new Set();
       this._positionAlerts = [];
       this._positionCheckFailures = 0;
+      this._scanCounter = 0;  // v3.4.9: reset scan counter for new day
       this._logEvent('new_day', { date: dateStr });
     }
 
     const newState = this._determineState(now);
     if (newState !== this._state) {
       this._transition(newState, 'tick');
+    }
+
+    // === v3.4.9: Independent market quote refresh (every 30s during trading) ===
+    var isTrading = newState === 'morning_session' || newState === 'afternoon_session';
+    if (isTrading && (now - this._lastQuoteRefresh) >= 30000) {
+      this._lastQuoteRefresh = now;
+      try {
+        var mqs = require('./market_quote_service');
+        mqs.refresh().catch(function() {});
+      } catch (_) {}
     }
 
     // === Pre-market warmup (09:00-09:30, once per day) ===
@@ -642,12 +656,16 @@ class Scheduler extends EventEmitter {
 
       // 自动交易
       try {
+        // v3.4.9: Generate stable runId BEFORE any gate decisions
+        this._scanCounter++;
+        var runId = this._sessionId + '_' + 'full' + '_' + this._scanCounter;
+
         const pf = simfolio.loadPortfolio();
         const crossMarket = require('./analysis/cross_market');
         const macroContext = { riskState: crossMarket.getCachedRiskState() };
         // v3.4.2: Pass market state so kernel can distinguish "market closed" vs "data anomaly"
         var stateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
-        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext, this._state, stateLabels[this._state] || this._state);
+        const tradeResult = simfolio.makeTradingDecisions(pf, result.allResults || [], result.indices || [], 'full', macroContext, this._state, stateLabels[this._state] || this._state, runId);
         this._logEvent('trade_complete', {
           decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
           executed: tradeResult.executed ? tradeResult.executed.length : 0,
@@ -831,6 +849,10 @@ class Scheduler extends EventEmitter {
                 dataQualityPenalty: dqPenalty,
                 strategyHealthSampleCount: shSampleCount,
                 note: note,
+                // v3.4.9.2: Research capture audit
+                researchCaptureWritten: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.writtenCount : null,
+                researchCaptureDuplicates: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.duplicateCount : null,
+                researchCaptureFailed: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.writeError : null,
               };
               _appendDecisionAudit(auditEntry);
             } catch (_) {}
@@ -998,12 +1020,16 @@ class Scheduler extends EventEmitter {
       // 自动交易
       if (results.length > 0) {
         try {
+          // v3.4.9: Generate stable runId for mid-scan
+          this._scanCounter++;
+          var midRunId = this._sessionId + '_mid_' + this._scanCounter;
+
           const pf = simfolio.loadPortfolio();
           const crossMarket = require('./analysis/cross_market');
           const macroContext = { riskState: crossMarket.getCachedRiskState() };
           // v3.4.2: Pass market state
           var midStateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state);
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state, midRunId);
           // v3.4.2: trade_complete event for mid-scan (was missing — only full scan had it)
           this._logEvent('trade_complete', {
             decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,
@@ -1174,6 +1200,10 @@ class Scheduler extends EventEmitter {
                 dataQualityPenalty: midDqPenalty,
                 strategyHealthSampleCount: midShSampleCount,
                 note: midNote,
+                // v3.4.9.2: Research capture audit
+                researchCaptureWritten: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.writtenCount : null,
+                researchCaptureDuplicates: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.duplicateCount : null,
+                researchCaptureFailed: tradeResult._plCaptureResult ? tradeResult._plCaptureResult.writeError : null,
               });
             } catch (_) {}
             } catch (_) {}

@@ -443,6 +443,42 @@ const DEFAULT_WEIGHTS = {
 };
 
 /**
+ * v3.4.7: Read index close price for a given date.
+ * Fallback chain: index_history_DATE.json (last entry) → market_snapshot_latest.json (same-date check) → null
+ * NEVER uses stock price — only true index data.
+ *
+ * @param {string} targetDate - YYYY-MM-DD
+ * @param {string} indexType - 'sh' | 'sz' | 'cy' | 'bj'
+ * @returns {number|null}
+ */
+function _getIndexCloseForDate(targetDate, indexType) {
+  try {
+    // Tier 1: index_history_DATE.json — last entry of the day is the market close
+    var idxFile = path.join(DATA_DIR, 'index_history_' + targetDate + '.json');
+    if (fs.existsSync(idxFile)) {
+      var idxData = JSON.parse(fs.readFileSync(idxFile, 'utf8'));
+      if (Array.isArray(idxData) && idxData.length > 0) {
+        var lastEntry = idxData[idxData.length - 1];
+        var val = lastEntry[indexType || 'sh'];
+        if (val != null && val > 0) return val;
+      }
+    }
+    // Tier 2: market_snapshot_latest.json if the date matches
+    var snapFile = path.join(DATA_DIR, 'market_snapshot_latest.json');
+    if (fs.existsSync(snapFile)) {
+      var snap = JSON.parse(fs.readFileSync(snapFile, 'utf8'));
+      if (snap.date === targetDate && snap.indices) {
+        var codeMap = { sh: '000001', sz: '399001', cy: '399006', bj: '899050' };
+        var targetCode = codeMap[indexType] || '000001';
+        var shIdx = snap.indices.find(function(ix) { return ix.code === targetCode; });
+        if (shIdx && shIdx.price > 0) return shIdx.price;
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
+/**
  * 验证历史期望收益预测的准确性。
  * 对比 N 天前预测的 E[R5d] 与实际 5 日收益。
  * 由 _runDailySummary() 在 16:00 调用。
@@ -478,7 +514,7 @@ function verifyExpectedReturns(dateStr) {
       var lookIdx = dateIdx - step;
       if (lookIdx < 0) break;
       var lookDate = tradingDays[lookIdx];
-      var ledgerFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + lookDate + '.jsonl');
+      var ledgerFile = path.join(DATA_DIR, 'prediction_ledger_' + lookDate + '.jsonl');
       if (fs.existsSync(ledgerFile)) {
         foundDate = lookDate;
         break;
@@ -489,14 +525,16 @@ function verifyExpectedReturns(dateStr) {
       return { available: false, reason: '最近30个交易日内无prediction_ledger记录' };
     }
 
-    // v3.4.6: Only settle outcomes for predictions whose targetDate has arrived
+    // v3.4.7: Strict target-date gating — only settle when targetDate === dateStr
     // Read from prediction_ledger (NOT legacy last_pipeline_result.json)
     var ledgerVerifications = [];
     try {
-      var ledgerFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + foundDate + '.jsonl');
+      // Fix path: DATA_DIR already includes simfolio/ (see line 19)
+      var ledgerFile = path.join(DATA_DIR, 'prediction_ledger_' + foundDate + '.jsonl');
       if (fs.existsSync(ledgerFile)) {
         var ledgerLines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n');
-        var spfPath2 = path.join(DATA_DIR, 'stock_factor_performance.json');
+        // Fix path: stock_factor_performance.json is in data/, not data/simfolio/
+        var spfPath2 = path.join(DATA_DIR, '..', 'stock_factor_performance.json');
         var spf2 = fs.existsSync(spfPath2) ? JSON.parse(fs.readFileSync(spfPath2, 'utf8')) : null;
         if (spf2) {
           var toRecs2 = (spf2.dailyRecords || {})[dateStr] || [];
@@ -504,38 +542,34 @@ function verifyExpectedReturns(dateStr) {
             try {
               var led = JSON.parse(ledgerLines[li]);
 
-              // v3.4.6: Skip entries whose targetDate hasn't arrived
-              if (led.targetDate && led.targetDate > dateStr) continue;
+              // v3.4.7: Strict equality — only settle on exact targetDate match
+              if (!led.targetDate || led.targetDate !== dateStr) continue;
 
               var toRec2 = toRecs2.find(function(r) { return r.code === led.code; });
               if (!toRec2 || !(led.price > 0)) continue;
 
               var actualRet = (toRec2.price - led.price) / led.price * 100;
 
-              // v3.4.6: Guard benchmark — skip excess return if invalid
+              // v3.4.7: Benchmark return from INDEX data (never stock price)
               var benchmarkRet = null;
               var benchmarkUnavailable = true;
-              if (led.benchmarkPrice != null && led.benchmarkPrice > 0 && toRec2.price != null && toRec2.price > 0) {
-                // Find SH index current price from spf records (not available in spf typically)
-                // Use indexSH from ledger as proxy
-                if (led.indexSH != null && led.indexSH > 0) {
-                  benchmarkRet = +(((toRec2.price - led.indexSH) / led.indexSH * 100)).toFixed(2);
-                } else {
-                  // Compare against the index at prediction time from spf
-                  var shRec = toRecs2.find(function(r) { return r.code === '000001_sh'; });
-                  if (shRec && shRec.price > 0 && led.benchmarkPrice > 0) {
-                    benchmarkRet = +(((shRec.price - led.benchmarkPrice) / led.benchmarkPrice * 100)).toFixed(2);
+              var netExcessReturn = null;
+              if (led.benchmarkPrice != null && led.benchmarkPrice > 0) {
+                var targetIndexClose = _getIndexCloseForDate(led.targetDate || dateStr, 'sh');
+                if (targetIndexClose != null && targetIndexClose > 0) {
+                  benchmarkRet = +((targetIndexClose - led.benchmarkPrice) / led.benchmarkPrice * 100).toFixed(2);
+                  if (benchmarkRet != null && !isNaN(benchmarkRet) && isFinite(benchmarkRet)) {
+                    benchmarkUnavailable = false;
+                    netExcessReturn = +(actualRet - benchmarkRet).toFixed(2);
+                  } else {
+                    benchmarkRet = null;
                   }
-                }
-                if (benchmarkRet != null && !isNaN(benchmarkRet) && isFinite(benchmarkRet)) {
-                  benchmarkUnavailable = false;
-                } else {
-                  benchmarkRet = null;
                 }
               }
 
-              // Post-cost return with real costs: commission 0.025% + stamp 0.1% + slippage 0.1% ≈ 0.225%
-              var roundTripCost = 0.00225 * 100; // roughly 0.225%
+              // Post-cost return: commission 0.025% + stamp 0.1% + slippage 0.1% = 0.225% round-trip
+              // 0.00225 * 100 = 0.225 percentage points subtracted from percentage return
+              var roundTripCost = 0.00225 * 100;
               var postCostRet = +(actualRet - roundTripCost).toFixed(2);
 
               ledgerVerifications.push({
@@ -549,6 +583,7 @@ function verifyExpectedReturns(dateStr) {
                 actualReturn_3d: +actualRet.toFixed(2),
                 benchmarkReturn: benchmarkRet,
                 benchmarkUnavailable: benchmarkUnavailable,
+                netExcessReturn: netExcessReturn,
                 postCostReturn: postCostRet,
                 directionCorrect: led.expectedReturn != null ? (led.expectedReturn > 0) === (actualRet > 0) : null,
                 wasBought: led.wasBought,
@@ -559,17 +594,35 @@ function verifyExpectedReturns(dateStr) {
       }
     } catch (_) {}
 
-    // v3.4.6: Write outcome ledger
+    // v3.4.7: Write outcome ledger with dedup by predictionId
     if (ledgerVerifications.length > 0) {
       try {
-        var outcomeDir = path.join(DATA_DIR, 'simfolio');
+        var outcomeDir = DATA_DIR;  // Already includes simfolio/
         if (!fs.existsSync(outcomeDir)) {
           var fs3 = require('fs');
           fs3.mkdirSync(outcomeDir, { recursive: true });
         }
         var outcomeFile = path.join(outcomeDir, 'outcome_ledger.jsonl');
+
+        // Dedup: read existing predictionIds to prevent duplicates
+        var existingPredIds = {};
+        try {
+          if (fs.existsSync(outcomeFile)) {
+            var existingLines = fs.readFileSync(outcomeFile, 'utf8').trim().split('\n');
+            for (var ei = 0; ei < existingLines.length; ei++) {
+              try {
+                var ex = JSON.parse(existingLines[ei]);
+                if (ex.predictionId) existingPredIds[ex.predictionId] = true;
+              } catch (_) {}
+            }
+          }
+        } catch (_) {}
+
+        var newOutcomes = 0;
         for (var oi = 0; oi < ledgerVerifications.length; oi++) {
+          if (existingPredIds[ledgerVerifications[oi].predictionId]) continue;
           fs.appendFileSync(outcomeFile, JSON.stringify(ledgerVerifications[oi]) + '\n', 'utf8');
+          newOutcomes++;
         }
       } catch (_) {}
     }

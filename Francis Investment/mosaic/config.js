@@ -18,8 +18,13 @@ try {
   // git not available (e.g., scp-only deploy) — leave null
 }
 
+// v3.4.9.2: Test data root override — set by tests to redirect all file I/O
+// to a temporary directory. Production code MUST NOT set this.
+var _testDataRoot = null;
+
 module.exports = {
-  version: 'v3.4.6',
+  version: 'v3.4.9.4',
+  _testDataRoot: _testDataRoot,  // mutable: tests set this before requiring modules
   buildCommit: _buildCommit,
   buildTimestamp: _buildTimestamp,
   BASE_DIR,
@@ -417,18 +422,21 @@ module.exports = {
   // ---- v3.3.0: Shadow Mode + Model Registry ----
   SHADOW_MODE: {
     enabled: true,
-    promotionThreshold: 0.05,                       // Shadow IC 超过 baseline 5% → 自动晋升
-    demotionThreshold: -0.10,                       // Baseline IC 低于最佳 shadow 10% → 标记审查
+    // v3.4.9: Promotion is locked — manual review required. No auto-promote, no auto-demote.
+    allowAutoPromotion: false,                     // Master lock: promotion requires manual approval
+    promotionThreshold: 0.05,                       // Shadow IC 超过 baseline 5% → promotion candidate
+    demotionThreshold: -0.10,                       // Baseline IC 低于最佳 shadow 10% → review flag
     shadowLogMaxEntries: 500,                       // Shadow 预测日志最大条目数
     trackSectors: true,                             // 是否跟踪板块级别的 shadow 表现
-    minEvaluationDays: 5,                           // Shadow 至少运行 5 天才能晋升
+    minEvaluationDays: 60,                          // Shadow 至少运行 60 个交易日才能晋升 (was 5)
     minVerificationSamples: 30,                     // 最少验证样本数才评估
-    // v3.3.1: Additional promotion checks
-    minForwardSamplesPerShadow: 100,                // Per-shadow forward samples (not total)
+    // v3.4.9: Strengthened promotion checks
+    minForwardSamplesPerShadow: 1000,               // Per-shadow researchEligible samples (was 100)
     minDirectionHitRate: 0.52,                      // >52% direction accuracy required
-    requirePostCostPositive: true,                  // Avg return after costs > 0
+    requirePostCostPositive: true,                  // Avg return after costs > 0 (NO cumulativeIC fallback)
     maxDrawdownNotWorse: true,                      // Shadow drawdown <= baseline drawdown
     requireCalibrationCheck: true,                  // High-conf predictions must be more accurate
+    requireTwoOOSWindows: true,                     // v3.4.9: Two rolling OOS windows must both pass
   },
 
   MODEL_REGISTRY: {

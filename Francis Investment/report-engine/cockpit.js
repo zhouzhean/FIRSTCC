@@ -214,6 +214,10 @@ function renderAll(data) {
   renderCalibration(data.calibration);
   renderChangeLog(data.changeLog);
   renderFailures(data.failures);
+  // v3.4.8: Fetch prediction settlement data
+  fetchPredictionSettlement();
+  // v3.4.9.4: Fetch cohort integrity data
+  fetchCohortIntegrity();
 }
 
 /**
@@ -223,8 +227,8 @@ function renderAllError(msg) {
   var panelIds = [
     'wnb-body', 'api-health-body', 'data-files-body', 'prediction-body',
     'shadow-baseline-body', 'leakage-body', 'permissions-body',
-    'tasks-body', 'verify-body', 'calibration-body',
-    'changelog-body', 'failures-body'
+    'tasks-body', 'verify-body', 'prediction-settlement-body', 'calibration-body',
+    'changelog-body', 'failures-body', 'cohort-integrity-body'
   ];
   var errorHtml = '<div class="status-error" style="padding:12px;font-size:13px;">'
     + esc(msg) + '</div>';
@@ -246,11 +250,14 @@ function renderSystemStatus(data) {
   var el = document.getElementById('system-body');
   var html = '';
 
-  // Version
+  // Version — v3.4.9.3: show precise patch + build identity
   var version = data.systemVersion || 'v3.4.5';
+  var buildId = data.buildCommit ? data.buildCommit.slice(0, 7) : (data.buildTimestamp || '');
+  var versionDisplay = version;
+  if (buildId) versionDisplay = version + '-' + buildId;
   html += '<div class="sys-row">' +
     '<span class="sys-label">Version</span>' +
-    '<span class="sys-value">' + esc(version) + '</span>' +
+    '<span class="sys-value" title="' + esc(data.buildCommit || '') + '">' + esc(versionDisplay) + '</span>' +
     '</div>';
 
   // Server start time
@@ -673,6 +680,49 @@ function renderPermissions(perms) {
     '<span class="perm-label">Current Holdings</span>' +
     '<span>' + (perms.hasPositions ? 'YES (' + (perms.positionCount || 0) + ')' : 'NONE') + '</span></div>';
 
+  // v3.4.8: Market Validation row (v3.4.9: add quoteAge differentiation)
+  if (perms.marketValidation) {
+    var mv = perms.marketValidation;
+    html += '<h4 style="margin-top:12px;">Market Validation</h4>';
+
+    // v3.4.9: Distinguish "行情过期" vs "核心指数不足" vs "市场风险"
+    // v3.4.9.2: Trust backend marketData.status — backend sets 'not_applicable' for non-trading
+    var quoteAge = mv.quoteAge;
+    var quoteStale = mv.quoteStale;
+    var coreInsufficient = mv.validCoreCount < 2;
+    var mvStatusLabel = '';
+    var mvStatusClass = 'metric-good';
+    if (mv.status === 'not_applicable') {
+      mvStatusLabel = '非交易时段 (N/A)';
+      mvStatusClass = 'metric-good';
+    } else if (quoteStale && coreInsufficient) {
+      mvStatusLabel = '行情过期(' + quoteAge + 's) + 核心不足(' + mv.validCoreCount + '/3)';
+      mvStatusClass = 'metric-bad';
+    } else if (quoteStale) {
+      mvStatusLabel = '行情过期(' + quoteAge + 's) — 超过5分钟';
+      mvStatusClass = 'metric-warn';
+    } else if (coreInsufficient) {
+      mvStatusLabel = '核心指数不足(' + mv.validCoreCount + '/3)';
+      mvStatusClass = 'metric-bad';
+    } else {
+      mvStatusLabel = '数据正常 (' + mv.validCoreCount + '/3)';
+    }
+
+    html += '<div class="perm-reason">' +
+      '<span class="perm-label">Status</span>' +
+      '<span class="' + mvStatusClass + '">' + mvStatusLabel + '</span></div>';
+    html += '<div class="perm-reason">' +
+      '<span class="perm-label">Source</span>' +
+      '<span>' + esc(mv.sourceChain || 'unknown') + '</span></div>';
+    html += '<div class="perm-reason">' +
+      '<span class="perm-label">Last Quote</span><span>' + (mv.lastValidQuoteAt ? fmtTime(mv.lastValidQuoteAt) : 'never') +
+      (quoteAge != null ? ' (' + quoteAge + 's ago)' : '') + '</span></div>';
+    if (mv.description) {
+      html += '<div class="perm-reason">' +
+        '<span class="perm-label">Reason</span><span style="font-size:11px;">' + esc(mv.description) + '</span></div>';
+    }
+  }
+
   html += '</div>';
 
   // Gate states
@@ -747,6 +797,46 @@ function renderVerification(verif) {
 
   var html = '';
 
+  // v3.4.8: Check independent days threshold
+  // Note: verification_summary.json has the canonical overall.rankIC.independentDays
+  // but the cockpit API may not include it. We check the verifiedData passed in.
+  var indDays = (verif.overall && verif.overall.rankIC && verif.overall.rankIC.independentDays) || 0;
+  var dataInsufficient = indDays < 20;
+
+  if (dataInsufficient) {
+    html += '<div class="data-insufficient" style="text-align:center;padding:16px;color:#94a3b8;">' +
+      '<div style="font-size:28px;margin-bottom:8px;">&#9888;</div>' +
+      '<div style="font-size:14px;font-weight:600;margin-bottom:4px;">积累中，不构成预测证据</div>' +
+      '<div style="font-size:12px;">独立交易日: ' + indDays + '/20（需≥20天才可统计推断）</div>' +
+      '</div>';
+  } else {
+    // Rank IC with CI
+    var rankIC = (verif.overall && verif.overall.rankIC) ? verif.overall.rankIC : null;
+    var ciLo = rankIC ? rankIC.ci_lower : null;
+    var ciHi = rankIC ? rankIC.ci_upper : null;
+    var icMean = rankIC ? rankIC.mean : (verif.rankIC != null ? verif.rankIC : null);
+
+    html += '<div class="metric-row">' +
+      '<span>Independent Days</span>' +
+      '<span class="' + (indDays >= 20 ? 'metric-good' : 'metric-warn') + '">' +
+      indDays + ' / 20' + '</span></div>';
+
+    html += '<div class="metric-row">' +
+      '<span>Rank IC</span>' +
+      '<span class="' + (icMean > 0.1 ? 'metric-good' : icMean > 0 ? 'metric-warn' : 'metric-bad') + '">' +
+      (icMean != null ? icMean.toFixed(3) : '?') +
+      (ciLo != null && ciHi != null ? ' [' + ciLo.toFixed(3) + ', ' + ciHi.toFixed(3) + ']' : '') +
+      '</span></div>';
+
+    var netExcess = (verif.overall && verif.overall.postCostNetExcessReturn != null)
+      ? verif.overall.postCostNetExcessReturn : null;
+    html += '<div class="metric-row">' +
+      '<span>Net Excess Return</span>' +
+      '<span class="' + (netExcess > 0 ? 'metric-good' : netExcess != null ? 'metric-warn' : 'metric-bad') + '">' +
+      (netExcess != null ? netExcess.toFixed(2) + '%' : 'N/A') + '</span></div>';
+  }
+
+  // Keep legacy fields
   html += '<div class="metric-row">' +
     '<span>Overall Hit Rate</span>' +
     '<span class="' + (verif.overallHitRate > 50 ? 'metric-good' : verif.overallHitRate > 40 ? 'metric-warn' : 'metric-bad') + '">' +
@@ -754,17 +844,7 @@ function renderVerification(verif) {
     ' (' + (verif.totalPredictions || 0) + ' samples)' +
     '</span></div>';
 
-  html += '<div class="metric-row">' +
-    '<span>Rank IC</span>' +
-    '<span class="' + (verif.rankIC > 0.1 ? 'metric-good' : verif.rankIC > 0 ? 'metric-warn' : 'metric-bad') + '">' +
-    (verif.rankIC != null ? verif.rankIC.toFixed(3) : 'Pending') + '</span></div>';
-
-  html += '<div class="metric-row">' +
-    '<span>Data Status</span>' +
-    '<span class="' + (verif.dataQuality === '稳定' ? 'metric-good' : verif.dataQuality === '初步可用' ? 'metric-warn' : 'status-gray') + '">' +
-    esc(verif.dataQuality || '?') + '</span></div>';
-
-  if (verif.factors && verif.factors.length > 0) {
+  if (!dataInsufficient && verif.factors && verif.factors.length > 0) {
     html += '<div class="factor-list"><h4>Factor Detail</h4>';
     for (var i = 0; i < Math.min(verif.factors.length, 5); i++) {
       var f = verif.factors[i];
@@ -775,6 +855,181 @@ function renderVerification(verif) {
         ' (' + (f.samples || 0) + ' samples)</span></div>';
     }
     html += '</div>';
+  }
+
+  html += '<div class="metric-row">' +
+    '<span>Data Status</span>' +
+    '<span class="' + (verif.dataQuality === '稳定' ? 'metric-good' : verif.dataQuality === '初步可用' ? 'metric-warn' : 'status-gray') + '">' +
+    esc(verif.dataQuality || '?') + '</span></div>';
+
+  el.innerHTML = html;
+}
+
+// ══════ Panel 6b: Prediction Settlement (v3.4.8) ══════
+
+function fetchPredictionSettlement() {
+  fetch('/api/prediction-settlement')
+    .then(function(res) { return res.json(); })
+    .then(function(data) { renderPredictionSettlement(data); })
+    .catch(function(err) {
+      var el = document.getElementById('prediction-settlement-body');
+      if (el) el.innerHTML = '<div class="loading">' + esc(err.message || 'Network error') + '</div>';
+    });
+}
+
+function renderPredictionSettlement(data) {
+  var el = document.getElementById('prediction-settlement-body');
+  if (!data || !data.ok) {
+    el.innerHTML = '<div class="loading">' + (data && data.message ? esc(data.message) : 'Not available') + '</div>';
+    return;
+  }
+
+  var html = '';
+  var hasData = data.hasLedger || data.hasOutcome;
+  if (!hasData) {
+    // v3.4.9: Empty state with specific message
+    html += '<div class="no-data" style="padding:16px;text-align:center;color:#94a3b8;">' +
+      '<div style="font-size:14px;margin-bottom:4px;">预测采集尚未开始</div>' +
+      '<div style="font-size:11px;">等待首个全量扫描产生预测账本</div></div>';
+  } else {
+    // v3.4.9: RunId display
+    if (data.runId) {
+      html += '<div style="margin-bottom:8px;font-size:10px;color:#94a3b8;font-family:monospace;">runId: ' + esc(data.runId) + '</div>';
+    }
+
+    // v3.4.9: Top row — researchEligible + executionEligible (3-tier)
+    html += '<div class="ps-counts" style="display:flex;gap:10px;margin-bottom:10px;">' +
+      '<div style="flex:1;text-align:center;padding:8px;background:#f8fafc;border-radius:6px;">' +
+      '<div style="font-size:20px;font-weight:700;color:#1e293b;">' + (data.canonicalTop50 || 0) + ' / ' + (data.intradayObservationCount || 0) + '</div>' +
+      '<div style="font-size:10px;color:#64748b;">Canonical / Intraday</div></div>' +
+      '<div style="flex:1;text-align:center;padding:8px;background:#fefce8;border-radius:6px;">' +
+      '<div style="font-size:20px;font-weight:700;color:#a16207;">' + (data.researchEligible || 0) + '</div>' +
+      '<div style="font-size:10px;color:#64748b;">Research</div></div>' +
+      '<div style="flex:1;text-align:center;padding:8px;background:#f0fdf4;border-radius:6px;">' +
+      '<div style="font-size:20px;font-weight:700;color:#16a34a;">' + (data.executionEligible || 0) + '</div>' +
+      '<div style="font-size:10px;color:#64748b;">Exec</div></div>' +
+      '<div style="flex:1;text-align:center;padding:8px;background:#eff6ff;border-radius:6px;">' +
+      '<div style="font-size:20px;font-weight:700;color:#2563eb;">' + (data.independentDays || 0) + '</div>' +
+      '<div style="font-size:10px;color:#64748b;">Ind.Days</div></div>' +
+      '</div>';
+
+    // Exclusion reasons
+    if (data.exclusionReasons && Object.keys(data.exclusionReasons).length > 0) {
+      html += '<div style="margin-bottom:8px;"><span style="font-size:10px;font-weight:600;">Exclusion Reasons</span></div>';
+      var reasons = data.exclusionReasons;
+      for (var reason in reasons) {
+        if (!reasons.hasOwnProperty(reason)) continue;
+        var cls = reason === 'none' ? 'metric-good' : (reason === 'evidence_fail' ? 'metric-warn' : 'metric-bad');
+        html += '<div class="metric-row">' +
+          '<span style="font-size:10px;">' + esc(reason) + '</span>' +
+          '<span class="' + cls + '" style="font-size:10px;">' + reasons[reason] + '</span></div>';
+      }
+    }
+
+    // Settlement stats
+    html += '<div style="margin:10px 0 6px 0;border-top:1px solid #e2e8f0;padding-top:8px;">' +
+      '<div class="metric-row">' +
+      '<span style="font-size:10px;">T+3 Pending</span>' +
+      '<span class="' + (data.t3pending > 0 ? 'metric-warn' : 'metric-good') + '" style="font-size:10px;">' + (data.t3pending || 0) + '</span></div>' +
+      '<div class="metric-row">' +
+      '<span style="font-size:10px;">Settled / Unavail.</span>' +
+      '<span style="font-size:10px;">' + (data.settledToday || 0) + ' / ' + (data.unavailableCount || 0) + '</span></div>' +
+      '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+// ══════ Panel 6c: Research Cohort Integrity (v3.4.9.4) ══════
+
+function fetchCohortIntegrity() {
+  fetch('/api/cohort-integrity')
+    .then(function(res) { return res.json(); })
+    .then(function(data) { renderCohortIntegrity(data); })
+    .catch(function(err) {
+      var el = document.getElementById('cohort-integrity-body');
+      if (el) el.innerHTML = '<div class="loading">' + esc(err.message || 'Network error') + '</div>';
+    });
+}
+
+function renderCohortIntegrity(data) {
+  var el = document.getElementById('cohort-integrity-body');
+  if (!data || !data.ok) {
+    el.innerHTML = '<div class="loading">' + (data && data.message ? esc(data.message) : 'Not available') + '</div>';
+    return;
+  }
+
+  var html = '';
+  var m = data.manifest;
+
+  // Canonical runId + status
+  html += '<div style="margin-bottom:10px;">';
+  if (m && m.canonicalRunId) {
+    html += '<div style="font-size:10px;color:#94a3b8;font-family:monospace;margin-bottom:4px;">canonical: ' + esc(m.canonicalRunId) + '</div>';
+    var statusDisplay = m.status === 'completed' ? 'completed' : (m.status === 'started' ? 'started' : 'unavailable');
+    var statusColor = m.status === 'completed' ? '#16a34a' : (m.status === 'started' ? '#f59e0b' : '#dc2626');
+    html += '<div style="font-size:12px;">Designated Window: <span style="font-weight:600;">09:30</span> — Status: <span style="color:' + statusColor + ';font-weight:600;">' + esc(statusDisplay) + '</span></div>';
+  } else if (data.hasManifest && m) {
+    html += '<div style="font-size:12px;">Status: <span style="color:#dc2626;font-weight:600;">canonical_unavailable</span></div>';
+  } else {
+    html += '<div style="font-size:12px;color:#94a3b8;">No canonical window yet today</div>';
+  }
+  if (m && m.candidateSetHash) {
+    html += '<div style="font-size:9px;color:#94a3b8;font-family:monospace;margin-top:2px;">hash: ' + esc(m.candidateSetHash.slice(0, 16)) + '</div>';
+  }
+  html += '</div>';
+
+  // Counts row
+  var counts = data.counts || {};
+  html += '<div class="ps-counts" style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#1e293b;">' + (data.ledgerTotal || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Ledger</div></div>' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#16a34a;">' + (counts.schemaValid || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Schema</div></div>' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#fefce8;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#a16207;">' + (counts.researchEligible || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Research</div></div>' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#eff6ff;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#2563eb;">' + (counts.executionCandidateEligible || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Exec.Cand.</div></div>' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#fee2e2;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#dc2626;">' + (counts.globalBlocked || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">GlobalBlock</div></div>' +
+    '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f0fdf4;border-radius:4px;">' +
+    '<div style="font-size:16px;font-weight:700;color:#16a34a;">' + (counts.actualBought || 0) + '</div>' +
+    '<div style="font-size:9px;color:#64748b;">Bought</div></div>' +
+    '</div>';
+
+  // Detail rows
+  html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:4px;">';
+  html += '<div class="metric-row"><span style="font-size:10px;">Missing E[R]</span><span style="font-size:10px;' + (counts.missingExpectedReturn > 0 ? 'color:#dc2626;' : '') + '">' + (counts.missingExpectedReturn || 0) + '</span></div>';
+  html += '<div class="metric-row"><span style="font-size:10px;">Old Format Quarantined</span><span style="font-size:10px;' + (counts.oldFormatQuarantined > 0 ? 'color:#f59e0b;' : '') + '">' + (counts.oldFormatQuarantined || 0) + '</span></div>';
+
+  // Feature coverage
+  if (data.featureCoverage && Object.keys(data.featureCoverage).length > 0) {
+    var fcKeys = Object.keys(data.featureCoverage).sort();
+    html += '<div style="margin-top:4px;"><span style="font-size:10px;font-weight:600;">Feature Coverage:</span>';
+    for (var fi = 0; fi < Math.min(fcKeys.length, 6); fi++) {
+      html += ' <span style="font-size:9px;color:#64748b;">' + esc(fcKeys[fi]) + ':' + data.featureCoverage[fcKeys[fi]] + '</span>';
+    }
+    html += '</div>';
+  }
+
+  // Manifest details
+  if (m) {
+    html += '<div style="margin-top:6px;border-top:1px solid #e2e8f0;padding-top:4px;">';
+    html += '<div class="metric-row"><span style="font-size:9px;">Expected/Written/Deduped</span><span style="font-size:9px;">' +
+      (m.expectedCount || '?') + ' / ' + (m.writtenCount || '?') + ' / ' + (m.dedupedCount || '0') + '</span></div>';
+    if (m.modelVersionId) html += '<div class="metric-row"><span style="font-size:9px;">ModelVersionId</span><span style="font-size:9px;font-family:monospace;">' + esc(String(m.modelVersionId).slice(0, 16)) + '</span></div>';
+    html += '</div>';
+  }
+
+  // Note
+  if (data.note) {
+    var noteColor = data.note.indexOf('尚无') >= 0 ? '#f59e0b' : '#16a34a';
+    html += '<div style="margin-top:8px;padding:8px;background:#fffbeb;border-radius:4px;font-size:11px;color:' + noteColor + ';text-align:center;">' + esc(data.note) + '</div>';
   }
 
   el.innerHTML = html;
@@ -885,6 +1140,16 @@ function renderFailures(failures) {
 }
 
 // ── Util ──
+
+// v3.4.9.3: fmtTime — formats ISO timestamps for display, returns '--' on invalid input
+function fmtTime(isoString) {
+  if (!isoString) return '--';
+  try {
+    var d = new Date(isoString);
+    if (isNaN(d.getTime())) return '--';
+    return d.toLocaleTimeString('zh-CN', { hour12: false });
+  } catch (_) { return '--'; }
+}
 
 function esc(s) {
   if (!s) return '';

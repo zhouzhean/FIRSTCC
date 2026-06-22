@@ -22,18 +22,21 @@ function safeFixed(value, decimals, fallback) {
   return value.toFixed(decimals);
 }
 
-const SIMFOLIO_DIR = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
-const PORTFOLIO_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json');
-const PORTFOLIO_BAK_FILE = path.join(SIMFOLIO_DIR, 'portfolio.json.bak');
-const WEEKEND_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'weekend_context.json');
-const HISTORY_CONTEXT_FILE = path.join(SIMFOLIO_DIR, 'history_context.json'); // v2.9: unified history context
-const STOP_LOSS_COOLDOWN_FILE = path.join(SIMFOLIO_DIR, 'stop_loss_cooldowns.json'); // v3.3.0
+// v3.4.9.4: Lazy path getters — respect config._testDataRoot for test isolation.
+// Replaced old require-time constants: SIMFOLIO_DIR, PORTFOLIO_FILE, etc.
+function _simfolioDir() { return _resolveDataPath('simfolio'); }
+function _portfolioFile() { return path.join(_simfolioDir(), 'portfolio.json'); }
+function _portfolioBakFile() { return path.join(_simfolioDir(), 'portfolio.json.bak'); }
+function _weekendContextFile() { return path.join(_simfolioDir(), 'weekend_context.json'); }
+function _historyContextFile() { return path.join(_simfolioDir(), 'history_context.json'); }
+function _stopLossCooldownFile() { return path.join(_simfolioDir(), 'stop_loss_cooldowns.json'); }
 
 // ---- Portfolio Management ----
 
 function ensureDir() {
-  if (!fs.existsSync(SIMFOLIO_DIR)) {
-    fs.mkdirSync(SIMFOLIO_DIR, { recursive: true });
+  var dir = _simfolioDir();
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
 }
 
@@ -54,15 +57,16 @@ function createPortfolio() {
 function loadPortfolio() {
   ensureDir();
   let pf;
-  if (fs.existsSync(PORTFOLIO_FILE)) {
+  var pfFile = _portfolioFile();
+  var bakFile = _portfolioBakFile();
+  if (fs.existsSync(pfFile)) {
     try {
-      pf = JSON.parse(fs.readFileSync(PORTFOLIO_FILE, 'utf8'));
+      pf = JSON.parse(fs.readFileSync(pfFile, 'utf8'));
     } catch (e) {
       console.error('  [Simfolio] ERROR: 投资组合文件损坏，尝试从备份恢复...');
-      // Try to restore from backup
-      if (fs.existsSync(PORTFOLIO_BAK_FILE)) {
+      if (fs.existsSync(bakFile)) {
         try {
-          pf = JSON.parse(fs.readFileSync(PORTFOLIO_BAK_FILE, 'utf8'));
+          pf = JSON.parse(fs.readFileSync(bakFile, 'utf8'));
           console.error('  [Simfolio] 已从备份恢复投资组合');
         } catch (e2) {
           console.error('  [Simfolio] 备份也损坏，创建新投资组合');
@@ -77,20 +81,22 @@ function loadPortfolio() {
 function savePortfolio(pf) {
   ensureDir();
   pf.meta.lastUpdated = new Date().toISOString();
-  // Backup old file first
-  const json = JSON.stringify(pf, null, 2);
-  if (fs.existsSync(PORTFOLIO_FILE)) {
-    try { fs.copyFileSync(PORTFOLIO_FILE, PORTFOLIO_BAK_FILE); } catch (e) { /* ignore */ }
+  var pfFile = _portfolioFile();
+  var bakFile = _portfolioBakFile();
+  var json = JSON.stringify(pf, null, 2);
+  if (fs.existsSync(pfFile)) {
+    try { fs.copyFileSync(pfFile, bakFile); } catch (e) { /* ignore */ }
   }
-  fs.writeFileSync(PORTFOLIO_FILE, json, 'utf8');
+  fs.writeFileSync(pfFile, json, 'utf8');
 }
 
 // ---- Stop-Loss Cooldown (v3.3.0) ----
 
 function loadStopLossCooldowns() {
   try {
-    if (fs.existsSync(STOP_LOSS_COOLDOWN_FILE)) {
-      return JSON.parse(fs.readFileSync(STOP_LOSS_COOLDOWN_FILE, 'utf8'));
+    var cf = _stopLossCooldownFile();
+    if (fs.existsSync(cf)) {
+      return JSON.parse(fs.readFileSync(cf, 'utf8'));
     }
   } catch (_) {}
   return {};
@@ -99,7 +105,7 @@ function loadStopLossCooldowns() {
 function saveStopLossCooldowns(cooldowns) {
   ensureDir();
   try {
-    fs.writeFileSync(STOP_LOSS_COOLDOWN_FILE, JSON.stringify(cooldowns, null, 2), 'utf8');
+    fs.writeFileSync(_stopLossCooldownFile(), JSON.stringify(cooldowns, null, 2), 'utf8');
   } catch (_) {}
 }
 
@@ -249,10 +255,11 @@ function getSectorExposure(pf, targetSector, excludeStockCode) {
  * Returns null if file not found, expired, or invalid.
  */
 function loadWeekendContext() {
-  // v2.9: Try unified history_context first, fall back to old weekend_context
-  if (fs.existsSync(HISTORY_CONTEXT_FILE)) {
+  var hcf = _historyContextFile();
+  var wcf = _weekendContextFile();
+  if (fs.existsSync(hcf)) {
     try {
-      const ctx = JSON.parse(fs.readFileSync(HISTORY_CONTEXT_FILE, 'utf8'));
+      var ctx = JSON.parse(fs.readFileSync(hcf, 'utf8'));
       const now = new Date().toISOString().slice(0, 10);
       if (ctx.validUntil >= now) {
         // Use deepAnalysis.insights if available, fall back to dailyInsights
@@ -261,13 +268,12 @@ function loadWeekendContext() {
       }
     } catch (_) {}
   }
-  // Fallback to old weekend_context
-  if (!fs.existsSync(WEEKEND_CONTEXT_FILE)) return null;
+  if (!fs.existsSync(wcf)) return null;
   try {
-    const ctx = JSON.parse(fs.readFileSync(WEEKEND_CONTEXT_FILE, 'utf8'));
-    const now = new Date().toISOString().slice(0, 10);
-    if (ctx.validUntil >= now && ctx.insights && ctx.insights.length > 0) {
-      return ctx;
+    var ctx2 = JSON.parse(fs.readFileSync(wcf, 'utf8'));
+    var now2 = new Date().toISOString().slice(0, 10);
+    if (ctx2.validUntil >= now2 && ctx2.insights && ctx2.insights.length > 0) {
+      return ctx2;
     }
   } catch (_) {}
   return null;
@@ -640,7 +646,7 @@ function checkAutoPause(pf, pipelineResults) {
   // 5. API exceptions (tracked in pipeline events)
   // Simplified: check recent error events
   try {
-    var eventsFile = path.join(SIMFOLIO_DIR, 'last_pipeline_result.legacy_untrusted.json');
+    var eventsFile = path.join(_simfolioDir(), 'last_pipeline_result.legacy_untrusted.json');
     if (fs.existsSync(eventsFile)) {
       var lastResult = JSON.parse(fs.readFileSync(eventsFile, 'utf8'));
       if (lastResult && lastResult.errors && lastResult.errors.length >= (apConfig.triggers.apiExceptions || 3)) {
@@ -713,97 +719,157 @@ function getAutoPauseStatus() {
   };
 }
 
-// === Phase 2.1: Immutable Prediction Ledger — append-only, crash-safe ===
-var _ledgerScanIndex = 0;
+// === v3.4.9.3: Research Data Contract ===
+
+// v3.4.9.4: normalizeResearchFeatureSnapshot, _hashNormalizedSnapshot, computeResearchEligibility
+// are now imported from research_cohort.js (pure module, no file I/O).
+var cohort = require('./research_cohort');
+var normalizeResearchFeatureSnapshot = cohort.normalizeResearchFeatureSnapshot;
+var _hashNormalizedSnapshot = cohort._hashNormalizedSnapshot;
+function computeResearchEligibility(candidate, snapshot, entry) {
+  // v3.4.9.4: Delegates to pure research_cohort function.
+  // Maintains backward compat by mutating entry in-place.
+  var result = cohort.computeResearchEligibility(snapshot, entry);
+  entry.researchEligible = result.eligible;
+  entry.researchEligibilityReasons = result.reasons;
+  return result.eligible;
+}
+
+// === v3.4.9.3: Data path resolution — respects config._testDataRoot for test isolation ===
+function _resolveDataPath(subPath) {
+  try {
+    var testRoot = require('./config')._testDataRoot;
+    if (testRoot) return require('path').join(testRoot, subPath || '');
+  } catch (_) {}
+  return require('path').join(__dirname, '..', 'report-engine', 'data', subPath || '');
+}
+
+// === v3.4.9.4: Canonical Window Detection ===
+function _isDesignatedCanonicalWindow(scanType, now) {
+  if (scanType !== 'full') return false;
+  var dt = now || new Date();
+  var h = dt.getHours();
+  var m = dt.getMinutes();
+  // Only the 09:30–10:00 window is the designated canonical cohort
+  return h === 9 && m >= 30 && m < 60;
+}
+
+// === v3.4.9.4: Immutable Prediction Ledger — delegates to prediction_ledger.js ===
 function _appendPredictionLedger(candidates, context, scanType) {
   try {
-    var _plFs = require('fs');
-    var _plPath = require('path');
-    var _plToday = (context && context.today) || new Date().toISOString().slice(0, 10);
-    var _plDir = _plPath.join(__dirname, '..', 'report-engine', 'data', 'simfolio');
-    if (!_plFs.existsSync(_plDir)) _plFs.mkdirSync(_plDir, { recursive: true });
-    var _plFile = _plPath.join(_plDir, 'prediction_ledger_' + _plToday + '.jsonl');
-    var _plScanIdx = _ledgerScanIndex++;
-    var _plBaseId = _plToday + '_' + (scanType || 'S') + '_' + String(_plScanIdx).padStart(3, '0');
-    var _plBuildCommit = null;
-    try { _plBuildCommit = require('./config').buildCommit; } catch (_) {}
+    var pl = require('./prediction_ledger');
+    var today = (context && context.today) || new Date().toISOString().slice(0, 10);
+    var runId = (context && context.runId) || today + '_' + (scanType || 'S') + '_' + Date.now().toString(36);
 
-    // v3.4.6: Compute targetDate using trading calendar (T+3 trading days)
-    var _plTargetDate = null;
-    var _plHorizonTradingDays = 3;
+    // Compute candidate set hash for input drift detection
+    var candidateSetHash = cohort.hashCandidateSet(candidates);
+
+    // v3.4.9.4: Get modelVersionId from model_registry baseline (not config.version)
+    var modelVersionId = null;
+    var parameterSetHash = null;
     try {
-      var _plBtDays = require('./evolution/bootstrap_history').generateTradingDays(
-        parseInt(_plToday.slice(0, 4), 10),
-        parseInt(_plToday.slice(0, 4), 10) + 1
-      );
-      if (_plBtDays) {
-        var _plTodayIdx = _plBtDays.indexOf(_plToday);
-        if (_plTodayIdx >= 0 && _plTodayIdx + _plHorizonTradingDays < _plBtDays.length) {
-          _plTargetDate = _plBtDays[_plTodayIdx + _plHorizonTradingDays];
+      var bp = require('./evolution/model_registry').getBaselineParams();
+      if (bp && bp.versionId) {
+        modelVersionId = bp.versionId;
+        if (bp.params) {
+          parameterSetHash = cohort.hashCandidateSet([{ code: JSON.stringify(bp.params), compositeScore: bp.cumulativeIC || 0 }]);
         }
       }
     } catch (_) {}
+    if (!modelVersionId) modelVersionId = require('./config').version || 'unknown';
 
-    // v3.4.6: Feature snapshot hash (simple deterministic hash of factor scores)
-    function _hashFeatures(c) {
-      if (!c || !c.rawScores) return null;
-      try {
-        var keys = Object.keys(c.rawScores).sort();
-        var str = keys.map(function(k) { return k + ':' + (c.rawScores[k] || 0).toFixed(3); }).join('|');
-        var h = 0;
-        for (var i = 0; i < str.length; i++) { h = ((h << 5) - h) + str.charCodeAt(i); h |= 0; }
-        return String(h);
-      } catch (_) { return null; }
-    }
-
+    // Build entries with full v3.4.9.4 fields
+    var entries = [];
     var topN = Math.min((candidates || []).length, 50);
-    for (var _pli = 0; _pli < topN; _pli++) {
-      var c = candidates[_pli];
-      var predId = _plBaseId + '_' + String(_pli).padStart(3, '0');
-      var entry = {
-        predictionId: predId,
-        scanId: _plScanIdx,
-        asOf: _plToday,
-        timestamp: new Date().toISOString(),
+    for (var i = 0; i < topN; i++) {
+      var entry = pl.buildLedgerEntry(candidates[i], runId, {
+        today: today,
         scanType: scanType || 'unknown',
-        horizonTradingDays: _plHorizonTradingDays,
-        targetDate: _plTargetDate,
-        modelVersion: 'v3.4.6',
-        buildCommit: _plBuildCommit,
-        code: c.code,
-        name: c.name || '',
-        price: c.price,
-        entryPrice: c.price || null,
-        featureSnapshot: _hashFeatures(c),
-        compositeScore: c.compositeScore || 0,
-        rating: c.rating || '--',
-        factorScores: c.rawScores || null,
-        hiddenSignals: (c.hiddenSignals || []).map(function(s) { return s.id || s; }),
-        signalCount: (c.hiddenSignals || []).length,
-        expectedReturn: (c.prediction && c.prediction.expectedReturn != null) ? c.prediction.expectedReturn : null,
-        confidence: (c.prediction && c.prediction.confidence != null) ? c.prediction.confidence : null,
-        horizon: 'T+3',
-        marketRegime: (context && context.macroRegime) || null,
-        dataFreshness: (context && context.indexFreshness) || 'unknown',
-        indexSH: (context && context.indexValues && context.indexValues.sh) || null,
-        benchmarkPrice: (context && context.indexValues && context.indexValues.sh) || null,
-        wasBought: (context && context.boughtCodes) ? (context.boughtCodes.indexOf(c.code) >= 0) : false,
-        eligible: (c.prediction && c.prediction.confidence >= 0.60 && c.prediction.predictedDims >= 3) ? true : false,
+        isCanonical: (context && context.isCanonical) === true,
+        macroRegime: (context && context.macroRegime) || null,
+        indexFreshness: (context && context.indexFreshness) || 'unknown',
+        indexValues: (context && context.indexValues) || null,
         dataQualityPenalty: (context && context.dataQualityPenalty) || 0,
-        contribDims: (c.prediction && c.prediction.breakdown)
-          ? Object.values(c.prediction.breakdown).filter(function(b) { return b && b.available; }).length
-          : 0,
-        contextNote: (context && context.note) || null,
-      };
-      _plFs.appendFileSync(_plFile, JSON.stringify(entry) + '\n', 'utf8');
+        note: (context && context.note) || null,
+        kernelVerdict: (context && context.kernelVerdict) || 'BLOCK',
+        meetsEvidenceThreshold: (context && context.meetsEvidenceThreshold) !== false,
+        buildCommit: (context && context.buildCommit) || null,
+        modelVersionId: modelVersionId,
+        parameterSetHash: parameterSetHash,
+        quoteSource: (context && context.quoteSource) || 'unknown',
+        quoteAsOf: (context && context.quoteAsOf) || null,
+      });
+      entries.push(entry);
     }
-  } catch (_) { /* Ledger write is advisory; never crash the main flow */ }
+
+    // Write via prediction_ledger.js (handles idempotency + input drift)
+    var dataDir = _resolveDataPath('');
+    var result = pl.writeLedgerFile(dataDir, entries, runId, candidateSetHash, today);
+    return {
+      writtenCount: result.writtenCount,
+      duplicateCount: result.duplicateCount,
+      writeError: result.status === 'error' ? result.error : null,
+      status: result.status,
+      candidateSetHash: candidateSetHash,
+    };
+  } catch (e) {
+    console.error('[Simfolio] Ledger write failure: ' + (e && e.message || 'unknown'));
+    return { writtenCount: 0, duplicateCount: 0, writeError: (e && e.message) || 'unknown', status: 'error' };
+  }
 }
 
-function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel) {
+/**
+ * v3.4.9.3: Mark existing ledger entries from v3.4.9.2 that have hash-only featureSnapshot
+ * (a string instead of a normalized object) as ingestionStatus='invalid_schema_v3492'.
+ * These entries are retained for audit but excluded from verification/calibration/promotion.
+ * Called once at server startup.
+ */
+function _markInvalidLedgerEntries(today) {
+  try {
+    var _mFs = require('fs');
+    var _mPath = require('path');
+    var _mToday = today || new Date().toISOString().slice(0, 10);
+    var _mDir = _resolveDataPath('simfolio');
+    var _mFile = _mPath.join(_mDir, 'prediction_ledger_' + _mToday + '.jsonl');
+    if (!_mFs.existsSync(_mFile)) return { marked: 0, note: 'no ledger file for ' + _mToday };
+
+    var _mLines = _mFs.readFileSync(_mFile, 'utf8').trim().split('\n').filter(Boolean);
+    var _mModified = 0;
+    var _mNewLines = [];
+
+    for (var _mi = 0; _mi < _mLines.length; _mi++) {
+      try {
+        var _mEntry = JSON.parse(_mLines[_mi]);
+        // Old v3.4.9.2 entries: featureSnapshot is a string (hash), not an object
+        if (typeof _mEntry.featureSnapshot === 'string' && !_mEntry.ingestionStatus) {
+          _mEntry.ingestionStatus = 'invalid_schema_v3492';
+          _mEntry.researchEligible = false;
+          _mEntry.researchEligibilityReasons = ['invalid_schema_v3492_hash_not_snapshot'];
+          _mModified++;
+        }
+        _mNewLines.push(JSON.stringify(_mEntry));
+      } catch (_) {
+        _mNewLines.push(_mLines[_mi]); // preserve unparseable lines
+      }
+    }
+
+    if (_mModified > 0) {
+      _mFs.writeFileSync(_mFile, _mNewLines.join('\n') + '\n', 'utf8');
+      console.log('[Simfolio] Marked ' + _mModified + ' ledger entries as invalid_schema_v3492 (hash-only featureSnapshot)');
+    }
+    return { marked: _mModified, total: _mLines.length, note: 'entries retained for audit, excluded from verification' };
+  } catch (e) {
+    console.error('[Simfolio] _markInvalidLedgerEntries error: ' + (e && e.message || 'unknown'));
+    return { marked: 0, error: (e && e.message) || 'unknown' };
+  }
+}
+
+function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroContext, marketState, marketStateLabel, runId) {
   const decisions = [];
   const today = new Date().toISOString().slice(0, 10);
   const isFullScan = scanType === 'full';
+  // v3.4.9.2: runId from scheduler — stable across restarts within a session
+  var _runId = runId || null;
 
   // [v3.4.2] ---- Unified Decision Kernel (MUST run on ALL paths) ----
   // The kernel is the single source of truth. Even when indices are missing
@@ -820,7 +886,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     try { dqReport = require('./analysis/data_quality').computeConfidencePenalty(); } catch (_) {}
 
     try {
-      var laPath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      var laPath = path.join(_resolveDataPath('verification'), 'leakage_audit.json');
       if (require('fs').existsSync(laPath)) {
         leakageAudit = JSON.parse(require('fs').readFileSync(laPath, 'utf8'));
       }
@@ -845,6 +911,95 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     });
   } catch (_) { /* kernel unavailable — fall through to legacy gate chain */ }
 
+  // ==================== v3.4.9.4: CANONICAL COHORT + RESEARCH SNAPSHOT ====================
+  // v3.4.9.4: Only the 09:30 full scan is canonical. Other full scans and mid scans are intraday_observation.
+  var _isCanonical = scanType === 'full' && _isDesignatedCanonicalWindow(scanType, new Date());
+
+  // Dedup by code, sort by expectedReturn DESC → compositeScore DESC → code ASC, top 50
+  var _researchSnapshot = cohort.buildResearchSnapshot(pipelineResults || []);
+
+  // v3.4.9.4: Write run manifest BEFORE ledger (status=started) for canonical scans
+  var _manifestWritten = false;
+  var _canonicalRunId = _runId;
+  if (_isCanonical && _runId) {
+    try {
+      var pl = require('./prediction_ledger');
+      var _candidateHash = cohort.hashCandidateSet(_researchSnapshot);
+      var _modelVersionId = null;
+      try {
+        var _bp = require('./evolution/model_registry').getBaselineParams();
+        if (_bp && _bp.versionId) _modelVersionId = _bp.versionId;
+      } catch (_) {}
+      var _codeVer = null;
+      try { _codeVer = require('./config').version; } catch (_) {}
+      pl.writeRunManifest(_resolveDataPath(''), today, {
+        date: today,
+        canonicalRunId: _canonicalRunId,
+        designatedWindow: '09:30',
+        status: 'started',
+        candidateSetHash: _candidateHash,
+        expectedCount: Math.min(_researchSnapshot.length, 50),
+        writtenCount: 0,
+        dedupedCount: 0,
+        failedCount: 0,
+        completedAt: null,
+        predictionIds: [],
+        codeVersion: _codeVer,
+        modelVersionId: _modelVersionId,
+        buildCommit: require('./config').buildCommit || null,
+      });
+      _manifestWritten = true;
+    } catch (_) {}
+  }
+
+  var _plCaptureResult = _appendPredictionLedger(_researchSnapshot, {
+    runId: _runId,
+    today: today,
+    scanType: scanType,
+    isCanonical: _isCanonical,
+    note: null,
+    macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null,
+    dataQualityPenalty: dqReport ? dqReport.penalty : 0,
+    boughtCodes: [],
+    indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown',
+    indexValues: { sh: (indices && indices[0]) ? indices[0].price : null },
+    kernelVerdict: kernelDecision ? kernelDecision.finalVerdict : null,
+    primaryBlocker: kernelDecision ? kernelDecision.primaryBlocker : null,
+    gateStates: kernelDecision ? kernelDecision.gateStates : null,
+    meetsEvidenceThreshold: true,
+    quoteSource: 'unknown',
+    quoteAsOf: null,
+  }, scanType);
+
+  // v3.4.9.4: Update run manifest to completed AFTER ledger write (canonical scans only)
+  if (_manifestWritten && _plCaptureResult.status !== 'error' &&
+      _plCaptureResult.status !== 'input_drift') {
+    try {
+      var pl2 = require('./prediction_ledger');
+      var _completedManifest = pl2.readRunManifest(_resolveDataPath(''), today);
+      if (_completedManifest && _completedManifest.status === 'started') {
+        _completedManifest.status = 'completed';
+        _completedManifest.completedAt = new Date().toISOString();
+        _completedManifest.writtenCount = _plCaptureResult.writtenCount || 0;
+        _completedManifest.dedupedCount = _plCaptureResult.duplicateCount || 0;
+        _completedManifest.candidateSetHash = _plCaptureResult.candidateSetHash || _completedManifest.candidateSetHash;
+        _completedManifest.predictionIds = [];
+        for (var sni = 0; sni < _researchSnapshot.length; sni++) {
+          var s = _researchSnapshot[sni];
+          if (s && s.code) _completedManifest.predictionIds.push(_canonicalRunId + '_' + s.code + '_T+3');
+        }
+        pl2.writeRunManifest(_resolveDataPath(''), today, _completedManifest);
+      }
+    } catch (_) {}
+  }
+
+  // v3.4.9.2: Augment every return path with the research capture result
+  function _augmentReturn(retObj) {
+    retObj._plCaptureResult = _plCaptureResult;
+    retObj._isCanonical = _isCanonical;
+    return retObj;
+  }
+
   // Guard: if no index data available, return early WITH kernel decision
   // This ensures all consumers see consistent kernelDecision/gateStates
   // even during non-trading hours, weekends, or when API is down.
@@ -859,7 +1014,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       if (nla.status === 'block') { noIdxLaBlock = true; noIdxLaReasons.push(nla.description); }
       else if (nla.status === 'cautious') { noIdxLaReduce = true; noIdxLaReasons.push(nla.description); }
     }
-    return {
+    return _augmentReturn({
       decisions: [],
       executed: [],
       snapshot: getSnapshot(pf),
@@ -883,7 +1038,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: '无指数行情数据（非交易时段或API不可达）',
-    };
+    });
   }
 
   // --- Helper: map kernel gateStates back to buildGateResults()-style return ---
@@ -961,7 +1116,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
-    return {
+    return _augmentReturn({
       decisions: kSellDecisions,
       executed: kExecutedTrades,
       snapshot: getSnapshot(pf),
@@ -990,7 +1145,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: 'Kernel ' + kernelDecision.finalVerdict + ': ' + (kernelDecision.displayReasons || []).join('; '),
-    };
+    });
   }
 
   // ---- Step 3: Drawdown gate ----
@@ -1013,7 +1168,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     recordDailyNAV(pf, today);
     savePortfolio(pf);
     var ddReason = kernelDdBlock ? kernelDecision.gateStates.drawdown.description : (pf._drawdownLevel && pf._drawdownLevel.message);
-    return {
+    return _augmentReturn({
       decisions: sellDecisions,
       executed: executedTrades,
       snapshot: getSnapshot(pf),
@@ -1030,7 +1185,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: '回撤熔断: ' + (ddReason || 'drawdown halt'),
-    };
+    });
   }
 
   // ---- Step 3a: Market direction gate ----
@@ -1059,7 +1214,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
     // Log the gate event
     const pf2 = loadPortfolio(); // re-read to get updated state
-    return {
+    return _augmentReturn({
       decisions: sellDecisions,
       executed: executedTrades,
       snapshot: getSnapshot(pf),
@@ -1076,7 +1231,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: '上证跌幅超过-0.5%',
-    };
+    });
   }
 
   // ---- Step 3.5a: Cross-market risk CIRCUIT BREAKER ----
@@ -1100,7 +1255,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       }
       recordDailyNAV(pf, today);
       savePortfolio(pf);
-      return {
+      return _augmentReturn({
         decisions: sellDecisions,
         executed: executedTrades,
         snapshot: getSnapshot(pf),
@@ -1118,7 +1273,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
         effectiveMaxBuys: 0,
         buyThreshold: null,
         skipReason: kernelCbBlock ? '跨市场熔断(kernel)' : '跨市场风险熔断: ' + regime,
-      };
+      });
     }
 
   // ---- Step 3.5b: Think-Tank defensive gate ----
@@ -1142,9 +1297,9 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
-    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'thinktank_defensive', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
+    // v3.4.9.3: research snapshot already captured at top — no duplicate ledger write here
 
-    return {
+    return _augmentReturn({
       decisions: sellDecisions,
       executed: executedTrades,
       snapshot: getSnapshot(pf),
@@ -1161,7 +1316,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: 'Think-Tank 防守: ' + thinkTankGate.reason,
-    };
+    });
   }
 
   // ---- Step 3.5c: Leakage Audit Gate (v3.3.2, enhanced v3.4.0) ----
@@ -1193,7 +1348,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   } else {
     // Legacy: direct file read
     try {
-      var leakagePath = require('path').join(__dirname, '..', 'report-engine', 'data', 'verification', 'leakage_audit.json');
+      var leakagePath = path.join(_resolveDataPath('verification'), 'leakage_audit.json');
       var leakageAuditFile = null;
       if (require('fs').existsSync(leakagePath)) {
         leakageAuditFile = JSON.parse(require('fs').readFileSync(leakagePath, 'utf8'));
@@ -1232,9 +1387,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
-    // Phase 2.1: Log predictions even during BLOCK — learn from what would have been predicted
-    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'leakage_audit_block', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
-    return {
+    // v3.4.9.3: research snapshot already captured at top — no duplicate ledger write here
+    return _augmentReturn({
       decisions: laSellDecisions,
       executed: laExecutedTrades,
       snapshot: getSnapshot(pf),
@@ -1252,7 +1406,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: 'Leakage Audit BLOCK: ' + laVerdict,
-    };
+    });
   }
 
   // ---- Step 3.5d: Strategy Health Gate (v3.3.0, enhanced v3.4.0) ----
@@ -1292,8 +1446,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
-    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'strategy_health_block', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
-    return {
+    // v3.4.9.3: research snapshot already captured at top — no duplicate ledger write here
+    return _augmentReturn({
       decisions: shSellDecisions,
       executed: shExecutedTrades,
       snapshot: getSnapshot(pf),
@@ -1313,7 +1467,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: 'Strategy Health BLOCK: ' + (strategyHealthReasons.join(', ') || '策略健康异常'),
-    };
+    });
   }
 
   if (strategyHealthVerdict === 'REDUCE') {
@@ -1332,8 +1486,8 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
     recordDailyNAV(pf, today);
     savePortfolio(pf);
-    _appendPredictionLedger(pipelineResults, { today: today, scanType: scanType, note: 'strategy_health_reduce', macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0 }, scanType);
-    return {
+    // v3.4.9.3: research snapshot already captured at top — no duplicate ledger write here
+    return _augmentReturn({
       decisions: srSellDecisions,
       executed: srExecutedTrades,
       snapshot: getSnapshot(pf),
@@ -1353,7 +1507,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       effectiveMaxBuys: 0,
       buyThreshold: null,
       skipReason: 'Strategy Health REDUCE: ' + (strategyHealthReasons.join(', ') || '仅卖出模式'),
-    };
+    });
   }
 
   // ---- Step 4: Apply macro risk penalty + risk-regime sizing multiplier ----
@@ -1615,20 +1769,21 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       const raisedMinScore = dtConfig.raisedMinScore || 60;
       const checkWindow = dtConfig.checkWindow || 2;
       try {
-        const simfolioDir = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio');
-        const lastResultPath = path.join(simfolioDir, 'last_pipeline_result.legacy_untrusted.json');
+        var simfolioDir2 = _simfolioDir();
+        var lastResultPath = path.join(simfolioDir2, 'last_pipeline_result.legacy_untrusted.json');
+        var lastResult = null;
         if (fs.existsSync(lastResultPath)) {
-          const lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
+          lastResult = JSON.parse(fs.readFileSync(lastResultPath, 'utf8'));
           if (lastResult.maxScore != null && lastResult.maxScore < weakTopScore) {
             effectiveMinAbsolute = Math.max(minAbsolute, raisedMinScore);
             effectiveMinStrong = Math.max(minStrongScore, raisedMinScore + 5);
           }
         }
-        const todayDate = new Date().toISOString().slice(0, 10);
-        let lowScoreDays = (lastResult && lastResult.maxScore != null && lastResult.maxScore < weakTopScore) ? 1 : 0;
-        for (let d = 1; d <= checkWindow; d++) {
-          const pastDate = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
-          const pastPath = path.join(config.REPORT_ENGINE_DIR, 'data', 'simfolio', 'scan_records_' + pastDate + '.json');
+        var todayDate = new Date().toISOString().slice(0, 10);
+        var lowScoreDays = (lastResult && lastResult.maxScore != null && lastResult.maxScore < weakTopScore) ? 1 : 0;
+        for (var d = 1; d <= checkWindow; d++) {
+          var pastDate = new Date(Date.now() - d * 86400000).toISOString().slice(0, 10);
+          var pastPath = path.join(simfolioDir2, 'scan_records_' + pastDate + '.json');
           if (fs.existsSync(pastPath)) {
             try {
               const pastRec = JSON.parse(fs.readFileSync(pastPath, 'utf8'));
@@ -1801,6 +1956,48 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
 
   savePortfolio(pf);
 
+  // v3.4.9.4: Write immutable decision events AFTER trading completes
+  // wasBought is NOT overwritten in prediction entries — it lives in separate decision_events
+  try {
+    var boughtCodesSet = {};
+    for (var bi = 0; bi < executedTrades.length; bi++) {
+      var bt = executedTrades[bi];
+      if (bt.action === 'buy' && bt.code) boughtCodesSet[bt.code] = bt;
+    }
+    var dePl = require('./prediction_ledger');
+    for (var si = 0; si < _researchSnapshot.length; si++) {
+      var sc = _researchSnapshot[si];
+      if (!sc || !sc.code) continue;
+      var predId = _runId + '_' + sc.code + '_T+3';
+      var boughtTrade = boughtCodesSet[sc.code];
+      dePl.writeDecisionEvent(_resolveDataPath(''), today, {
+        predictionId: predId,
+        eventType: boughtTrade ? 'execution' : 'skip',
+        wasBought: !!boughtTrade,
+        executionPrice: boughtTrade ? (boughtTrade.price || null) : null,
+        shares: boughtTrade ? (boughtTrade.shares || null) : null,
+        skipReason: boughtTrade ? null : (portfolioInLoss ? 'portfolio_in_loss' : 'not_selected'),
+      });
+    }
+
+    // Also write decision events for sold positions
+    for (var sei = 0; sei < executedTrades.length; sei++) {
+      var st = executedTrades[sei];
+      if (st.action === 'sell' && st.code) {
+        dePl.writeDecisionEvent(_resolveDataPath(''), today, {
+          predictionId: _runId + '_' + st.code + '_T+3',
+          eventType: 'sale',
+          wasBought: false,
+          executionPrice: st.price || null,
+          shares: st.shares || null,
+          skipReason: 'sold:' + (st.reason || 'unknown'),
+        });
+      }
+    }
+  } catch (deErr) {
+    console.error('[Simfolio] Decision event write error: ' + (deErr && deErr.message || 'unknown'));
+  }
+
   // Collect near-misses: stocks that were analyzed but not bought, with reason
   const nearMisses = [];
   for (const candidate of buyCandidates) {
@@ -1853,11 +2050,11 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     }
   } catch (_) { /* model_registry logging is advisory */ }
 
-  // Phase 2.1: Log predictions for the normal path — uses Top 50 BEFORE screening, cross-references boughtCodes
+  // v3.4.9.3: research snapshot already captured at top — no duplicate ledger write here
+  // boughtCodes are captured in the top snapshot for auditing purposes
   var _plBoughtCodes = executedTrades.filter(function(t) { return t.action === 'buy'; }).map(function(t) { return t.code; });
-  _appendPredictionLedger(rankedTop50, { today: today, scanType: scanType, note: null, macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null, dataQualityPenalty: dqReport ? dqReport.penalty : 0, boughtCodes: _plBoughtCodes, indexFreshness: (indices && indices[0] && indices[0].freshnessStatus) || 'unknown', indexValues: { sh: (indices && indices[0]) ? indices[0].price : null } }, scanType);
 
-  return {
+  return _augmentReturn({
     decisions: decisions,
     executed: executedTrades,
     snapshot: getSnapshot(pf),
@@ -1882,7 +2079,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       (availableSlots <= 0 ? '仓位已满无可用槽位' :
       (effectiveMaxBuys <= 0 ? '自动暂停或风控限购为0' :
       (buyCandidates.length === 0 ? '无合格候选股达标' : null))),
-  };
+  });
 }
 
 // ---- Sell Signal Detection ----
@@ -2674,4 +2871,9 @@ module.exports = {
   loadWeekendContext,
   getAutoPauseStatus,
   loadStopLossCooldowns,
+  // v3.4.9.3: Mark legacy ledger entries with hash-only featureSnapshot
+  _markInvalidLedgerEntries,
+  // v3.4.9.4: Test isolation — exposes data path resolver for test infrastructure
+  _resolveDataPath,
+  _isDesignatedCanonicalWindow,
 };

@@ -1,8 +1,39 @@
-# Francis Investment · A股量化交易系统 v3.4.6
+# Francis Investment · A股量化交易系统 v3.4.9.1
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
 
-v3.4.6: **Trustworthy Verifiable Trader (Pass 2)** — 24 files changed, ~500 lines net.
+v3.4.9.1: **真实生产闭环P0修复** — 6 files changed.
+- **P0.1 统一研究快照**: buildResearchSnapshot()纯函数(Top-50按E[R]排序)在所有闸门之前调用, captureResearchSnapshot()每runId仅写一次, 删除了5处散落的_appendPredictionLedger调用(修复rankedTop50作用域bug→无账本落盘)
+- **P0.2 每日唯一观测**: full scan→canonical=true, mid scan→canonical=false, _countIndependentTradingDays仅统计canonical日, mid scan不混入Kendall tau/升级证据
+- **P0.3 Outcome身份修复**: verifyOneScan按predictionId匹配(非code), 缺kline数据写unavailable outcome(非静默continue), exitPrice从真实日线收盘价取(非公式反推), researchEligible需featureSnapshot+predictionId
+- **P0.4 CI/统计真实口径**: _aggregateRankIC在independentDays<20时强制null, T+3 pending统计researchEligible(非executionEligible), verification_summary.json CI下界/上界为null时正确输出
+- **P0.5 UI口径**: 午休/盘后quoteAge显示not_applicable, 非交易时段不显示行情过期BLOCK
+
+v3.4.9: **可持续预测数据闭环** — 12 files changed.
+- **A 预测账本**: 稳定runId (sessionId+scanType+counter), modelVersion从config读取(非硬编码'v3.4.7'), 5条执行路径各写一次幂等不重复
+- **B 3-tier资格**: researchEligible(可研究/校准), executionEligible(可模拟买入), promotionEligible(可晋升); evidence_fail保留为researchEligible校准分层样本
+- **C T+3结算重写**: verification_runner为outcome_ledger唯一写入者, outcome含entryPrice/exitPrice/benchmarkEntry/benchmarkExit/actualReturn_3d/benchmarkReturn/postCostNetExcess/所有成本, 缺数据标记unavailable不补0不跳过
+- **D 统计指标**: Kendall tau-b替代naive Spearman (tie-aware), baseline对比(naive score/compositeScore≥60/equal-weight Top-N)必须模型τ>基线τ才"预测有效", <20日CI=null, outcome_ledger只读净超额收益
+- **E 锁模型升级**: allowAutoPromotion=false, Shadow需≥1000 researchEligible样本+≥60独立交易日+τ CI下界>0+成本后收益>0+校准通过, 删除累计IC fallback, 禁止auto-demote, 生成review proposal JSON
+- **F 行情独立服务**: market_quote_service.js每30s刷新4核心指数(Eastmoney→Tencent→Sina级联), 写market_quote_latest.json含quoteAge/sourceChain/fallbackSource/failureReason
+- **G UI**: 预测结算面板显示runId+researchEligible+executionEligible+独立交易日, 空状态"预测采集尚未开始", 区分"行情过期"vs"核心指数不足"vs"市场风险"
+
+v3.4.8: **Evidence + Visibility** — 7 files changed, ~200 lines net.
+- **证据链A1**: model_registry 启动时 champion→baseline 迁移, 保留版本+参数+IC+评估天数+历史记录
+- **证据链A2**: _aggregateRankIC bootstrap 改为 xorshift 伪随机数发生器, 每个replicate独立有放回抽样, <20天ci=null
+- **证据链A3**: cockpit verification 统一读 overall.rankIC{mean/ci_lower/ci_upper/independentDays}+postCostNetExcessReturn
+- **证据链A4**: 4项单元测试: champion迁移/bootstrap方差/<20天null CI/postCostNetExcess数值
+- **可监督B1**: Cockpit Permissions 面板新增 Market Validation 行 (validCoreCount/sourceChain/lastQuote/reason)
+- **可监督B2**: 新增"预测结算"面板: Top50/eligible/evaluationEligible/exclusionReason分布/T+3待结算/今日已结算
+- **可监督B3**: Verification 面板: 独立交易日/20进度、Rank IC+CI、净超额收益; <20天显示"积累中不构成预测证据"
+- **可监督B4**: Think-Tank Loop2 (北向权重): 数据不可用时显示degraded(非active/off), 基于真实nb.available
+
+v3.4.7: **统计完整性修复 (P1.5)** — 5 files changed, ~150 lines net.
+- **P0 严格结算**: targetDate精确匹配(非>), outcome写入前predictionId去重, prediction_ledger永久保留不可改写
+- **P0 基准收益修复**: benchmarkReturn用目标日指数真实close(非股票价格), _getIndexCloseForDate三级回退(index_history→snapshot→null), benchmarkUnavailable/null时netExcessReturn=null
+- **P1 统一验证统计**: verification_summary新增overall{rankIC{mean/ci_lower/ci_upper/independentDays/samples}, postCostNetExcessReturn}, dailyRankIC持久化到daily_rank_ic.json, block bootstrap跨日重抽样
+- **P1 账本资格**: eligible调用真实meetsEvidenceThreshold(非废弃predictedDims), 新增marketDataValid/evaluationEligible/exclusionReason字段, <20日强制null CI
+- **Bug修复**: _computeBootstrapCI死循环(j++→k++), expected_return.js DATA_DIR双重simfolio路径, getEffectiveWeights重复证据检查(移至tier)
 - **P0 行情fail-closed**: 统一 validIndexQuote/validateIndices, 4消费者同源校验, 无效行情不覆写快照, API输出 validCoreCount/invalidIndices/sourceChain
 - **P0 预测验证净化**: prediction_ledger 补全8字段 (scanId/asOf/targetDate/modelVersion/featureSnapshot/entryPrice/benchmarkPrice/eligible), Top50在买入筛选前记录, 交易日历结算, last_pipeline_result→legacy_untrusted, benchmarkPrice无效时跳过超额收益(不产生Infinity)
 - **P1 Rank IC重做**: prediction_ledger源(非scan_records.top5), block bootstrap按交易日(非同日逐股重抽样), ≥20交易日门槛, CI下界>0才"预测有效", HS300/行业基准+扣除成本净收益

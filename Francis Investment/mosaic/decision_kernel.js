@@ -223,7 +223,8 @@ function computeDecision(context) {
       res.marketClosed = true;
       activeBlocks.push({ gate: 'marketSession', status: 'block', label: '非交易时段', detail: gs.marketSession.description });
     }
-    if (gs.marketData && gs.marketData.status === 'block') activeBlocks.push({ gate: 'marketData', status: 'block', label: '行情数据缺失', detail: gs.marketData.description });
+    // v3.4.9.2: When marketSession blocks (non-trading), skip marketData in allActiveBlockers
+    if (gs.marketData && gs.marketData.status === 'block' && !res.marketClosed) activeBlocks.push({ gate: 'marketData', status: 'block', label: '行情数据缺失', detail: gs.marketData.description });
     if (res.hardBlockers.length > 0) {
       res.primaryBlocker = res.hardBlockers[0].gate;
     }
@@ -287,17 +288,43 @@ function computeDecision(context) {
   });
   var noMarketData = ixValidation.validCoreCount < 2;
 
-  if (noMarketData) {
+  // v3.4.9: Check quote staleness from independent market_quote_service.
+  // Separate from validCoreCount — quotes may be fresh but from only 1 source,
+  // or all 3 core indices valid but quotes are 10 minutes old.
+  var quoteStale = false;
+  var quoteAgeSeconds = null;
+  if (isTradingSession) {
+    try {
+      var mqs = require('./market_quote_service');
+      quoteAgeSeconds = mqs.getQuoteAge();
+      quoteStale = quoteAgeSeconds > 300; // 5 minutes stale → BLOCK
+    } catch (_) {}
+  }
+
+  if (noMarketData || quoteStale) {
     if (isTradingSession) {
       // Trading session with insufficient index data = data feed failure, not normal
       result.canBuy = false;
       result.finalVerdict = 'BLOCK';
       result.finalVerdictLabel = '无行情数据/禁止开仓';
-      var invalidDesc = ixValidation.invalidIndices.map(function(inv) { return inv.code + '(' + inv.reason + ')'; }).join(', ');
+      // v3.4.9: Distinguish stale quotes vs insufficient core count
+      var marketDataReasonDetail;
+      if (quoteStale && noMarketData) {
+        marketDataReasonDetail = '行情过期(' + quoteAgeSeconds + '秒)且核心指数不足(' + ixValidation.validCoreCount + '/3)';
+      } else if (quoteStale) {
+        marketDataReasonDetail = '行情过期(' + quoteAgeSeconds + '秒) — 最后有效报价超过5分钟';
+      } else {
+        var invalidDesc = ixValidation.invalidIndices.map(function(inv) { return inv.code + '(' + inv.reason + ')'; }).join(', ');
+        marketDataReasonDetail = '核心指数不足(' + ixValidation.validCoreCount + '/3)，无效: ' + (invalidDesc || '无');
+      }
       result.hardBlockers.push({
         gate: 'marketData',
-        reason: '交易时段指数行情数据不满足最低要求（有效核心指数' + ixValidation.validCoreCount + '/3，至少需2个），无效指数: ' + (invalidDesc || '无') + '。数据源链: ' + ixValidation.sourceChain + '。禁止开仓。',
+        reason: marketDataReasonDetail + '。数据源链: ' + ixValidation.sourceChain + '。禁止开仓。',
         severity: 'block',
+        // v3.4.9: Extra diagnostics for UI distinction
+        quoteStale: quoteStale,
+        quoteAgeSeconds: quoteAgeSeconds,
+        coreCountInsufficient: noMarketData,
       });
       result._ixValidation = ixValidation;
       return finalize(result);
@@ -631,11 +658,28 @@ function _buildAllGateStates(ctx, decision) {
 
   // --- Market data ---
   // v3.4.6: Use unified validation for fail-closed semantics
+  // v3.4.9: Add quoteAge from market_quote_service for staleness detection
+  // v3.4.9.2: When marketSession blocks (non-trading), marketData is not_applicable, not a blocker
   var _ixv = ixValidation || validateIndices(indices);
-  var mdStatus = (_ixv.validCoreCount < 2) ? 'block' : 'pass';
-  var mdDescription = mdStatus === 'block'
-    ? '指数行情验证失败 — 有效核心指数' + _ixv.validCoreCount + '/3（需≥2），源链: ' + _ixv.sourceChain + '。无效: ' + _ixv.invalidIndices.map(function(inv) { return inv.code; }).join(',')
-    : '指数数据正常（' + _ixv.valid.length + '只有效，核心' + _ixv.validCoreCount + '/3，源链: ' + _ixv.sourceChain + '）';
+  var _qsAge = null;
+  var _qsStale = false;
+  var mdStatus, mdDescription;
+  if (msStatus === 'block') {
+    // Non-trading session: marketData status is not_applicable
+    mdStatus = 'not_applicable';
+    _qsAge = null;
+    _qsStale = false;
+    mdDescription = '非交易时段，行情数据不适用';
+  } else {
+    try { _qsAge = require('./market_quote_service').getQuoteAge(); } catch (_) {}
+    _qsStale = _qsAge != null && _qsAge > 300;
+    mdStatus = (_ixv.validCoreCount < 2 || _qsStale) ? 'block' : 'pass';
+    mdDescription = mdStatus === 'block'
+      ? (_qsStale
+          ? '行情过期(' + _qsAge + '秒) — 最后有效报价超过5分钟，源链: ' + _ixv.sourceChain
+          : '指数行情验证失败 — 有效核心指数' + _ixv.validCoreCount + '/3（需≥2），源链: ' + _ixv.sourceChain + '。无效: ' + _ixv.invalidIndices.map(function(inv) { return inv.code; }).join(','))
+      : '指数数据正常（' + _ixv.valid.length + '只有效，核心' + _ixv.validCoreCount + '/3，源链: ' + _ixv.sourceChain + '）';
+  }
 
   return {
     marketSession: {
@@ -650,6 +694,8 @@ function _buildAllGateStates(ctx, decision) {
       invalidIndices: _ixv.invalidIndices.map(function(inv) { return { code: inv.code, reason: inv.reason }; }),
       lastValidQuoteAt: _ixv.lastValidQuoteAt,
       sourceChain: _ixv.sourceChain,
+      quoteAge: _qsAge,
+      quoteStale: _qsStale,
       description: mdDescription,
     },
     drawdown: {
@@ -798,6 +844,19 @@ function loadLatestIndices() {
       { file: 'sz399006.json', code: '399006', name: '创业板指', recorderKey: 'cy' },
     ];
 
+    // === Tier 0: market_quote_service (v3.4.9 — lightweight, independent refresh) ===
+    var quoteServiceData = null;
+    var quoteServiceAgeMin = Infinity;
+    try {
+      var quoteFile = path.join(snapDir, '..', 'market_quote_latest.json');
+      if (fs.existsSync(quoteFile)) {
+        quoteServiceData = JSON.parse(fs.readFileSync(quoteFile, 'utf8'));
+        if (quoteServiceData && quoteServiceData.lastValidQuoteAt) {
+          quoteServiceAgeMin = (now - new Date(quoteServiceData.lastValidQuoteAt)) / 60000;
+        }
+      }
+    } catch (_) {}
+
     // === Tier 1: market_snapshot_latest.json (pipeline writes this, most complete) ===
     var snapshotData = null;
     if (fs.existsSync(snapshotFile)) {
@@ -827,6 +886,31 @@ function loadLatestIndices() {
 
     for (var i = 0; i < defs.length; i++) {
       var idxDef = defs[i];
+
+      // Tier 0: market_quote_service (freshest — refreshed every 30s during trading)
+      if (quoteServiceData && quoteServiceData.quotes && quoteServiceAgeMin < 5) {
+        var qsIdx = quoteServiceData.quotes.find(function(ix) {
+          return ix.code === idxDef.code && !ix.unavailable;
+        });
+        if (qsIdx && qsIdx.price > 0 && qsIdx.prevClose != null && qsIdx.prevClose > 0) {
+          results.push({
+            code: idxDef.code,
+            name: idxDef.name,
+            price: qsIdx.price,
+            changePercent: qsIdx.changePercent != null ? qsIdx.changePercent : null,
+            prevClose: qsIdx.prevClose != null ? qsIdx.prevClose : null,
+            high: qsIdx.high != null ? qsIdx.high : null,
+            low: qsIdx.low != null ? qsIdx.low : null,
+            open: qsIdx.open != null ? qsIdx.open : null,
+            date: quoteServiceData.lastValidQuoteAt ? quoteServiceData.lastValidQuoteAt.slice(0, 10) : today,
+            source: 'quote_service_' + (qsIdx.source || 'unknown'),
+            fetchAt: qsIdx.fetchAt || quoteServiceData.lastValidQuoteAt || null,
+            quoteDate: quoteServiceData.lastValidQuoteAt ? quoteServiceData.lastValidQuoteAt.slice(0, 10) : today,
+            freshnessStatus: quoteServiceAgeMin < 2 ? 'live' : 'quote_cached',
+          });
+          continue;
+        }
+      }
 
       // Tier 1: pipeline snapshot (has changePercent, prevClose, etc.)
       if (snapshotData && snapshotData.indices) {

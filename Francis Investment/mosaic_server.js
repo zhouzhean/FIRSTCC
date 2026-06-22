@@ -752,6 +752,8 @@ function buildCockpitData() {
     timestamp: new Date().toISOString(),
     // System info
     systemVersion: (require('./mosaic/config').version || 'v3.4.5'),
+    buildCommit: (require('./mosaic/config').buildCommit || null),
+    buildTimestamp: (require('./mosaic/config').buildTimestamp || null),
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -977,7 +979,7 @@ function buildCockpitData() {
       leakageAuditChecks: gs.leakageAudit.totalChecks || 0,
       hasPositions: pf.positions && pf.positions.length > 0,
       positionCount: pf.positions ? pf.positions.length : 0,
-      // v3.4.6: Market data validation diagnostics
+      // v3.4.6: Market data validation diagnostics (v3.4.9.1: add quoteAge/quoteStale/marketState)
       marketValidation: gs.marketData ? {
         status: gs.marketData.status,
         indexCount: gs.marketData.indexCount || 0,
@@ -986,7 +988,11 @@ function buildCockpitData() {
         lastValidQuoteAt: gs.marketData.lastValidQuoteAt || null,
         sourceChain: gs.marketData.sourceChain || 'unknown',
         description: gs.marketData.description || '',
+        quoteAge: gs.marketData.quoteAge,
+        quoteStale: gs.marketData.quoteStale,
       } : null,
+      // v3.4.9.1: Market state for UI to distinguish trading vs non-trading quoteAge display
+      marketState: marketState,
     };
 
     // displayReasons already built by kernel finalize() — set as primary reasons
@@ -1020,7 +1026,19 @@ function buildCockpitData() {
       rankIC: dash.summary && dash.summary.rankIC,
       dataQuality: dash.summary && dash.summary.dataQuality,
       factors: dash.stockPredictor && dash.stockPredictor.factors || [],
+      // v3.4.8: Include canonical overall structure from verification_summary.json
+      overall: null,
     };
+    // v3.4.8: Read overall from verification_summary.json for CI/independentDays/netExcess
+    try {
+      var vsPath2 = path.join(DATA_DIR, 'verification', 'verification_summary.json');
+      if (fs.existsSync(vsPath2)) {
+        var vsData = JSON.parse(fs.readFileSync(vsPath2, 'utf8'));
+        if (vsData.overall) {
+          result.verification.overall = vsData.overall;
+        }
+      }
+    } catch (_) {}
   } catch (_) {
     result.verification = { error: 'Verification dashboard not available' };
   }
@@ -2065,6 +2083,193 @@ const server = http.createServer(async function(req, res) {
     }
   }
 
+  // === [v3.4.9]: Prediction Settlement API (3-tier eligibility) ===
+  if (pathname === '/api/prediction-settlement') {
+    try {
+      var today = new Date().toISOString().slice(0, 10);
+      var psRes = { ok: true, date: today, top50: 0, eligible: 0, evaluationEligible: 0,
+        researchEligible: 0, executionEligible: 0,
+        schemaValid: 0, predictionValid: 0, executionCandidateEligible: 0, globalBlocked: 0,
+        canonicalTop50: 0, intradayObservationCount: 0,
+        exclusionReasons: {}, t3pending: 0, settledToday: 0, settledOnTargetToday: 0,
+        hasLedger: false, hasOutcome: false, runId: null };
+
+      // Read today's prediction ledger
+      var plFile = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + today + '.jsonl');
+      if (fs.existsSync(plFile)) {
+        psRes.hasLedger = true;
+        var plines = fs.readFileSync(plFile, 'utf8').trim().split('\n').filter(Boolean);
+        psRes.top50 = plines.length;
+        // v3.4.9.3: eligibility reasons distribution
+        psRes.eligibilityReasons = {};
+        for (var pi = 0; pi < plines.length; pi++) {
+          try {
+            var pentry = JSON.parse(plines[pi]);
+            if (pentry.eligible) psRes.eligible++;
+            if (pentry.evaluationEligible) psRes.evaluationEligible++;
+            // v3.4.9.4: 6-field eligibility
+            if (pentry.schemaValid) psRes.schemaValid++;
+            if (pentry.predictionValid) psRes.predictionValid++;
+            if (pentry.researchEligible) psRes.researchEligible++;
+            if (pentry.executionCandidateEligible) psRes.executionCandidateEligible++;
+            if (!pentry.globalTradePermission) psRes.globalBlocked++;
+            if (pentry.executionEligible) psRes.executionEligible++;
+            // Capture runId from first valid entry
+            if (!psRes.runId && pentry.runId) psRes.runId = pentry.runId;
+            // v3.4.9.2: Separate canonical vs intraday observation counts
+            if (pentry.canonical === true) psRes.canonicalTop50++;
+            else psRes.intradayObservationCount++;
+            var reason = pentry.exclusionReason || 'none';
+            psRes.exclusionReasons[reason] = (psRes.exclusionReasons[reason] || 0) + 1;
+            // v3.4.9.3: Aggregate researchEligibilityReasons distribution
+            var er = pentry.researchEligibilityReasons;
+            if (Array.isArray(er)) {
+              for (var eri = 0; eri < er.length; eri++) {
+                var erk = er[eri];
+                psRes.eligibilityReasons[erk] = (psRes.eligibilityReasons[erk] || 0) + 1;
+              }
+            } else if (!pentry.researchEligible && pentry.ingestionStatus) {
+              // Marked invalid entries
+              var ik = pentry.ingestionStatus;
+              psRes.eligibilityReasons[ik] = (psRes.eligibilityReasons[ik] || 0) + 1;
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Read outcome ledger — count total settled, and T+3 pending
+      var olFile = path.join(DATA_DIR, 'simfolio', 'outcome_ledger.jsonl');
+      if (fs.existsSync(olFile)) {
+        psRes.hasOutcome = true;
+        var olines = fs.readFileSync(olFile, 'utf8').trim().split('\n').filter(Boolean);
+        // Count settled outcomes (status='settled' vs 'unavailable')
+        var settledCount = 0;
+        var unavailableCount = 0;
+        for (var oi = 0; oi < olines.length; oi++) {
+          try {
+            var oentry = JSON.parse(olines[oi]);
+            if (oentry.status === 'settled') settledCount++;
+            else unavailableCount++;
+            if (oentry.targetDate === today) psRes.settledOnTargetToday++;
+          } catch (_) {}
+        }
+        psRes.settledToday = settledCount;
+        psRes.unavailableCount = unavailableCount;
+      }
+
+      // Count T+3 pending: prediction_ledger files from ~T-3 that haven't been settled yet
+      try {
+        var simfolioDir = path.join(DATA_DIR, 'simfolio');
+        var allFiles = fs.readdirSync(simfolioDir);
+        var predFiles = allFiles.filter(function(f) { return /^prediction_ledger_\d{4}-\d{2}-\d{2}\.jsonl$/.test(f); });
+        var settledIds = {};
+        if (psRes.hasOutcome) {
+          var olines2 = fs.readFileSync(olFile, 'utf8').trim().split('\n').filter(Boolean);
+          for (var si = 0; si < olines2.length; si++) {
+            try {
+              var oe = JSON.parse(olines2[si]);
+              if (oe.predictionId) settledIds[oe.predictionId] = true;
+            } catch (_) {}
+          }
+        }
+        var threeDaysAgo = new Date(today + 'T00:00:00+08:00').getTime() - 3 * 24 * 3600 * 1000;
+        var pendingCount = 0;
+        for (var fi = 0; fi < predFiles.length; fi++) {
+          var fileDate = predFiles[fi].replace('prediction_ledger_', '').replace('.jsonl', '');
+          var fileMs = new Date(fileDate + 'T00:00:00+08:00').getTime();
+          if (fileMs >= threeDaysAgo) continue;
+          try {
+            var plines2 = fs.readFileSync(path.join(simfolioDir, predFiles[fi]), 'utf8').trim().split('\n').filter(Boolean);
+            for (var pj = 0; pj < plines2.length; pj++) {
+              try {
+                var pe = JSON.parse(plines2[pj]);
+                // v3.4.9.1: Count researchEligible predictions pending settlement
+                if (pe.predictionId && !settledIds[pe.predictionId] && pe.researchEligible) {
+                  pendingCount++;
+                }
+              } catch (_) {}
+            }
+          } catch (_) {}
+        }
+        psRes.t3pending = pendingCount;
+      } catch (_) {}
+
+      // v3.4.9: Include independent trading days from verification summary
+      try {
+        var vsFile = path.join(DATA_DIR, 'verification', 'verification_summary.json');
+        if (fs.existsSync(vsFile)) {
+          var vsData = JSON.parse(fs.readFileSync(vsFile, 'utf8'));
+          if (vsData.overall && vsData.overall.rankIC) {
+            psRes.independentDays = vsData.overall.rankIC.independentDays || 0;
+          }
+        }
+      } catch (_) {}
+
+      return jsonResponse(res, psRes);
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
+  // === [v3.4.9.4]: Research Cohort Integrity API ===
+  if (pathname === '/api/cohort-integrity') {
+    try {
+      var ciToday = new Date().toISOString().slice(0, 10);
+      var ciRes = { ok: true, date: ciToday, hasManifest: false, manifest: null,
+        counts: { schemaValid: 0, predictionValid: 0, researchEligible: 0,
+          executionCandidateEligible: 0, globalBlocked: 0, executionEligible: 0,
+          actualBought: 0, missingExpectedReturn: 0, oldFormatQuarantined: 0 },
+        featureCoverage: {} };
+
+      // Read daily manifest
+      try {
+        var pl = require('./mosaic/prediction_ledger');
+        var manifest = pl.readRunManifest(path.join(DATA_DIR, 'simfolio'), ciToday);
+        if (manifest) {
+          ciRes.hasManifest = true;
+          ciRes.manifest = manifest;
+        }
+      } catch (_) {}
+
+      // Read today's ledger and aggregate 6-field eligibility counts
+      var plFile2 = path.join(DATA_DIR, 'simfolio', 'prediction_ledger_' + ciToday + '.jsonl');
+      if (fs.existsSync(plFile2)) {
+        var ciLines = fs.readFileSync(plFile2, 'utf8').trim().split('\n').filter(Boolean);
+        ciRes.ledgerTotal = ciLines.length;
+        for (var ci = 0; ci < ciLines.length; ci++) {
+          try {
+            var cie = JSON.parse(ciLines[ci]);
+            if (cie.schemaValid) ciRes.counts.schemaValid++;
+            if (cie.predictionValid) ciRes.counts.predictionValid++;
+            if (cie.researchEligible) ciRes.counts.researchEligible++;
+            if (cie.executionCandidateEligible) ciRes.counts.executionCandidateEligible++;
+            if (!cie.globalTradePermission) ciRes.counts.globalBlocked++;
+            if (cie.executionEligible) ciRes.counts.executionEligible++;
+            if (cie.wasBought) ciRes.counts.actualBought++;
+            if (cie.expectedReturn == null) ciRes.counts.missingExpectedReturn++;
+            if (cie.ingestionStatus === 'invalid_schema_v3492') ciRes.counts.oldFormatQuarantined++;
+            // Feature coverage distribution
+            var fc = cie.featureCoverage != null ? cie.featureCoverage.toFixed(2) : '?';
+            ciRes.featureCoverage[fc] = (ciRes.featureCoverage[fc] || 0) + 1;
+          } catch (_) {}
+        }
+      }
+
+      // Add note about prediction validity
+      if (ciRes.counts.researchEligible > 0 && (!ciRes.hasManifest || (ciRes.manifest && ciRes.manifest.status !== 'completed'))) {
+        ciRes.note = '样本收集正常，但尚无预测有效性结论';
+      } else if (ciRes.counts.researchEligible > 0) {
+        ciRes.note = 'Canonical cohort collected, pending T+3 settlement';
+      } else {
+        ciRes.note = '尚无合格研究样本';
+      }
+
+      return jsonResponse(res, ciRes);
+    } catch (e) {
+      return jsonResponse(res, { ok: false, message: e.message });
+    }
+  }
+
   // === [v3.3.0]: Model Registry API ===
   if (pathname === '/api/model-registry/status') {
     try {
@@ -2912,30 +3117,45 @@ const server = http.createServer(async function(req, res) {
       } catch (_) {}
 
       // --- Loop 2: NorthBound → Score Weight ---
-      let loop2 = { status: 'off', detail: '无北向资金数据' };
+      // v3.4.8: When nb data is unavailable, show degraded (not active/off)
+      let loop2 = { status: 'degraded', detail: '北向资金数据不可用',
+        input: { label: '北向数据不可用', signalDays: 0, totalDays: 0, available: false },
+        process: { label: '无数据', hitRate: null, status: 'unavailable' },
+        output: '北向数据不可用，权重回退默认',
+      };
       try {
         if (data.factorPerformance && data.factorPerformance.nbPerformance) {
           const nb = data.factorPerformance.nbPerformance;
-          loop2 = {
-            status: nb.status === 'hot' ? 'active' : nb.status === 'cold' ? 'degraded' : 'active',
-            input: {
-              label: '北向资金情绪',
-              signalDays: nb.signalDays || 0,
-              totalDays: nb.totalDays || 0,
-              available: nb.available,
-            },
-            process: {
-              label: '计算方向命中率',
-              hitRate: nb.hitRate,
-              status: nb.status,
-            },
-            output: nb.status === 'hot'
-              ? '命中率高('+(nb.hitRate*100).toFixed(0)+'%)，北向信号权重上调'
-              : nb.status === 'cold'
-                ? '命中率低('+(nb.hitRate*100).toFixed(0)+'%)，触发北向评分降权'
-                : '命中率中性('+(nb.hitRate*100).toFixed(0)+'%)，维持默认权重',
-            detail: '北向资金情绪HOT/COLD计算命中率，动态调整composite评分中的北向权重(±3~±5分)',
-          };
+          if (nb.available === false) {
+            loop2 = {
+              status: 'degraded',
+              input: { label: '北向数据不可用', signalDays: nb.signalDays || 0, totalDays: nb.totalDays || 0, available: false },
+              process: { label: '无法计算命中率', hitRate: null, status: 'unavailable' },
+              output: '北向数据不可用，权重回退默认',
+              detail: '北向资金数据源异常或数据文件缺失，北向因子降级为默认权重',
+            };
+          } else {
+            loop2 = {
+              status: nb.status === 'hot' ? 'active' : nb.status === 'cold' ? 'degraded' : 'active',
+              input: {
+                label: '北向资金情绪',
+                signalDays: nb.signalDays || 0,
+                totalDays: nb.totalDays || 0,
+                available: true,
+              },
+              process: {
+                label: '计算方向命中率',
+                hitRate: nb.hitRate,
+                status: nb.status,
+              },
+              output: nb.status === 'hot'
+                ? '命中率高('+(nb.hitRate*100).toFixed(0)+'%)，北向信号权重上调'
+                : nb.status === 'cold'
+                  ? '命中率低('+(nb.hitRate*100).toFixed(0)+'%)，触发北向评分降权'
+                  : '命中率中性('+(nb.hitRate*100).toFixed(0)+'%)，维持默认权重',
+              detail: '北向资金情绪HOT/COLD计算命中率，动态调整composite评分中的北向权重(±3~±5分)',
+            };
+          }
         }
       } catch (_) {}
 
@@ -3304,6 +3524,14 @@ const server = http.createServer(async function(req, res) {
 
 server.listen(PORT, '0.0.0.0', function() {
   serverStartTime = new Date().toISOString();
+
+  // v3.4.9.3: Mark existing ledger entries with hash-only featureSnapshot as invalid_schema_v3492
+  // These entries are retained for audit but excluded from verification/promotion
+  try {
+    var _markResult = require('./mosaic/simfolio')._markInvalidLedgerEntries();
+    console.log('[Mosaic] Ledger migration: marked ' + (_markResult.marked || 0) + ' entries as invalid_schema_v3492');
+  } catch (_) { console.log('[Mosaic] Ledger migration skipped (no entries to mark or simfolio unavailable)'); }
+
   // 启动全自动调度器
   scheduler = new Scheduler();
   scheduler.start();

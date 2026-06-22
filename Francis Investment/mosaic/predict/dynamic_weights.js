@@ -294,7 +294,7 @@ function getGridSearchParams() {
  * Tier 1 (record_only): < 300 samples or < 20 calendar days — record only, no weight update
  * Tier 2 (suggest_only): 300-999 samples, or IC CI lower ≤ 0, or net excess ≤ 0 — suggest only
  * Tier 3 (shadow_allowed): 1000+ samples, 60+ days, IC positive, net excess positive — auto-update
- * Tier 4 (champion): passes all qualification criteria — same as shadow_allowed for now
+ * Tier 4 (baseline): passes all qualification criteria — same as shadow_allowed for now
  */
 function computeWeightTier(sampleCount, calendarDays, icLower, netExcessReturn) {
   // v3.4.6: Fail-closed — null evidence != pass
@@ -338,11 +338,20 @@ function updateDynamicWeights() {
     var vsPath = path.join(__dirname, '..', '..', 'report-engine', 'data', 'verification', 'verification_summary.json');
     if (fs.existsSync(vsPath)) {
       var vs = JSON.parse(require('fs').readFileSync(vsPath, 'utf8'));
+      // v3.4.7: Read from unified overall structure
       if (vs.overall && vs.overall.rankIC && vs.overall.rankIC.ci_lower != null) {
         icLower = vs.overall.rankIC.ci_lower;
+      } else if (vs.avgRankIC != null) {
+        // Old flat format: no CI available — fail closed
+        icLower = null;
       }
-      if (vs.overall && vs.overall.postCostNetReturn != null) {
+      if (vs.overall && vs.overall.postCostNetExcessReturn != null) {
+        netExcess = vs.overall.postCostNetExcessReturn;
+      } else if (vs.overall && vs.overall.postCostNetReturn != null) {
+        // v3.4.6 field name (transitional)
         netExcess = vs.overall.postCostNetReturn;
+      } else {
+        netExcess = null;
       }
     }
   } catch (_) {}
@@ -550,20 +559,15 @@ function rollbackDynamicWeights() {
 function getEffectiveWeights() {
   const dynamic = loadDynamicWeights();
   if (dynamic && dynamic.weights && dynamic.r2 >= 0.05) {
-    // v3.4.6: Fail-closed — must pass tier gate AND have complete evidence
+    // v3.4.7: Fail-closed — tier already encodes evidence state from computeWeightTier()
+    // (icLower==null or netExcess==null → suggest_only, never shadow_allowed)
     if (dynamic.tier !== 'shadow_allowed') {
       return {
         ...config.FACTOR_WEIGHTS,
         _source: 'config',
-        _fallback_reason: '动态权重未满足shadow_allowed条件（当前层级: ' + (dynamic.tier || 'unknown') + '），使用配置默认权重',
-      };
-    }
-    // Complete evidence check
-    if (dynamic.icLower == null || dynamic.icLower <= 0 || dynamic.netExcessReturn == null || dynamic.netExcessReturn <= 0) {
-      return {
-        ...config.FACTOR_WEIGHTS,
-        _source: 'config',
-        _fallback_reason: '动态权重证据不完整（IC下界或净超额收益缺失/非正），使用配置默认权重',
+        _fallback_reason: '动态权重层级不足（当前: ' + (dynamic.tier || 'unknown') + '，需shadow_allowed）' +
+          (dynamic.tierReason ? ' — ' + dynamic.tierReason : '') +
+          '，使用配置默认权重',
       };
     }
     return {
