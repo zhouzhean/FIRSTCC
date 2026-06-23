@@ -338,6 +338,8 @@ STOP_LOSS_COOLDOWN_DAYS: 4
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v3.4.9.6 | 2026-06-23 | Phase 1.1 诚实化: 7新+3改模块, current-file宇宙, featureAvailability, technical-only基线, T+1开盘模拟, 固定种子bootstrap, 岭回归首个可学模型, 严格train/val/test |
+| v3.4.9.5 | 2026-06-23 | Phase 1 PIT历史研究实验室: 5新模块(data_audit/universal_calendar/historical_snapshot/walk_forward/baseline_models), 835天快照953K记录 |
 | v3.4.9.4.2 | 2026-06-22 | API统计口径统一(quarantined排除), 部署身份fallback(deploy_manifest.json), 验收测试修复(DATA_DIR重定向+真实verifyOneScan) |
 | v3.4.9.4.1 | 2026-06-22 | Manifest路径统一, Canonical按Scheduler身份, 6层真实资格, quarantined分离, deploy_manifest.json |
 | v3.4.9.4 | 2026-06-21 | research_cohort+prediction_ledger新模块, 6-field eligibility, daily_research_manifest, canonical cohort |
