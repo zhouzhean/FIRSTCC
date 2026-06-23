@@ -361,6 +361,59 @@ the next 09:30 canonical run, require a manifest, one canonical run ID, a
 non-null target date, and positive research-eligible count before calling the
 production loop proven.
 
+## Latest Review: v3.4.9.7 Research Validity Repair (2026-06-23)
+
+### Verified progress
+
+- The revised historical label now expresses the executable convention:
+  `T close -> T+1 open -> T+4 close`, and the simulator fixtures pass 20/20.
+  The previous unclosed-position / zero-trade-count defect is repaired in the
+  fixture environment.
+- Train-only feature standardization, an unregularized ridge intercept, and
+  simulator-backed test-window evaluation are the correct next research
+  architecture. Existing snapshots and artefacts remain invalid until they are
+  regenerated under the new label.
+
+### Required corrections before running the new historical study
+
+1. **Restore release identity.** Cloud reports runtime version v3.4.9.7 but
+   `buildCommit`, `gitCommit`, and `deployCommit` are still `84f97b0`; its
+   deploy manifest is v3.4.9.6. Regenerate the manifest after commit `4965b49`,
+   deploy it with source hashes, and require the cloud identity to equal that
+   commit. A version string alone is not accepted.
+2. **Make portfolio capacity match its stated Top-N.** The three-sleeve code
+   currently limits each daily cohort to about 16-17 positions while upstream
+   evaluation calls it Top-50. Choose and persist one meaning: either Top-50
+   per cohort (up to 150 simultaneous names) or Top-17 per cohort / 50 total.
+   Use that same number in every metric and UI label.
+3. **Simulate the benchmark as a portfolio, not an average return.** Run the
+   same sleeve dates, cash allocation, and entry/exit calendar on the index;
+   write a benchmark NAV series. The current average of individual index cohort
+   returns is not a matched benchmark for a compounded sleeve portfolio.
+4. **Name post-cost results correctly.** Current `grossReturn` is already net
+   of entry and exit costs. Output separate pre-cost and post-cost NAV/return,
+   and calculate excess from the post-cost strategy return exactly once.
+5. **Handle an untradeable exit conservatively.** The simulator checks entry
+   suspension and price limits but does not check tradeability at exit. For a
+   locked limit-down exit, record a failed exit and either carry to the first
+   tradable date under a documented policy or mark it unavailable; never assume
+   a fill at the close.
+6. **Fix multi-date calibration keys.** Decile calibration maps predictions by
+   stock code alone. It must use `(asOfDate, code)`, otherwise later daily
+   predictions overwrite earlier ones for the same stock.
+7. **Call the random method accurately.** It currently simulates random
+   portfolios on fixed dates; it is not a block bootstrap of date sequences.
+   Either rename it to deterministic random-portfolio Monte Carlo or add paired
+   moving-block resampling and a CI for the model-minus-random return delta.
+
+### UI and live safety
+
+The Cockpit's yellow overall state is directionally correct, but its green
+`P0 Status: pass` must become `code fixtures pass; data not regenerated` until
+new snapshots, OOS results, and model artefacts carry the current label/data
+hash. Do not run `runFixtures()` as a side effect of every cockpit API request;
+surface a stored CI/test result instead.
+
 For every change, report all of the following:
 
 - Files changed and the behavioral reason for each.

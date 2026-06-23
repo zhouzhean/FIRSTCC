@@ -1,0 +1,1327 @@
+{
+  "generatedAt": "2026-06-23T11:10:16.145Z",
+  "version": "P1.1-B.1",
+  "purpose": "Honest data coverage audit — per-date coverage, stock distribution, gap analysis",
+  "principle": "Never claim \"full A-share history.\" The universe is defined by files present in the klines directory (current-file universe). Early dates have partial coverage and are marked exploration-only.",
+  "universe": {
+    "name": "current-file",
+    "source": "Tencent ifzq qfq day bars (web.ifzq.gtimg.cn)",
+    "stockCount": 1578,
+    "earliestDate": "2020-01-02",
+    "latestDate": "2026-06-18",
+    "stableStart": "2023-10-27",
+    "stableCoverageThreshold": 0.9,
+    "explorationOnlyBefore": "2023-10-27",
+    "survivorshipRisk": true,
+    "survivorshipNote": "Stocks that delisted before data download (~2023-2026) are absent from the universe. Results are conditional on survival."
+  },
+  "stablePeriodCoverage": {
+    "min": 0,
+    "max": 94.93,
+    "mean": 87.85,
+    "note": "Coverage in [2023-10-27, 2026-06-18]"
+  },
+  "dailyCoverage": [
+    {
+      "date": "2023-01-03",
+      "stockCount": 40,
+      "coveragePct": 2.53,
+      "isStable": false
+    },
+    {
+      "date": "2023-02-01",
+      "stockCount": 40,
+      "coveragePct": 2.53,
+      "isStable": false
+    },
+    {
+      "date": "2023-02-07",
+      "stockCount": 39,
+      "coveragePct": 2.47,
+      "isStable": false
+    },
+    {
+      "date": "2023-03-01",
+      "stockCount": 38,
+      "coveragePct": 2.41,
+      "isStable": false
+    },
+    {
+      "date": "2023-03-07",
+      "stockCount": 37,
+      "coveragePct": 2.34,
+      "isStable": false
+    },
+    {
+      "date": "2023-04-03",
+      "stockCount": 38,
+      "coveragePct": 2.41,
+      "isStable": false
+    },
+    {
+      "date": "2023-04-04",
+      "stockCount": 38,
+      "coveragePct": 2.41,
+      "isStable": false
+    },
+    {
+      "date": "2023-05-04",
+      "stockCount": 27,
+      "coveragePct": 1.71,
+      "isStable": false
+    },
+    {
+      "date": "2023-05-08",
+      "stockCount": 34,
+      "coveragePct": 2.15,
+      "isStable": false
+    },
+    {
+      "date": "2023-06-01",
+      "stockCount": 37,
+      "coveragePct": 2.34,
+      "isStable": false
+    },
+    {
+      "date": "2023-06-05",
+      "stockCount": 37,
+      "coveragePct": 2.34,
+      "isStable": false
+    },
+    {
+      "date": "2023-07-03",
+      "stockCount": 31,
+      "coveragePct": 1.96,
+      "isStable": false
+    },
+    {
+      "date": "2023-07-05",
+      "stockCount": 31,
+      "coveragePct": 1.96,
+      "isStable": false
+    },
+    {
+      "date": "2023-08-01",
+      "stockCount": 31,
+      "coveragePct": 1.96,
+      "isStable": false
+    },
+    {
+      "date": "2023-08-02",
+      "stockCount": 31,
+      "coveragePct": 1.96,
+      "isStable": false
+    },
+    {
+      "date": "2023-08-30",
+      "stockCount": 36,
+      "coveragePct": 2.28,
+      "isStable": false
+    },
+    {
+      "date": "2023-09-01",
+      "stockCount": 36,
+      "coveragePct": 2.28,
+      "isStable": false
+    },
+    {
+      "date": "2023-09-27",
+      "stockCount": 48,
+      "coveragePct": 3.04,
+      "isStable": false
+    },
+    {
+      "date": "2023-10-09",
+      "stockCount": 50,
+      "coveragePct": 3.17,
+      "isStable": false
+    },
+    {
+      "date": "2023-11-01",
+      "stockCount": 1473,
+      "coveragePct": 93.35,
+      "isStable": true
+    },
+    {
+      "date": "2023-11-02",
+      "stockCount": 1473,
+      "coveragePct": 93.35,
+      "isStable": true
+    },
+    {
+      "date": "2023-11-30",
+      "stockCount": 1474,
+      "coveragePct": 93.41,
+      "isStable": true
+    },
+    {
+      "date": "2023-12-01",
+      "stockCount": 1474,
+      "coveragePct": 93.41,
+      "isStable": true
+    },
+    {
+      "date": "2023-12-28",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2024-01-02",
+      "stockCount": 1478,
+      "coveragePct": 93.66,
+      "isStable": true
+    },
+    {
+      "date": "2024-01-26",
+      "stockCount": 1482,
+      "coveragePct": 93.92,
+      "isStable": true
+    },
+    {
+      "date": "2024-02-01",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2024-03-01",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2024-03-29",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2024-04-01",
+      "stockCount": 1484,
+      "coveragePct": 94.04,
+      "isStable": true
+    },
+    {
+      "date": "2024-04-30",
+      "stockCount": 1461,
+      "coveragePct": 92.59,
+      "isStable": true
+    },
+    {
+      "date": "2024-05-06",
+      "stockCount": 1479,
+      "coveragePct": 93.73,
+      "isStable": true
+    },
+    {
+      "date": "2024-05-31",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2024-06-03",
+      "stockCount": 1476,
+      "coveragePct": 93.54,
+      "isStable": true
+    },
+    {
+      "date": "2024-07-01",
+      "stockCount": 1474,
+      "coveragePct": 93.41,
+      "isStable": true
+    },
+    {
+      "date": "2024-07-29",
+      "stockCount": 1472,
+      "coveragePct": 93.28,
+      "isStable": true
+    },
+    {
+      "date": "2024-08-01",
+      "stockCount": 1472,
+      "coveragePct": 93.28,
+      "isStable": true
+    },
+    {
+      "date": "2024-08-26",
+      "stockCount": 1476,
+      "coveragePct": 93.54,
+      "isStable": true
+    },
+    {
+      "date": "2024-09-02",
+      "stockCount": 1473,
+      "coveragePct": 93.35,
+      "isStable": true
+    },
+    {
+      "date": "2024-09-24",
+      "stockCount": 1475,
+      "coveragePct": 93.47,
+      "isStable": true
+    },
+    {
+      "date": "2024-10-08",
+      "stockCount": 1472,
+      "coveragePct": 93.28,
+      "isStable": true
+    },
+    {
+      "date": "2024-10-29",
+      "stockCount": 1475,
+      "coveragePct": 93.47,
+      "isStable": true
+    },
+    {
+      "date": "2024-11-01",
+      "stockCount": 1476,
+      "coveragePct": 93.54,
+      "isStable": true
+    },
+    {
+      "date": "2024-11-26",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2024-12-02",
+      "stockCount": 1478,
+      "coveragePct": 93.66,
+      "isStable": true
+    },
+    {
+      "date": "2024-12-24",
+      "stockCount": 1475,
+      "coveragePct": 93.47,
+      "isStable": true
+    },
+    {
+      "date": "2025-01-02",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2025-01-22",
+      "stockCount": 1479,
+      "coveragePct": 93.73,
+      "isStable": true
+    },
+    {
+      "date": "2025-02-05",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2025-02-26",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2025-03-03",
+      "stockCount": 1475,
+      "coveragePct": 93.47,
+      "isStable": true
+    },
+    {
+      "date": "2025-03-26",
+      "stockCount": 1478,
+      "coveragePct": 93.66,
+      "isStable": true
+    },
+    {
+      "date": "2025-04-01",
+      "stockCount": 1478,
+      "coveragePct": 93.66,
+      "isStable": true
+    },
+    {
+      "date": "2025-04-24",
+      "stockCount": 1481,
+      "coveragePct": 93.85,
+      "isStable": true
+    },
+    {
+      "date": "2025-05-05",
+      "stockCount": 0,
+      "coveragePct": 0,
+      "isStable": true
+    },
+    {
+      "date": "2025-05-26",
+      "stockCount": 1475,
+      "coveragePct": 93.47,
+      "isStable": true
+    },
+    {
+      "date": "2025-06-03",
+      "stockCount": 1472,
+      "coveragePct": 93.28,
+      "isStable": true
+    },
+    {
+      "date": "2025-06-24",
+      "stockCount": 1481,
+      "coveragePct": 93.85,
+      "isStable": true
+    },
+    {
+      "date": "2025-07-01",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2025-07-22",
+      "stockCount": 1478,
+      "coveragePct": 93.66,
+      "isStable": true
+    },
+    {
+      "date": "2025-08-01",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2025-08-19",
+      "stockCount": 1479,
+      "coveragePct": 93.73,
+      "isStable": true
+    },
+    {
+      "date": "2025-09-01",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2025-09-16",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2025-10-08",
+      "stockCount": 0,
+      "coveragePct": 0,
+      "isStable": true
+    },
+    {
+      "date": "2025-10-22",
+      "stockCount": 1482,
+      "coveragePct": 93.92,
+      "isStable": true
+    },
+    {
+      "date": "2025-11-03",
+      "stockCount": 1484,
+      "coveragePct": 94.04,
+      "isStable": true
+    },
+    {
+      "date": "2025-11-19",
+      "stockCount": 1484,
+      "coveragePct": 94.04,
+      "isStable": true
+    },
+    {
+      "date": "2025-12-01",
+      "stockCount": 1481,
+      "coveragePct": 93.85,
+      "isStable": true
+    },
+    {
+      "date": "2025-12-17",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2026-01-02",
+      "stockCount": 0,
+      "coveragePct": 0,
+      "isStable": true
+    },
+    {
+      "date": "2026-01-15",
+      "stockCount": 1481,
+      "coveragePct": 93.85,
+      "isStable": true
+    },
+    {
+      "date": "2026-02-02",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2026-02-12",
+      "stockCount": 1485,
+      "coveragePct": 94.11,
+      "isStable": true
+    },
+    {
+      "date": "2026-03-02",
+      "stockCount": 1480,
+      "coveragePct": 93.79,
+      "isStable": true
+    },
+    {
+      "date": "2026-03-12",
+      "stockCount": 1483,
+      "coveragePct": 93.98,
+      "isStable": true
+    },
+    {
+      "date": "2026-04-01",
+      "stockCount": 1482,
+      "coveragePct": 93.92,
+      "isStable": true
+    },
+    {
+      "date": "2026-04-09",
+      "stockCount": 1482,
+      "coveragePct": 93.92,
+      "isStable": true
+    },
+    {
+      "date": "2026-05-06",
+      "stockCount": 1476,
+      "coveragePct": 93.54,
+      "isStable": true
+    },
+    {
+      "date": "2026-05-12",
+      "stockCount": 1477,
+      "coveragePct": 93.6,
+      "isStable": true
+    },
+    {
+      "date": "2026-06-01",
+      "stockCount": 1497,
+      "coveragePct": 94.87,
+      "isStable": true
+    },
+    {
+      "date": "2026-06-09",
+      "stockCount": 1498,
+      "coveragePct": 94.93,
+      "isStable": true
+    },
+    {
+      "date": "2026-06-23",
+      "stockCount": 0,
+      "coveragePct": 0,
+      "isStable": true
+    }
+  ],
+  "stockDistribution": {
+    "cliffDates": [
+      {
+        "date": "2023-10-26",
+        "count": 56,
+        "cumulative": 300,
+        "cumulativePct": 19
+      },
+      {
+        "date": "2023-10-27",
+        "count": 1219,
+        "cumulative": 1519,
+        "cumulativePct": 96
+      }
+    ],
+    "fullDistribution": [
+      {
+        "date": "2020-01-02",
+        "count": 33,
+        "cumulative": 33,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-04-10",
+        "count": 1,
+        "cumulative": 34,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-06-10",
+        "count": 1,
+        "cumulative": 35,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-06-30",
+        "count": 1,
+        "cumulative": 36,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-07-07",
+        "count": 1,
+        "cumulative": 37,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-07-10",
+        "count": 1,
+        "cumulative": 38,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-07-29",
+        "count": 1,
+        "cumulative": 39,
+        "cumulativePct": 2
+      },
+      {
+        "date": "2020-08-03",
+        "count": 1,
+        "cumulative": 40,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-09-10",
+        "count": 1,
+        "cumulative": 41,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-09-24",
+        "count": 1,
+        "cumulative": 42,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-09-25",
+        "count": 2,
+        "cumulative": 44,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-09-29",
+        "count": 1,
+        "cumulative": 45,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-10-19",
+        "count": 1,
+        "cumulative": 46,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2020-10-26",
+        "count": 1,
+        "cumulative": 47,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-04-30",
+        "count": 1,
+        "cumulative": 48,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-07-13",
+        "count": 1,
+        "cumulative": 49,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-08-18",
+        "count": 1,
+        "cumulative": 50,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-09-09",
+        "count": 1,
+        "cumulative": 51,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-09-14",
+        "count": 2,
+        "cumulative": 53,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-09-23",
+        "count": 1,
+        "cumulative": 54,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-10-12",
+        "count": 1,
+        "cumulative": 55,
+        "cumulativePct": 3
+      },
+      {
+        "date": "2021-10-22",
+        "count": 1,
+        "cumulative": 56,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2021-10-26",
+        "count": 1,
+        "cumulative": 57,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2021-11-01",
+        "count": 2,
+        "cumulative": 59,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2021-11-26",
+        "count": 2,
+        "cumulative": 61,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2021-12-17",
+        "count": 1,
+        "cumulative": 62,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-05-20",
+        "count": 1,
+        "cumulative": 63,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-05-25",
+        "count": 2,
+        "cumulative": 65,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-07-29",
+        "count": 1,
+        "cumulative": 66,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-08-09",
+        "count": 1,
+        "cumulative": 67,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-08-10",
+        "count": 1,
+        "cumulative": 68,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-08-18",
+        "count": 1,
+        "cumulative": 69,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-08-29",
+        "count": 1,
+        "cumulative": 70,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-09-21",
+        "count": 1,
+        "cumulative": 71,
+        "cumulativePct": 4
+      },
+      {
+        "date": "2022-09-22",
+        "count": 1,
+        "cumulative": 72,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2022-09-26",
+        "count": 2,
+        "cumulative": 74,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2022-12-07",
+        "count": 1,
+        "cumulative": 75,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-03-17",
+        "count": 1,
+        "cumulative": 76,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-04-26",
+        "count": 1,
+        "cumulative": 77,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-05-31",
+        "count": 1,
+        "cumulative": 78,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-08-09",
+        "count": 1,
+        "cumulative": 79,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-08-10",
+        "count": 1,
+        "cumulative": 80,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-08-14",
+        "count": 1,
+        "cumulative": 81,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-08-21",
+        "count": 1,
+        "cumulative": 82,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-08-22",
+        "count": 1,
+        "cumulative": 83,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-09-05",
+        "count": 1,
+        "cumulative": 84,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-09-12",
+        "count": 2,
+        "cumulative": 86,
+        "cumulativePct": 5
+      },
+      {
+        "date": "2023-09-14",
+        "count": 2,
+        "cumulative": 88,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-09-21",
+        "count": 6,
+        "cumulative": 94,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-09-22",
+        "count": 1,
+        "cumulative": 95,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-09-28",
+        "count": 1,
+        "cumulative": 96,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-10-09",
+        "count": 1,
+        "cumulative": 97,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-10-11",
+        "count": 2,
+        "cumulative": 99,
+        "cumulativePct": 6
+      },
+      {
+        "date": "2023-10-12",
+        "count": 4,
+        "cumulative": 103,
+        "cumulativePct": 7
+      },
+      {
+        "date": "2023-10-13",
+        "count": 44,
+        "cumulative": 147,
+        "cumulativePct": 9
+      },
+      {
+        "date": "2023-10-16",
+        "count": 8,
+        "cumulative": 155,
+        "cumulativePct": 10
+      },
+      {
+        "date": "2023-10-17",
+        "count": 7,
+        "cumulative": 162,
+        "cumulativePct": 10
+      },
+      {
+        "date": "2023-10-18",
+        "count": 3,
+        "cumulative": 165,
+        "cumulativePct": 10
+      },
+      {
+        "date": "2023-10-19",
+        "count": 6,
+        "cumulative": 171,
+        "cumulativePct": 11
+      },
+      {
+        "date": "2023-10-20",
+        "count": 20,
+        "cumulative": 191,
+        "cumulativePct": 12
+      },
+      {
+        "date": "2023-10-23",
+        "count": 6,
+        "cumulative": 197,
+        "cumulativePct": 12
+      },
+      {
+        "date": "2023-10-24",
+        "count": 14,
+        "cumulative": 211,
+        "cumulativePct": 13
+      },
+      {
+        "date": "2023-10-25",
+        "count": 33,
+        "cumulative": 244,
+        "cumulativePct": 15
+      },
+      {
+        "date": "2023-10-26",
+        "count": 56,
+        "cumulative": 300,
+        "cumulativePct": 19
+      },
+      {
+        "date": "2023-10-27",
+        "count": 1219,
+        "cumulative": 1519,
+        "cumulativePct": 96
+      },
+      {
+        "date": "2023-11-01",
+        "count": 1,
+        "cumulative": 1520,
+        "cumulativePct": 96
+      },
+      {
+        "date": "2023-11-07",
+        "count": 1,
+        "cumulative": 1521,
+        "cumulativePct": 96
+      },
+      {
+        "date": "2023-12-05",
+        "count": 1,
+        "cumulative": 1522,
+        "cumulativePct": 96
+      },
+      {
+        "date": "2023-12-15",
+        "count": 1,
+        "cumulative": 1523,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2023-12-20",
+        "count": 1,
+        "cumulative": 1524,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2023-12-22",
+        "count": 1,
+        "cumulative": 1525,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2023-12-27",
+        "count": 1,
+        "cumulative": 1526,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-01-10",
+        "count": 1,
+        "cumulative": 1527,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-01-11",
+        "count": 1,
+        "cumulative": 1528,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-01-18",
+        "count": 1,
+        "cumulative": 1529,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-01-24",
+        "count": 1,
+        "cumulative": 1530,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-01-30",
+        "count": 1,
+        "cumulative": 1531,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-03-01",
+        "count": 1,
+        "cumulative": 1532,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-03-20",
+        "count": 1,
+        "cumulative": 1533,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-06-26",
+        "count": 1,
+        "cumulative": 1534,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-07-03",
+        "count": 1,
+        "cumulative": 1535,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-07-05",
+        "count": 1,
+        "cumulative": 1536,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-07-31",
+        "count": 1,
+        "cumulative": 1537,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-08-14",
+        "count": 1,
+        "cumulative": 1538,
+        "cumulativePct": 97
+      },
+      {
+        "date": "2024-08-26",
+        "count": 1,
+        "cumulative": 1539,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2024-09-20",
+        "count": 1,
+        "cumulative": 1540,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2024-11-07",
+        "count": 1,
+        "cumulative": 1541,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2024-11-26",
+        "count": 1,
+        "cumulative": 1542,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2024-12-24",
+        "count": 1,
+        "cumulative": 1543,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-01-03",
+        "count": 1,
+        "cumulative": 1544,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-03-04",
+        "count": 1,
+        "cumulative": 1545,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-03-11",
+        "count": 1,
+        "cumulative": 1546,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-03-20",
+        "count": 1,
+        "cumulative": 1547,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-04-08",
+        "count": 1,
+        "cumulative": 1548,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-04-09",
+        "count": 1,
+        "cumulative": 1549,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-04-16",
+        "count": 1,
+        "cumulative": 1550,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-04-24",
+        "count": 1,
+        "cumulative": 1551,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-05-19",
+        "count": 1,
+        "cumulative": 1552,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-06-05",
+        "count": 1,
+        "cumulative": 1553,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-06-12",
+        "count": 1,
+        "cumulative": 1554,
+        "cumulativePct": 98
+      },
+      {
+        "date": "2025-06-20",
+        "count": 1,
+        "cumulative": 1555,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-07-16",
+        "count": 1,
+        "cumulative": 1556,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-08-08",
+        "count": 1,
+        "cumulative": 1557,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-09-05",
+        "count": 1,
+        "cumulative": 1558,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-09-23",
+        "count": 1,
+        "cumulative": 1559,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-10-17",
+        "count": 1,
+        "cumulative": 1560,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2025-11-05",
+        "count": 1,
+        "cumulative": 1561,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2026-01-06",
+        "count": 1,
+        "cumulative": 1562,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2026-01-29",
+        "count": 1,
+        "cumulative": 1563,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2026-05-25",
+        "count": 5,
+        "cumulative": 1568,
+        "cumulativePct": 99
+      },
+      {
+        "date": "2026-05-29",
+        "count": 10,
+        "cumulative": 1578,
+        "cumulativePct": 100
+      }
+    ]
+  },
+  "gapAnalysis": {
+    "summary": {
+      "totalStocks": 1578,
+      "stocksWithGaps": 1560,
+      "stocksWithManyGaps": 1512,
+      "avgMissingDays": 14.57,
+      "maxMissingDays": 255
+    },
+    "topGappyStocks": [
+      {
+        "code": "600891",
+        "missingDays": 255,
+        "barCount": 67,
+        "firstDate": "2020-01-02",
+        "lastDate": "2021-04-30"
+      },
+      {
+        "code": "600614",
+        "missingDays": 228,
+        "barCount": 143,
+        "firstDate": "2020-01-02",
+        "lastDate": "2021-07-14"
+      },
+      {
+        "code": "600701",
+        "missingDays": 211,
+        "barCount": 107,
+        "firstDate": "2020-01-02",
+        "lastDate": "2021-04-26"
+      },
+      {
+        "code": "600634",
+        "missingDays": 125,
+        "barCount": 246,
+        "firstDate": "2020-01-02",
+        "lastDate": "2021-07-14"
+      },
+      {
+        "code": "600093",
+        "missingDays": 63,
+        "barCount": 530,
+        "firstDate": "2020-01-02",
+        "lastDate": "2022-06-16"
+      },
+      {
+        "code": "600190",
+        "missingDays": 63,
+        "barCount": 640,
+        "firstDate": "2022-08-29",
+        "lastDate": "2025-07-18"
+      },
+      {
+        "code": "600289",
+        "missingDays": 63,
+        "barCount": 640,
+        "firstDate": "2023-08-10",
+        "lastDate": "2026-06-18"
+      },
+      {
+        "code": "600532",
+        "missingDays": 62,
+        "barCount": 640,
+        "firstDate": "2020-07-29",
+        "lastDate": "2023-06-19"
+      },
+      {
+        "code": "600777",
+        "missingDays": 61,
+        "barCount": 640,
+        "firstDate": "2023-08-14",
+        "lastDate": "2026-06-18"
+      },
+      {
+        "code": "600781",
+        "missingDays": 59,
+        "barCount": 640,
+        "firstDate": "2020-08-03",
+        "lastDate": "2023-06-19"
+      }
+    ]
+  },
+  "indexData": {
+    "sh000001.json": {
+      "bars": 2014,
+      "start": "2018-03-01",
+      "end": "2026-06-18"
+    },
+    "sz399001.json": {
+      "bars": 2014,
+      "start": "2018-03-01",
+      "end": "2026-06-18"
+    },
+    "sz399006.json": {
+      "bars": 2014,
+      "start": "2018-03-01",
+      "end": "2026-06-18"
+    }
+  },
+  "financialData": {
+    "status": "unavailable",
+    "note": "Eastmoney datacenter-web API offline. No point-in-time financial announcement dates. All financial fields in snapshots are null with _estimated: true."
+  },
+  "actionItems": [
+    {
+      "priority": "P0",
+      "action": "Set research default start to stableStart (2023-10-30 or later)",
+      "detail": "Pre-stable dates have <90% universe coverage. Use only for exploratory analysis, not main conclusions."
+    },
+    {
+      "priority": "P1",
+      "action": "Map industry codes via Eastmoney f100 API (current snapshot only)",
+      "detail": "No historical industry classification available. Current-industry mapping only."
+    },
+    {
+      "priority": "P2",
+      "action": "Monitor kline file count drift",
+      "detail": "If new Tencent API calls return different coverage, re-run this audit."
+    }
+  ]
+}

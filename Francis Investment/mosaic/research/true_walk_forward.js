@@ -238,7 +238,8 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
   var simulatorResult = SIMULATOR.simulatePortfolio(dailyTestSignals, {
     klineIdx: klineIdx,
     holdDays: SIMULATOR.HOLD_DAYS || 3,
-    topN: 50,
+    topN: SIMULATOR.TOP_N_PER_COHORT || 50,
+    maxPositionsPerSleeve: SIMULATOR.MAX_POSITIONS_PER_SLEEVE || 17,
   });
 
   // Step 6: Per-date Rank IC
@@ -372,8 +373,10 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
       rankICDays: rankICs.length,
     },
     portfolio: {
+      netReturn: simulatorResult.netReturn,
       grossReturn: simulatorResult.grossReturn,
-      netExcessReturn: simulatorResult.costAdjustedExcess,
+      benchmarkReturn: simulatorResult.benchmarkReturn,
+      netExcessReturn: simulatorResult.netExcessReturn,
       maxDrawdownBps: simulatorResult.maxDrawdown,
       sharpeRatio: simulatorResult.sharpeRatio,
       coverageRate: simulatorResult.coverageRate,
@@ -383,11 +386,13 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
     decileCalibration: decileCalibration,
     vsTechnicalOnly: techComparison && !techComparison.error ? {
       modelGrossReturn: simulatorResult.grossReturn,
+      modelNetReturn: simulatorResult.netReturn,
+      techNetReturn: techComparison.modelPortfolio ? techComparison.modelPortfolio.netReturn : null,
       techGrossReturn: techComparison.modelPortfolio ? techComparison.modelPortfolio.grossReturn : null,
-      modelNetExcess: simulatorResult.costAdjustedExcess,
+      modelNetExcess: simulatorResult.netExcessReturn,
       techNetExcess: techComparison.modelPortfolio ? techComparison.modelPortfolio.netExcessReturn : null,
-      deltaGrossReturn: techComparison.modelPortfolio
-        ? Math.round((simulatorResult.grossReturn - techComparison.modelPortfolio.grossReturn) * 100) / 100
+      deltaNetReturn: techComparison.modelPortfolio
+        ? Math.round((simulatorResult.netReturn - techComparison.modelPortfolio.netReturn) * 100) / 100
         : null,
     } : { error: techComparison ? techComparison.error : 'unknown' },
     artifactsPath: winDir,
@@ -454,9 +459,9 @@ function runTrueWalkForward(options) {
     summary.windows.push(result);
     console.log('  Test MSE: ' + result.metrics.testMSE + ' | MAE: ' + result.metrics.testMAE + ' | Dir Acc: ' + result.metrics.directionAccuracy + '%');
     console.log('  Rank IC: ' + result.metrics.avgRankIC + ' (' + result.metrics.rankICDays + ' days)');
-    console.log('  Portfolio: gross=' + result.portfolio.grossReturn + '% excess=' + result.portfolio.netExcessReturn + '% dd=' + result.portfolio.maxDrawdownBps + 'bps');
-    if (result.vsTechnicalOnly && result.vsTechnicalOnly.deltaGrossReturn != null) {
-      console.log('  vs Tech-Only: deltaGross=' + result.vsTechnicalOnly.deltaGrossReturn + '%');
+    console.log('  Portfolio: net=' + result.portfolio.netReturn + '% gross=' + result.portfolio.grossReturn + '% excess=' + result.portfolio.netExcessReturn + '% dd=' + result.portfolio.maxDrawdownBps + 'bps');
+    if (result.vsTechnicalOnly && result.vsTechnicalOnly.deltaNetReturn != null) {
+      console.log('  vs Tech-Only: deltaNet=' + result.vsTechnicalOnly.deltaNetReturn + '%');
     }
     console.log('  Artifacts: ' + result.artifactsPath);
     console.log();

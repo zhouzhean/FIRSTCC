@@ -1,11 +1,11 @@
 {
-  "commit": "84f97b08969015147f6b45a475d9f7db33c247e9",
-  "version": "v3.4.9.6",
-  "deployedAt": "2026-06-23T11:23:39.280Z",
+  "commit": "4965b49b5ae8977cec08dbf400c5ce3923fe8ae7",
+  "version": "v3.4.9.7",
+  "deployedAt": "2026-06-23T12:00:00.000Z",
   "branch": "master",
   "files": {
-    "mosaic_server.js": "cc2e6d0cad636bcd",
-    "mosaic/config.js": "2a67c1bcf409f405",
+    "mosaic_server.js": "00298e13b588ba40",
+    "mosaic/config.js": "14a8bd40c16220cc",
     "mosaic/pipeline.js": "74a9f7570db58e3b",
     "mosaic/scheduler.js": "2b90bc3807bbaf73",
     "mosaic/decision_kernel.js": "2f17dc9b98be06bb",

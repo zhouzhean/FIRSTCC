@@ -1008,6 +1008,16 @@ function renderResearchLab(researchLab) {
   html += '<div style="font-size:9px;color:#64748b;">Valid Windows</div></div>';
   html += '</div>';
 
+  // Portfolio capacity (P0.2)
+  if (researchLab.portfolioCapacity) {
+    var cap = researchLab.portfolioCapacity;
+    html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">';
+    html += '<div style="flex:1;min-width:80px;text-align:center;padding:4px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
+    html += '<div style="font-size:11px;font-weight:600;">' + (cap.topNPerCohort || '?') + '/sleeve × ' + (cap.numSleeves || '?') + '</div>';
+    html += '<div style="font-size:9px;color:#64748b;">Max ' + (cap.maxConcurrentPositions || '?') + ' concurrent</div></div>';
+    html += '</div>';
+  }
+
   // Feature mask
   var real = researchLab.universe.realFeatures || [];
   var unavail = researchLab.universe.unavailableFeatures || [];
@@ -1045,8 +1055,9 @@ function renderResearchLab(researchLab) {
     html += '<span style="font-size:9px;">MSE=' + esc(String(lw.testMSE)) + '</span>';
     html += '<span style="font-size:9px;">RankIC=' + esc(String(lw.avgRankIC)) + '</span>';
     html += '<span style="font-size:9px;">DirAcc=' + esc(String(lw.directionAccuracy)) + '%</span>';
-    html += '<span style="font-size:9px;' + (lw.portfolioGrossReturn > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Gross=' + esc(String(lw.portfolioGrossReturn)) + '%</span>';
-    html += '<span style="font-size:9px;' + (lw.portfolioNetExcess > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Excess=' + esc(String(lw.portfolioNetExcess)) + '%</span>';
+    html += '<span style="font-size:9px;' + ((lw.portfolioNetReturn || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Net=' + esc(String(lw.portfolioNetReturn)) + '%</span>';
+    html += '<span style="font-size:9px;' + ((lw.portfolioGrossReturn || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Gross=' + esc(String(lw.portfolioGrossReturn)) + '%</span>';
+    html += '<span style="font-size:9px;' + ((lw.portfolioNetExcess || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Excess=' + esc(String(lw.portfolioNetExcess)) + '%</span>';
     html += '</div></div>';
   }
 

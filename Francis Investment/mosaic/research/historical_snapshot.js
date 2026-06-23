@@ -416,6 +416,9 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
     var forwardStatus = 'pending';
     var targetStatus = 'pending';
     var unavailableReason = null;
+    // P0.2 exit tradability fields
+    var plannedExitDate = null, actualExitDate = null;
+    var exitDelayDays = null, exitStatus = null, failedExitReason = null;
 
     // Step 1: Find T+1 entry bar
     var entryBar = getNextDayBar(klineIdx, code, asOfDate);
@@ -439,25 +442,65 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
       } else {
         entryPrice = entryBar.open;
 
-        // Step 3: Find T+4 exit bar (T+1 entry + 3 holding days)
-        exitDate = CALENDAR.getTradingDay(entryDate, HOLD_DAYS);
-        var exitBar = exitDate ? getForwardKline(klineIdx, code, exitDate) : null;
+        // === P0.2: Exit tradability — roll forward if planned exit is untradeable ===
+        var plannedExitDate = CALENDAR.getTradingDay(entryDate, HOLD_DAYS);
+        var exitDelayDays = 0;
+        var failedExitReason = null;
+        var exitStatus = 'normal';
+        var actualExitDate = plannedExitDate;
+        var exitBar = null;
 
-        if (!exitDate) {
+        if (!plannedExitDate) {
           forwardStatus = 'unavailable';
           targetStatus = 'no_exit_date';
           unavailableReason = 'no_T+4_date';
-        } else if (!exitBar || !exitBar.close || exitBar.close <= 0) {
-          forwardStatus = 'unavailable';
-          targetStatus = 'unavailable';
-          unavailableReason = 'no_exit_price';
         } else {
-          exitPrice = exitBar.close;
+          // Check exit tradeability with roll-forward (max 5 days)
+          var MAX_EXIT_ROLL = 5;
+          var foundExit = false;
+          for (var roll = 0; roll <= MAX_EXIT_ROLL && !foundExit; roll++) {
+            exitDate = roll === 0 ? plannedExitDate : CALENDAR.getTradingDay(plannedExitDate, roll);
+            if (!exitDate) break;
 
+            exitBar = getForwardKline(klineIdx, code, exitDate);
+            if (!exitBar || !exitBar.close || exitBar.close <= 0) continue;
+
+            var exitTradeCheck = checkTradeable(klineIdx, code, exitDate);
+            if (!exitTradeCheck.tradeable && exitTradeCheck.reason === 'suspended') continue;
+            if (!exitTradeCheck.tradeable && exitTradeCheck.reason === 'limit_down') continue;
+            // limit_up is OK: can sell at limit-up
+            // no_data: continue rolling
+
+            foundExit = true;
+            exitDelayDays = roll;
+            actualExitDate = exitDate;
+            exitPrice = exitBar.close;
+            if (roll > 0) {
+              exitStatus = 'delayed';
+              failedExitReason = 'rolled_' + roll + 'd_planned_' + plannedExitDate;
+            }
+            if (roll === 0 && !exitTradeCheck.tradeable) {
+              // Shouldn't happen with above logic, but safety
+              exitStatus = 'delayed';
+            }
+          }
+
+          if (!foundExit) {
+            forwardStatus = 'unavailable';
+            targetStatus = 'unavailable';
+            unavailableReason = 'exit_blocked_' + MAX_EXIT_ROLL + 'd';
+            exitDelayDays = null;
+            failedExitReason = 'exit_blocked_after_' + MAX_EXIT_ROLL + 'd_roll_from_' + plannedExitDate;
+            actualExitDate = null;
+            exitDate = null;
+          }
+        }
+
+        if (exitDate && exitPrice) {
           // Step 4: Compute returns
           forwardReturn = Math.round((exitPrice / entryPrice - 1) * 100 * 100) / 100;
 
-          // Step 5: Benchmark — same T+1 open → T+4 close
+          // Step 5: Benchmark — same T+1 open → T+4 close (use actual exit date)
           var bmEntryBar = getIndexNextBar('sh000001', asOfDate);
           var bmEntryPrice = null;
           if (bmEntryBar) {
@@ -530,7 +573,12 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
       // P0-1: Unified label convention fields
       labelConvention: LABEL_CONVENTION,
       entryDate: entryDate,
-      exitDate: exitDate,
+      exitDate: exitDate,           // actual exit date (may differ from planned)
+      plannedExitDate: plannedExitDate || null,
+      actualExitDate: actualExitDate || null,
+      exitDelayDays: exitDelayDays,
+      exitStatus: exitStatus,       // normal | delayed | failed
+      failedExitReason: failedExitReason,
       entryPrice: entryPrice,
       exitPrice: exitPrice,
       targetDateT3: exitDate,  // legacy name kept for compat, now equals exitDate (T+4)

@@ -1,27 +1,22 @@
 /**
- * P0-3: Baseline Models v3 — Block Bootstrap Portfolio Statistics
+ * P0-3: Baseline Models v3 — Deterministic Random-Portfolio Monte Carlo
  *
  * Three baselines, all rule-based:
  *   A — Composite (rule-based, uses all dimensions — note: most are fake data)
  *   B — Simple 20-day Momentum (price-only, technical)
  *   C — Technical-Only (technical+hidden, 100% real PIT data)
  *
- * P0-3 upgrades:
+ * P0-3 / P0.2 upgrades:
  *   — NO daily p-value averaging. NO significantFraction.
- *   — Full time-series portfolio returns compared against daily-matched random
- *     using fixed-seed block bootstrap (≥1000 samples).
- *   — Portfolio-level outputs: avg daily excess, cumulative NAV, 95% CI,
- *     two-sided p-value, independent trading days, coverage, turnover, max drawdown.
- *   — "Significant" or "better than random" labels ONLY when repaired portfolio
- *     statistics pass the threshold, and never from per-date aggregates.
- *
- * Random baseline:
- *   — Fixed seed xorshift (seed=42)
- *   — Block bootstrap: for each bootstrap iteration, for each trading day,
- *     draw a random Top-N from that day's universe, simulate through
- *     trade_simulator, collect time-series portfolio returns.
- *   — The distribution of cumulative returns across bootstrap iterations
- *     gives the confidence interval and p-value.
+ *   — Random baseline: deterministic random-portfolio Monte Carlo (NOT block bootstrap).
+ *     For each Monte Carlo iteration, for each trading day, draw a random Top-N from
+ *     that day's universe, simulate through trade_simulator, collect returns.
+ *   — Fixed seed xorshift (seed=42), deterministic and reproducible.
+ *   — Two-sided empirical p-value with Laplace smoothing: (extremeCount + 1) / (samples + 1)
+ *   — Model-minus-random paired delta CI from the Monte Carlo distribution.
+ *   — Calibration prediction key: asOfDate + code (not code alone).
+ *   — "Significant" or "better than random" labels ONLY when full time-series
+ *     comparison passes the threshold, and never from per-date aggregates.
  */
 
 var CALENDAR = require('./universal_calendar');
@@ -30,8 +25,10 @@ var SIMULATOR = require('./trade_simulator');
 
 var ROUND_TRIP_COST_PCT = SIMULATOR.ROUND_TRIP_COST_PCT;
 var HOLD_DAYS = SIMULATOR.HOLD_DAYS || 3;
-var TOP_N = 50;
-var BOOTSTRAP_SAMPLES = 1000;
+var TOP_N = SIMULATOR.TOP_N_PER_COHORT || 50;
+var MAX_POSITIONS_PER_SLEEVE = SIMULATOR.MAX_POSITIONS_PER_SLEEVE || 17;
+var MAX_CONCURRENT_POSITIONS = SIMULATOR.MAX_CONCURRENT_POSITIONS || 150;
+var MONTE_CARLO_SAMPLES = 1000;
 var RANDOM_SEED = 42;
 
 // ---- XorShift PRNG (fixed seed, reproducible) ----
@@ -181,12 +178,13 @@ function buildDailyRankings(modelName, snapshotsByDate, prev20MapByDate) {
 }
 
 /**
- * Block bootstrap: for each bootstrap iteration, for each trading day,
+ * Deterministic random-portfolio Monte Carlo: for each iteration, for each trading day,
  * draw a random Top-N from that day's universe, then simulate.
  * Collects the portfolio-level metrics across iterations.
+ * NOT block bootstrap — no time-block resampling. Uses fixed seed for reproducibility.
  */
-function runBlockBootstrap(snapshotsByDate, klineIdx, numSamples) {
-  numSamples = numSamples || BOOTSTRAP_SAMPLES;
+function runRandomPortfolioMonteCarlo(snapshotsByDate, klineIdx, numSamples) {
+  numSamples = numSamples || MONTE_CARLO_SAMPLES;
   var dates = Object.keys(snapshotsByDate).sort();
   if (dates.length === 0) return { error: 'no_dates' };
 
@@ -228,6 +226,7 @@ function runBlockBootstrap(snapshotsByDate, klineIdx, numSamples) {
         klineIdx: klineIdx,
         holdDays: HOLD_DAYS,
         topN: TOP_N,
+        maxPositionsPerSleeve: MAX_POSITIONS_PER_SLEEVE,
       });
 
       if (simResult.error) continue;
@@ -248,7 +247,7 @@ function runBlockBootstrap(snapshotsByDate, klineIdx, numSamples) {
     }
 
     if ((s + 1) % 200 === 0) {
-      console.log('  Bootstrap: ' + (s + 1) + '/' + numSamples + ' iterations done');
+      console.log('  Monte Carlo: ' + (s + 1) + '/' + numSamples + ' iterations done');
     }
   }
 
@@ -303,54 +302,41 @@ function computeBootstrapDistribution(bootstrapResults) {
 }
 
 /**
- * Compare a model's portfolio result to the random bootstrap distribution.
- * Two-sided empirical p-value.
+ * Compare a model's portfolio result to the random Monte Carlo distribution.
+ * Two-sided empirical p-value with Laplace smoothing.
  */
-function compareToRandomPortfolio(modelResult, bootstrapDist) {
-  if (!modelResult || !bootstrapDist || bootstrapDist.samples === 0) {
+function compareToRandomPortfolio(modelResult, mcDist) {
+  if (!modelResult || !mcDist || mcDist.samples === 0) {
     return { delta: null, pValue: null, significant: false, note: 'insufficient_data' };
   }
 
-  var modelReturn = modelResult.grossReturn;
-  var delta = modelReturn != null && bootstrapDist.meanGrossReturn != null
-    ? Math.round((modelReturn - bootstrapDist.meanGrossReturn) * 100) / 100
+  var modelNetReturn = modelResult.netReturn;
+  var delta = modelNetReturn != null && mcDist.meanGrossReturn != null
+    ? Math.round((modelNetReturn - mcDist.meanGrossReturn) * 100) / 100
     : null;
 
-  // Two-sided empirical p-value:
-  // fraction of bootstrap returns whose absolute deviation from mean
-  // is >= the absolute deviation of the model return from the mean
-  var pValue = null;
-  if (modelReturn != null && bootstrapDist.samples > 0) {
-    var modelDeviation = Math.abs(modelReturn - bootstrapDist.meanGrossReturn);
-    var countExtreme = 0;
-    var allReturns = bootstrapDist.allReturns ||
-      []; // Need to pass allReturns in bootstrapDist for p-value
-    // Instead, we use the bootstrap raw results
-    // pValue will be computed in compareFullTimeSeries instead
-    pValue = null;
-  }
-
-  // For excess returns
-  var excessDelta = modelResult.costAdjustedExcess != null && bootstrapDist.meanNetExcess != null
-    ? Math.round((modelResult.costAdjustedExcess - bootstrapDist.meanNetExcess) * 100) / 100
+  // p-value computed in compareFullTimeSeries with full data
+  var excessDelta = modelResult.netExcessReturn != null && mcDist.meanNetExcess != null
+    ? Math.round((modelResult.netExcessReturn - mcDist.meanNetExcess) * 100) / 100
     : null;
 
   return {
     delta: delta,
     excessDelta: excessDelta,
-    pValue: pValue,
-    significant: false, // Must be computed via full time-series comparison
-    note: 'P0-3: p-value requires full time-series comparison. See compareFullTimeSeries().',
+    pValue: null,
+    significant: false,
+    note: 'P0.2: p-value requires full time-series comparison with Laplace smoothing. See compareFullTimeSeries().',
   };
 }
 
 /**
  * Full time-series portfolio comparison.
- * Runs model through simulator, then block bootstraps random,
- * computes two-sided empirical p-value.
+ * Runs model through simulator, then deterministic random-portfolio Monte Carlo,
+ * computes two-sided empirical p-value with Laplace smoothing.
+ * Also produces model-minus-random paired delta CI.
  */
-function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klineIdx, bootstrapSamples) {
-  bootstrapSamples = bootstrapSamples || BOOTSTRAP_SAMPLES;
+function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klineIdx, mcSamples) {
+  mcSamples = mcSamples || MONTE_CARLO_SAMPLES;
   var dates = Object.keys(snapshotsByDate).sort();
 
   console.log('Building ' + modelName + ' daily rankings for ' + dates.length + ' dates...');
@@ -365,63 +351,79 @@ function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klin
     klineIdx: klineIdx,
     holdDays: HOLD_DAYS,
     topN: TOP_N,
+    maxPositionsPerSleeve: MAX_POSITIONS_PER_SLEEVE,
   });
 
   if (modelResult.error) {
     return { error: modelResult.error, model: modelName };
   }
 
-  console.log('Running block bootstrap (' + bootstrapSamples + ' samples) for random baseline...');
-  var bootstrapResults = runBlockBootstrap(snapshotsByDate, klineIdx, bootstrapSamples);
+  console.log('Running random-portfolio Monte Carlo (' + mcSamples + ' samples)...');
+  var mcResults = runRandomPortfolioMonteCarlo(snapshotsByDate, klineIdx, mcSamples);
 
-  if (bootstrapResults.error) {
-    return { error: bootstrapResults.error, model: modelName, modelResult: modelResult };
+  if (mcResults.error) {
+    return { error: mcResults.error, model: modelName, modelResult: modelResult };
   }
 
-  var bootstrapDist = computeBootstrapDistribution(bootstrapResults);
+  var mcDist = computeBootstrapDistribution(mcResults);
 
-  // Two-sided empirical p-value:
-  // Fraction of bootstrap gross returns whose absolute deviation from the bootstrap mean
-  // is >= the absolute deviation of the model return from the bootstrap mean.
-  var modelReturn = modelResult.grossReturn;
-  var bsMean = bootstrapDist.meanGrossReturn;
-  var modelDeviation = Math.abs(modelReturn - bsMean);
+  // Two-sided empirical p-value with Laplace smoothing: p = (extremeCount + 1) / (samples + 1)
+  // This avoids p=0 which misleads when sample count is finite.
+  var modelNetReturn = modelResult.netReturn;
+  var mcMeanNet = mcDist.meanGrossReturn; // mean of random portfolio net returns
+  var modelDeviation = Math.abs(modelNetReturn - mcMeanNet);
   var countExtreme = 0;
-  for (var i = 0; i < bootstrapResults.grossReturns.length; i++) {
-    var bsDeviation = Math.abs(bootstrapResults.grossReturns[i] - bsMean);
-    if (bsDeviation >= modelDeviation) countExtreme++;
+  for (var i = 0; i < mcResults.grossReturns.length; i++) {
+    var mcDeviation = Math.abs(mcResults.grossReturns[i] - mcMeanNet);
+    if (mcDeviation >= modelDeviation) countExtreme++;
   }
-  var pValue = bootstrapResults.grossReturns.length > 0
-    ? Math.round(countExtreme / bootstrapResults.grossReturns.length * 10000) / 10000
+  var nSamples = mcResults.grossReturns.length;
+  var pValue = nSamples > 0
+    ? Math.round((countExtreme + 1) / (nSamples + 1) * 10000) / 10000
     : null;
 
   var significant = pValue != null && pValue < 0.05;
 
+  // Paired delta CI: for each MC iteration, compute modelReturn - that iteration's return
+  // This gives the distribution of model-minus-random differences.
+  var deltas = [];
+  for (var d = 0; d < mcResults.grossReturns.length; d++) {
+    deltas.push(modelNetReturn - mcResults.grossReturns[d]);
+  }
+  deltas.sort(function (a, b) { return a - b; });
+  var dl = deltas.length;
+  var pairedDeltaCI95_lower = dl > 0 ? deltas[Math.max(0, Math.floor(dl * 0.025))] : null;
+  var pairedDeltaCI95_upper = dl > 0 ? deltas[Math.min(dl - 1, Math.floor(dl * 0.975))] : null;
+  var pairedDeltaMean = dl > 0 ? Math.round(deltas.reduce(function (s, v) { return s + v; }, 0) / dl * 100) / 100 : null;
+
   // Excess return p-value
   var excessPValue = null;
-  if (modelResult.costAdjustedExcess != null && bootstrapDist.meanNetExcess != null) {
-    var excessModelDev = Math.abs(modelResult.costAdjustedExcess - bootstrapDist.meanNetExcess);
+  if (modelResult.netExcessReturn != null && mcDist.meanNetExcess != null) {
+    var excessModelDev = Math.abs(modelResult.netExcessReturn - mcDist.meanNetExcess);
     var excessCountExtreme = 0;
-    for (var j = 0; j < bootstrapResults.netExcessReturns.length; j++) {
-      var bsExcessDev = Math.abs(bootstrapResults.netExcessReturns[j] - bootstrapDist.meanNetExcess);
-      if (bsExcessDev >= excessModelDev) excessCountExtreme++;
+    for (var j = 0; j < mcResults.netExcessReturns.length; j++) {
+      var mcExcessDev = Math.abs(mcResults.netExcessReturns[j] - mcDist.meanNetExcess);
+      if (mcExcessDev >= excessModelDev) excessCountExtreme++;
     }
-    excessPValue = bootstrapResults.netExcessReturns.length > 0
-      ? Math.round(excessCountExtreme / bootstrapResults.netExcessReturns.length * 10000) / 10000
+    var nExcess = mcResults.netExcessReturns.length;
+    excessPValue = nExcess > 0
+      ? Math.round((excessCountExtreme + 1) / (nExcess + 1) * 10000) / 10000
       : null;
   }
 
-  var excessDelta = modelResult.costAdjustedExcess != null && bootstrapDist.meanNetExcess != null
-    ? Math.round((modelResult.costAdjustedExcess - bootstrapDist.meanNetExcess) * 100) / 100
+  var excessDelta = modelResult.netExcessReturn != null && mcDist.meanNetExcess != null
+    ? Math.round((modelResult.netExcessReturn - mcDist.meanNetExcess) * 100) / 100
     : null;
 
   return {
     model: modelName,
     independentTradingDays: dates.length,
-    bootstrapSamples: bootstrapDist.samples,
+    monteCarloSamples: mcDist.samples,
     modelPortfolio: {
+      netReturn: modelResult.netReturn,
       grossReturn: modelResult.grossReturn,
-      netExcessReturn: modelResult.costAdjustedExcess,
+      benchmarkReturn: modelResult.benchmarkReturn,
+      netExcessReturn: modelResult.netExcessReturn,
       maxDrawdownBps: modelResult.maxDrawdown,
       sharpeRatio: modelResult.sharpeRatio,
       coverageRate: modelResult.coverageRate,
@@ -430,29 +432,35 @@ function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klin
       firstDate: modelResult.firstDate,
       lastDate: modelResult.lastDate,
     },
-    randomBootstrap: {
-      meanGrossReturn: bootstrapDist.meanGrossReturn,
-      medianGrossReturn: bootstrapDist.medianGrossReturn,
-      stdDevGrossReturn: bootstrapDist.stdDev,
-      ci95_grossReturn_lower: bootstrapDist.ci95_lower,
-      ci95_grossReturn_upper: bootstrapDist.ci95_upper,
-      meanNetExcessReturn: bootstrapDist.meanNetExcess,
-      ci95_excess_lower: bootstrapDist.excessCI95_lower,
-      ci95_excess_upper: bootstrapDist.excessCI95_upper,
-      meanMaxDrawdownBps: bootstrapDist.meanMaxDrawdown,
-      avgCoverage: bootstrapDist.avgCoverage,
+    randomMonteCarlo: {
+      method: 'deterministic_random_portfolio_monte_carlo',
+      meanNetReturn: mcDist.meanGrossReturn,
+      medianNetReturn: mcDist.medianGrossReturn,
+      stdDevNetReturn: mcDist.stdDev,
+      ci95_netReturn_lower: mcDist.ci95_lower,
+      ci95_netReturn_upper: mcDist.ci95_upper,
+      meanNetExcessReturn: mcDist.meanNetExcess,
+      ci95_excess_lower: mcDist.excessCI95_lower,
+      ci95_excess_upper: mcDist.excessCI95_upper,
+      meanMaxDrawdownBps: mcDist.meanMaxDrawdown,
+      avgCoverage: mcDist.avgCoverage,
+      pairedDelta_ci95_lower: pairedDeltaCI95_lower != null ? Math.round(pairedDeltaCI95_lower * 100) / 100 : null,
+      pairedDelta_ci95_upper: pairedDeltaCI95_upper != null ? Math.round(pairedDeltaCI95_upper * 100) / 100 : null,
+      pairedDelta_mean: pairedDeltaMean,
     },
     comparison: {
-      grossReturnDelta: Math.round((modelResult.grossReturn - bootstrapDist.meanGrossReturn) * 100) / 100,
+      netReturnDelta: Math.round((modelNetReturn - mcMeanNet) * 100) / 100,
       netExcessDelta: excessDelta,
-      pValue_gross: pValue,
+      pValue_net: pValue,
       pValue_excess: excessPValue,
       significant: significant,
       verdict: significant
-        ? ('Model gross return is significantly different from random (p=' + pValue + ', two-sided)')
-        : ('Model gross return is NOT significantly different from random (p=' + pValue + ', two-sided)'),
+        ? ('Model net return is significantly different from random (p=' + pValue + ', two-sided, Laplace-smoothed)')
+        : ('Model net return is NOT significantly different from random (p=' + pValue + ', two-sided, Laplace-smoothed)'),
     },
     navSeries: modelResult.navSeries,
+    grossNavSeries: modelResult.grossNavSeries,
+    benchmarkNavSeries: modelResult.benchmarkNavSeries,
     trades: modelResult.trades,
   };
 }
@@ -461,7 +469,10 @@ function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klin
 // Per-date metrics (for backwards compat and Rank IC computation)
 // =====================================================================
 
-function computeMetrics(ranked, snapMap) {
+function computeMetrics(ranked, snapMap, asOfDate) {
+  // P0.2: Calibration key is asOfDate + code, not code alone.
+  // This prevents same-code on different dates from being treated as the same observation.
+  var prefix = asOfDate ? asOfDate + '|' : '';
   var returns = [];
   var excessReturns = [];
   var wins = 0;
@@ -469,7 +480,8 @@ function computeMetrics(ranked, snapMap) {
   var unavailable = 0;
 
   for (var i = 0; i < ranked.length; i++) {
-    var s = snapMap[ranked[i].code];
+    var key = prefix + ranked[i].code;
+    var s = snapMap[key] || snapMap[ranked[i].code]; // fallback to code-only for compat
     if (!s) { unavailable++; continue; }
     if (s.forwardStatus === 'settled' && s.forwardReturnT3 != null) {
       returns.push(s.forwardReturnT3);
@@ -515,9 +527,10 @@ function compareAllModels(snapMap, snapshots, prev20SnapMap) {
   var techRanked = TECH.rankByTechnicalOnly(snapshots);
   var momRanked = rankByMomentum(snapshots, prev20SnapMap);
 
-  var compMetrics = computeMetrics(compRanked, snapMap);
-  var techMetrics = computeMetrics(techRanked, snapMap);
-  var momMetrics = computeMetrics(momRanked, snapMap);
+  var asOfDate = snapshots.length > 0 ? snapshots[0].asOfDate : null;
+  var compMetrics = computeMetrics(compRanked, snapMap, asOfDate);
+  var techMetrics = computeMetrics(techRanked, snapMap, asOfDate);
+  var momMetrics = computeMetrics(momRanked, snapMap, asOfDate);
 
   var compVsTech = TECH.compareToComposite(techRanked, compRanked);
 
@@ -573,8 +586,8 @@ if (require.main === module) {
 module.exports = {
   rankByComposite, rankByMomentum, rankByRandom,
   computeMetrics, compareAllModels,
-  buildDailyRankings, runBlockBootstrap, computeBootstrapDistribution,
+  buildDailyRankings, runRandomPortfolioMonteCarlo, computeBootstrapDistribution,
   compareToRandomPortfolio, compareFullTimeSeries,
   kendallTauB, createRNG,
-  ROUND_TRIP_COST_PCT, BOOTSTRAP_SAMPLES, TOP_N, RANDOM_SEED,
+  ROUND_TRIP_COST_PCT, MONTE_CARLO_SAMPLES, TOP_N, RANDOM_SEED,
 };

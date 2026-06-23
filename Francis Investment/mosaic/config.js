@@ -521,6 +521,15 @@ module.exports = {
   // ---- v3.3.0: Stop-Loss Cooldown ----
   STOP_LOSS_COOLDOWN_DAYS: 4,                       // 止损后 4 个交易日内不买回同一只股票
 
+  // ---- Research Portfolio Capacity (v3.4.9.7 P0.2) ----
+  RESEARCH_PORTFOLIO: {
+    topNPerCohort: 50,                   // Top-N candidates per daily cohort
+    numSleeves: 3,                       // Equal-weight sleeves for overlapping cohorts
+    maxPositionsPerSleeve: 17,           // Max positions per sleeve (ceiling of 50/3)
+    maxConcurrentPositions: 150,         // Upper bound: topNPerCohort × numSleeves
+    holdDays: 3,                         // Trading days from entry to exit
+  },
+
   // ---- v3.3.1: Walk-Forward Validation (Out-of-Sample) ----
   WALK_FORWARD: {
     enabled: true,

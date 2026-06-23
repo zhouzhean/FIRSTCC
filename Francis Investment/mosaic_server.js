@@ -1255,13 +1255,19 @@ function buildChangeLog() {
   ];
 }
 
-// P1-UI: Research Lab data builder
+// P1-UI: Research Lab data builder (v3.4.9.7 P0.2)
 function buildResearchLabData() {
   var data = {
     status: 'loading',
     labelConvention: 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold',
     simulatorDesign: '3-sleeve equal-weight overlapping cohorts',
-    statisticsMethod: 'block bootstrap portfolio comparison (no daily p-value averaging)',
+    statisticsMethod: 'Deterministic random-portfolio Monte Carlo (Laplace-smoothed p-value, paired delta CI)',
+    portfolioCapacity: {
+      topNPerCohort: 50,
+      numSleeves: 3,
+      maxPositionsPerSleeve: 17,
+      maxConcurrentPositions: 150,
+    },
     universe: {
       type: 'current-file',
       stableStart: null,
@@ -1269,7 +1275,8 @@ function buildResearchLabData() {
       realFeatures: ['technical', 'hidden'],
       unavailableFeatures: ['financial', 'capitalFlow', 'event'],
     },
-    p0Status: 'pending', // pending | pass | unknown
+    p0Status: 'pending',    // pending | fixtures_pass | data_rebuilt | unknown
+    p0DataRegenerated: false,
     p1Model: null,
     validWindows: 0,
     latestWindow: null,
@@ -1305,8 +1312,8 @@ function buildResearchLabData() {
     data.warning = 'Cannot run P0 simulator fixtures. Research results unverified.';
   }
 
-  // Check if P0-1 snapshot regeneration happened
-  // Check if any snapshots have the new labelConvention field
+  // Check if P0-1/P0.2 snapshot regeneration happened
+  // Must have labelConvention AND exitDelayDays (exit tradability check)
   try {
     var path = require('path');
     var fs = require('fs');
@@ -1317,11 +1324,14 @@ function buildResearchLabData() {
         var latestFile = files[files.length - 1];
         var firstLine = fs.readFileSync(path.join(snapDir, latestFile), 'utf8').split('\n')[0];
         var sample = JSON.parse(firstLine);
-        if (sample.labelConvention) {
+        if (sample.labelConvention && sample.exitDelayDays !== undefined) {
           data.p0DataRegenerated = true;
+        } else if (sample.labelConvention) {
+          data.p0DataRegenerated = false;
+          data.warning = (data.warning || '') + ' Snapshots have P0-1 label but not P0.2 exit tradability. Regenerate required.';
         } else {
           data.p0DataRegenerated = false;
-          data.warning = (data.warning || '') + ' Snapshots not yet regenerated with P0-1 label convention.';
+          data.warning = (data.warning || '') + ' Snapshots not yet regenerated with P0-1/P0.2 conventions.';
         }
       }
     }
@@ -1346,6 +1356,7 @@ function buildResearchLabData() {
             lambda: latest.model ? latest.model.lambda : null,
             testMSE: latest.metrics ? latest.metrics.testMSE : null,
             avgRankIC: latest.metrics ? latest.metrics.avgRankIC : null,
+            portfolioNetReturn: latest.portfolio ? latest.portfolio.netReturn : null,
             portfolioGrossReturn: latest.portfolio ? latest.portfolio.grossReturn : null,
             portfolioNetExcess: latest.portfolio ? latest.portfolio.netExcessReturn : null,
             directionAccuracy: latest.metrics ? latest.metrics.directionAccuracy : null,
@@ -1379,16 +1390,20 @@ function buildResearchLabData() {
       var oos = JSON.parse(fs.readFileSync(oosPath, 'utf8'));
       if (oos.windows && oos.windows.length > 0) {
         data.oosWindows = oos.windows.length;
-        // Extract random CI from first window with comparison data
+        // Extract random CI from first window with Monte Carlo comparison data
         for (var i = 0; i < oos.windows.length; i++) {
           var w = oos.windows[i];
-          if (w.models && w.models.technicalOnly && w.models.technicalOnly.randomBootstrap) {
-            var rb = w.models.technicalOnly.randomBootstrap;
+          if (w.models && w.models.technicalOnly && w.models.technicalOnly.randomMonteCarlo) {
+            var rm = w.models.technicalOnly.randomMonteCarlo;
             data.randomCI = {
-              ci95_lower: rb.ci95_grossReturn_lower,
-              ci95_upper: rb.ci95_grossReturn_upper,
-              mean: rb.meanGrossReturn,
-              samples: w.models.technicalOnly.bootstrapSamples,
+              method: rm.method || 'random_portfolio_monte_carlo',
+              ci95_lower: rm.ci95_netReturn_lower,
+              ci95_upper: rm.ci95_netReturn_upper,
+              mean: rm.meanNetReturn,
+              pairedDelta_ci95_lower: rm.pairedDelta_ci95_lower,
+              pairedDelta_ci95_upper: rm.pairedDelta_ci95_upper,
+              pairedDelta_mean: rm.pairedDelta_mean,
+              samples: w.models.technicalOnly.monteCarloSamples,
             };
             break;
           }
@@ -1397,13 +1412,17 @@ function buildResearchLabData() {
     }
   } catch (_) {}
 
-  // Determine overall status
-  if (data.p0Status === 'pass' && data.p0DataRegenerated && data.validWindows > 0) {
+  // Determine overall status (P0.2: yellow until data rebuilt)
+  if (data.p0Status === 'pass' && data.p0DataRegenerated && data.validWindows > 0 && data.dataHash) {
     data.status = 'operational';
-    data.statusLabel = 'Research Operational — P0 verified, P1 model evaluated';
+    data.statusLabel = 'Research Operational — P0.2 verified, data rebuilt, P1 model evaluated';
+  } else if (data.p0Status === 'pass' && data.p0DataRegenerated) {
+    data.status = 'p0_verified';
+    data.statusLabel = 'P0.2 Verified — Data rebuilt, run OOS + walk-forward evaluations';
   } else if (data.p0Status === 'pass') {
     data.status = 'p0_verified';
-    data.statusLabel = 'P0 Verified — Data/simulator OK, regenerate snapshots + run evaluations';
+    data.statusLabel = 'P0.2 Code fixtures passed — Historical data not yet rebuilt with P0.2 conventions';
+    data.warning = (data.warning || 'Code fixtures pass, but snapshot/OOS/model outputs must be regenerated before interpreting any returns, CI, or calibration.');
   } else {
     data.status = 'invalid';
     data.statusLabel = 'Research results NOT interpretable — simulator/statistics repair pending';
@@ -1428,7 +1447,7 @@ function printBanner() {
   const sState = scheduler ? scheduler.getStatus().state : 'stopped';
   console.log();
   console.log('  ╔══════════════════════════════════════════════════════╗');
-  console.log('  ║     Francis Investment · Mosaic Server  v3.4.5       ║');
+  console.log('  ║     Francis Investment · Mosaic Server  v3.4.9.7     ║');
   console.log('  ╠══════════════════════════════════════════════════════╣');
   console.log('  ║  ' + today.toISOString().slice(0, 10) + ' ' + getWeekdayCN(today) + '  |  ' + (trading ? '[交易日]' : '[休市]') + '  |  ' + sState.padEnd(18) + '║');
   console.log('  ║  http://localhost:' + PORT + '                                ║');

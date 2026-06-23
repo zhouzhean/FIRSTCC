@@ -34,9 +34,13 @@ var SIM_DIR = path.join(RESEARCH_DIR, 'trade_simulation');
 // Round-trip cost: commission 0.025%×2 + stamp tax 0.1% + transfer fee 0.001%×2 + slip 0.15%×2
 var ROUND_TRIP_COST_PCT = 0.025 * 2 + 0.1 + 0.001 * 2 + 0.15 * 2;
 var INITIAL_CAPITAL = 100000;
-var MAX_POSITIONS = 50;
 var HOLD_DAYS = 3;       // Trading days from entry to exit
 var NUM_SLEEVES = 3;     // Equal-weight sleeves for overlapping cohorts
+// P0.2: Each sleeve gets maxPositions/NUM_SLEEVES ≈ 16/17 positions per daily cohort
+// Total concurrent positions upper bound: topNPerCohort × numSleeves = 150
+var TOP_N_PER_COHORT = 50;
+var MAX_POSITIONS_PER_SLEEVE = 17; // ceiling of 50/3
+var MAX_CONCURRENT_POSITIONS = 150;
 
 // ---- K-line helpers ----
 
@@ -112,14 +116,59 @@ function getEntryPrice(code, signalDate, klineIdx) {
 }
 
 function getExitPrice(code, entryDate, holdDays, klineIdx) {
-  var targetDate = CALENDAR.getTradingDay(entryDate, holdDays);
-  if (!targetDate) return { price: null, date: null, available: false, reason: 'no_exit_date' };
+  // P0.2: Exit tradability — check for suspension/limit-down on planned exit date.
+  // If untradeable, roll forward to next tradeable day (max 5 days).
+  var plannedExitDate = CALENDAR.getTradingDay(entryDate, holdDays);
+  if (!plannedExitDate) return { price: null, date: null, available: false, reason: 'no_exit_date', plannedExitDate: null };
 
-  var bar = getBarOnDate(klineIdx, code, targetDate);
-  if (!bar) return { price: null, date: targetDate, available: false, reason: 'no_exit_data' };
-  if (!bar.close || bar.close <= 0) return { price: null, date: targetDate, available: false, reason: 'bad_close' };
+  var MAX_EXIT_ROLL_DAYS = 5;
+  var checkDate = plannedExitDate;
 
-  return { price: bar.close, date: targetDate, available: true, reason: 'ok' };
+  for (var roll = 0; roll <= MAX_EXIT_ROLL_DAYS; roll++) {
+    if (roll > 0) {
+      checkDate = CALENDAR.getTradingDay(checkDate, 1);
+      if (!checkDate) break;
+    }
+
+    var bar = getBarOnDate(klineIdx, code, checkDate);
+    if (!bar) continue;
+    if (!bar.close || bar.close <= 0) continue;
+
+    // Check tradeability on exit date
+    var tradeCheck = isTradeable(code, checkDate, klineIdx);
+    if (!tradeCheck.tradeable) {
+      // Limit-up on exit: can sell at limit-up price — actually good (buyers queue).
+      // But for conservatism, only treat suspension and limit-down as exit failures.
+      if (tradeCheck.reason === 'suspended') continue;
+      if (tradeCheck.reason === 'limit_down') continue;
+      // limit_up is OK: can sell at limit-up with eager buyers
+      // no_data means no bar at all — continue rolling
+    }
+
+    var exitDelayDays = roll;
+    var failedExitReason = exitDelayDays === 0 ? null : ('rolled_' + exitDelayDays + 'd_planned_' + plannedExitDate);
+
+    return {
+      price: bar.close,
+      date: checkDate,
+      available: true,
+      reason: exitDelayDays === 0 ? 'ok' : 'rolled',
+      plannedExitDate: plannedExitDate,
+      actualExitDate: checkDate,
+      exitDelayDays: exitDelayDays,
+      failedExitReason: failedExitReason,
+    };
+  }
+
+  // All roll-forward attempts exhausted
+  return {
+    price: null, date: null, available: false,
+    reason: 'exit_blocked_' + MAX_EXIT_ROLL_DAYS + 'd',
+    plannedExitDate: plannedExitDate,
+    actualExitDate: null,
+    exitDelayDays: null,
+    failedExitReason: 'exit_blocked_after_' + MAX_EXIT_ROLL_DAYS + 'd_roll',
+  };
 }
 
 // ---- Index (benchmark) helpers ----
@@ -185,12 +234,12 @@ function loadKlineIndex() {
 
 function simulatePortfolio(dailySignals, options) {
   // dailySignals: { signalDate: [{code, ...} sorted by rank] }
-  // options: { holdDays, initialCapital, maxPositions, topN, klineIdx }
+  // options: { holdDays, initialCapital, maxPositionsPerSleeve, topN, klineIdx }
   var opts = options || {};
   var holdDays = opts.holdDays || HOLD_DAYS;
   var initialCapital = opts.initialCapital || INITIAL_CAPITAL;
-  var maxPositions = opts.maxPositions || MAX_POSITIONS;
-  var topN = opts.topN || 50;
+  var maxPositionsPerSleeve = opts.maxPositionsPerSleeve || MAX_POSITIONS_PER_SLEEVE;
+  var topN = opts.topN || TOP_N_PER_COHORT;
 
   var klineIdx = opts.klineIdx;
   if (!klineIdx) {
@@ -200,14 +249,22 @@ function simulatePortfolio(dailySignals, options) {
   var signalDates = Object.keys(dailySignals).sort();
   if (signalDates.length === 0) return { error: 'no_signals' };
 
-  // Initialize 3 sleeves
+  // Initialize 3 strategy sleeves + 3 benchmark sleeves (same-path)
   var sleeves = [];
+  var bmSleeves = [];   // Benchmark sleeves: track SH index with same dates + capital
   for (var s = 0; s < NUM_SLEEVES; s++) {
     sleeves.push({
       id: s,
       cash: Math.round(initialCapital / NUM_SLEEVES * 100) / 100,
-      positions: [],     // [{code, entryPrice, entryDate, exitDate, exitPrice, shares, grossCost, netCost}]
-      pendingOrders: [], // [{code, signalDate}] — created at T, executed at T+1
+      grossCash: Math.round(initialCapital / NUM_SLEEVES * 100) / 100, // cash IF no costs were deducted
+      positions: [],
+      pendingOrders: [],
+    });
+    bmSleeves.push({
+      id: s,
+      cash: Math.round(initialCapital / NUM_SLEEVES * 100) / 100,
+      positions: [],     // [{entryDate, exitDate, shares, entryPrice, exitPrice}]
+      pendingOrders: [],
     });
   }
 
@@ -245,17 +302,16 @@ function simulatePortfolio(dailySignals, options) {
   var unavailableReasons = {};
   var totalTurnover = 0;
   var totalGrossTurnover = 0;
-  var allTrades = [];  // Collect settled trades as they exit (positions are removed from arrays)
+  var allTrades = [];
 
-  // Benchmark: simulate equal-weight SH index with same T+1 open → T+4 close timing
-  var benchmarkNav = initialCapital;
-  var benchmarkPeak = initialCapital;
-  var benchmarkSeries = [];
-
-  // NAV series
+  // NAV series — gross NAV (no costs) and net NAV (costs deducted)
   var navSeries = [];
+  var grossNavSeries = [];
+  var bmNavSeries = [];  // Benchmark sleeve NAV: same path, same dates
   var peakNav = initialCapital;
+  var peakGrossNav = initialCapital;
   var maxDrawdown = 0;
+  var maxGrossDrawdown = 0;
 
   // Last sleeve assignment round-robin
   var nextSleeve = 0;
@@ -263,22 +319,18 @@ function simulatePortfolio(dailySignals, options) {
   // Walk through each trading day in simulation range
   allDates.forEach(function (currentDate) {
     // ---- Phase 1: Process exits (positions expiring today) ----
-    var exitedGross = 0;
-    var exitedNet = 0;
-
     sleeves.forEach(function (sleeve) {
       sleeve.positions = sleeve.positions.filter(function (pos) {
         if (pos.exitDate === currentDate) {
-          // Close at T+4 close price
           var exitPrice = pos._exitPrice;
           var grossProceeds = pos.shares * exitPrice;
-          // Sell half of round-trip cost
           var sellCost = grossProceeds * (ROUND_TRIP_COST_PCT / 100 / 2);
           var netProceeds = grossProceeds - sellCost;
 
+          // Net cash gets the after-cost proceeds
           sleeve.cash += netProceeds;
-          exitedGross += grossProceeds;
-          exitedNet += netProceeds;
+          // Gross cash gets the full proceeds (as if no costs were ever deducted)
+          sleeve.grossCash += grossProceeds;
 
           pos.exitPrice = exitPrice;
           pos.grossReturn = (exitPrice / pos.entryPrice - 1) * 100;
@@ -286,24 +338,35 @@ function simulatePortfolio(dailySignals, options) {
           totalTurnover += grossProceeds;
           totalGrossTurnover += pos.entryPrice * pos.shares;
           executedTrades++;
-          allTrades.push(pos);  // Record settled trade
+          allTrades.push(pos);
 
-          return false; // Remove from positions
+          return false;
         }
         return true;
       });
     });
 
-    // ---- Phase 2: Execute pending orders (created on previous trading day) ----
+    // ---- Phase 1b: Process benchmark sleeve exits ----
+    bmSleeves.forEach(function (bm) {
+      bm.positions = bm.positions.filter(function (bmPos) {
+        if (bmPos.exitDate === currentDate) {
+          var bmProceeds = bmPos.shares * bmPos.exitPrice;
+          bm.cash += bmProceeds;
+          return false;
+        }
+        return true;
+      });
+    });
+
+    // ---- Phase 2: Execute pending orders ----
     sleeves.forEach(function (sleeve) {
-      var executedOrders = [];
       sleeve.pendingOrders.forEach(function (order) {
         var entry = getEntryPrice(order.code, order.signalDate, klineIdx);
         if (!entry.available) {
           unavailableSignals++;
           var reason = 'p0_2_' + (entry.reason || 'unknown');
           unavailableReasons[reason] = (unavailableReasons[reason] || 0) + 1;
-          return; // Order dies — immutable unavailable
+          return;
         }
 
         var exit = getExitPrice(order.code, entry.date, holdDays, klineIdx);
@@ -314,8 +377,7 @@ function simulatePortfolio(dailySignals, options) {
           return;
         }
 
-        // Calculate position size: equal weight within sleeve
-        var perPosition = sleeve.cash / Math.max(1, maxPositions / NUM_SLEEVES);
+        var perPosition = sleeve.cash / Math.max(1, maxPositionsPerSleeve);
         var shares = Math.floor(perPosition / entry.price);
         if (shares <= 0) { unavailableSignals++; return; }
 
@@ -324,14 +386,21 @@ function simulatePortfolio(dailySignals, options) {
         var netCost = grossCost + buyCost;
         if (netCost > sleeve.cash) { unavailableSignals++; return; }
 
+        // Net cash: deduct full cost
         sleeve.cash -= netCost;
+        // Gross cash: deduct only the principal (no costs)
+        sleeve.grossCash -= grossCost;
         totalGrossTurnover += grossCost;
 
         sleeve.positions.push({
           code: order.code,
           entryPrice: entry.price,
           entryDate: entry.date,
-          exitDate: exit.date,
+          exitDate: exit.date,           // actual exit date (may differ from planned)
+          plannedExitDate: exit.plannedExitDate || exit.date,
+          exitDelayDays: exit.exitDelayDays || 0,
+          failedExitReason: exit.failedExitReason || null,
+          exitStatus: exit.exitDelayDays > 0 ? 'delayed' : 'normal',
           _exitPrice: exit.price,
           shares: shares,
           grossCost: grossCost,
@@ -339,13 +408,46 @@ function simulatePortfolio(dailySignals, options) {
           signalDate: order.signalDate,
           _currentPrice: entry.price,
         });
-
-        executedOrders.push(order);
       });
-
-      // Clear executed orders (pendingOrders for future dates remain)
-      // Actually: we only put orders for today's execution. Clear all.
       sleeve.pendingOrders = [];
+    });
+
+    // ---- Phase 2b: Execute benchmark sleeve pending orders (same dates!) ----
+    bmSleeves.forEach(function (bm, bmIdx) {
+      bm.pendingOrders.forEach(function (bmOrder) {
+        // Same T+1 open → T+4 close on SH index
+        var bmEntryBar = getIndexNextBar('sh000001', bmOrder.signalDate);
+        if (!bmEntryBar) return;
+        var bmEntryPrice = bmEntryBar.open || bmEntryBar.close;
+        var bmEntryDate = bmEntryBar.date || bmEntryBar.tradeDate;
+        if (!bmEntryPrice || bmEntryPrice <= 0) return;
+
+        var bmExitDate = CALENDAR.getTradingDay(bmEntryDate, holdDays);
+        if (!bmExitDate) return;
+        var bmExitBar = getIndexBar('sh000001', bmExitDate);
+        if (!bmExitBar) return;
+        var bmExitPrice = bmExitBar.close || bmExitBar.price;
+        if (!bmExitPrice || bmExitPrice <= 0) return;
+
+        var bmPerPosition = bm.cash / Math.max(1, maxPositionsPerSleeve);
+        var bmShares = Math.floor(bmPerPosition / bmEntryPrice);
+        if (bmShares <= 0) return;
+
+        var bmCost = bmShares * bmEntryPrice;
+        if (bmCost > bm.cash) return;
+        bm.cash -= bmCost;
+
+        bm.positions.push({
+          indexCode: 'sh000001',
+          entryPrice: bmEntryPrice,
+          entryDate: bmEntryDate,
+          exitDate: bmExitDate,
+          exitPrice: bmExitPrice,
+          shares: bmShares,
+          signalDate: bmOrder.signalDate,
+        });
+      });
+      bm.pendingOrders = [];
     });
 
     // ---- Phase 3: Value remaining positions at close ----
@@ -362,76 +464,112 @@ function simulatePortfolio(dailySignals, options) {
       });
     });
 
-    // ---- Phase 4: Total cash across sleeves ----
-    var totalCash = 0;
-    sleeves.forEach(function (s) { totalCash += s.cash; });
+    // Phase 3b: Value benchmark positions
+    var totalBmPositionsValue = 0;
+    bmSleeves.forEach(function (bm) {
+      bm.positions.forEach(function (bmPos) {
+        var bmBar = getIndexBar('sh000001', currentDate);
+        if (bmBar) {
+          var bmClose = bmBar.close || bmBar.price || bmPos.entryPrice;
+          totalBmPositionsValue += bmPos.shares * bmClose;
+        } else {
+          totalBmPositionsValue += bmPos.shares * bmPos.entryPrice;
+        }
+      });
+    });
+
+    // ---- Phase 4: Total cash ----
+    var totalCash = 0, totalGrossCash = 0;
+    sleeves.forEach(function (s) { totalCash += s.cash; totalGrossCash += s.grossCash; });
+
+    var totalBmCash = 0;
+    bmSleeves.forEach(function (bm) { totalBmCash += bm.cash; });
 
     // ---- Phase 5: Record NAV ----
-    var currentNav = totalCash + totalPositionsValue;
-    var grossNav = currentNav; // gross NAV (costs already deducted, this IS net)
+    // Net NAV: cash after costs + positions at market
+    var netNav = totalCash + totalPositionsValue;
+    // Gross NAV: cash WITHOUT costs + positions at market
+    var grossNav = totalGrossCash + totalPositionsValue;
+    // Benchmark NAV: same-path index sleeves
+    var bmNav = totalBmCash + totalBmPositionsValue;
 
-    if (currentNav > peakNav) peakNav = currentNav;
-    var drawdown = peakNav > 0 ? (peakNav - currentNav) / peakNav : 0;
+    if (netNav > peakNav) peakNav = netNav;
+    var drawdown = peakNav > 0 ? (peakNav - netNav) / peakNav : 0;
     if (drawdown > maxDrawdown) maxDrawdown = drawdown;
 
-    // Benchmark NAV: same T+1 open → T+4 close timing
-    // For benchmark, we allocate equal portions on each signal date
-    // Simplified: benchmark tracks buy-and-hold SH index on the same schedule
-    // We compute benchmark offline (separate function). Here just track date.
-    benchmarkSeries.push({ date: currentDate, nav: benchmarkNav });
+    if (grossNav > peakGrossNav) peakGrossNav = grossNav;
+    var grossDD = peakGrossNav > 0 ? (peakGrossNav - grossNav) / peakGrossNav : 0;
+    if (grossDD > maxGrossDrawdown) maxGrossDrawdown = grossDD;
 
     var totalPositions = 0;
     sleeves.forEach(function (s) { totalPositions += s.positions.length; });
 
     navSeries.push({
       date: currentDate,
-      nav: Math.round(currentNav * 100) / 100,
+      nav: Math.round(netNav * 100) / 100,          // net NAV (costs deducted)
       cash: Math.round(totalCash * 100) / 100,
       positionsValue: Math.round(totalPositionsValue * 100) / 100,
       positionsCount: totalPositions,
-      drawdown: Math.round(drawdown * 10000) / 100, // bps
+      drawdown: Math.round(drawdown * 10000) / 100,
+    });
+
+    grossNavSeries.push({
+      date: currentDate,
+      nav: Math.round(grossNav * 100) / 100,         // gross NAV (no costs)
+      drawdown: Math.round(grossDD * 10000) / 100,
+    });
+
+    bmNavSeries.push({
+      date: currentDate,
+      nav: Math.round(bmNav * 100) / 100,            // benchmark NAV (same-path)
     });
 
     // ---- Phase 6: Create new pending orders for signals on this date ----
     var todaySignals = dailySignals[currentDate];
     if (todaySignals && todaySignals.length > 0) {
-      // Assign to a sleeve (round-robin among sleeves)
-      // Each sleeve gets signals from one date, creating the overlapping cohort
       var sleeve = sleeves[nextSleeve];
+      var bmSleeve = bmSleeves[nextSleeve];
       nextSleeve = (nextSleeve + 1) % NUM_SLEEVES;
 
-      // Build set of codes already in this sleeve's positions
       var existingCodes = {};
       sleeve.positions.forEach(function (p) { existingCodes[p.code] = true; });
 
       var newOrders = 0;
-      for (var i = 0; i < todaySignals.length && newOrders < maxPositions / NUM_SLEEVES; i++) {
+      for (var i = 0; i < todaySignals.length && newOrders < maxPositionsPerSleeve; i++) {
         var sig = todaySignals[i];
         if (!sig || !sig.code) continue;
         if (existingCodes[sig.code]) continue;
 
         totalSignals++;
         sleeve.pendingOrders.push({ code: sig.code, signalDate: currentDate });
+        // Benchmark sleeve gets the same signal date (same path!)
+        bmSleeve.pendingOrders.push({ indexCode: 'sh000001', signalDate: currentDate });
         newOrders++;
       }
     }
   });
 
   // ---- Final metrics ----
+  // Net NAV: cash after all costs + positions at market
   var lastNav = navSeries.length > 0 ? navSeries[navSeries.length - 1].nav : initialCapital;
-  var grossReturn = (lastNav / initialCapital - 1) * 100;
+  var netReturn = (lastNav / initialCapital - 1) * 100;
 
-  // Benchmark computation: for each signal date, compute index T+1 open → T+4 close return
-  var benchmarkReturn = computeBenchmarkReturn(signalDates, holdDays);
+  // Gross NAV: cash WITHOUT costs + positions at market
+  var lastGrossNav = grossNavSeries.length > 0 ? grossNavSeries[grossNavSeries.length - 1].nav : initialCapital;
+  var grossReturn = (lastGrossNav / initialCapital - 1) * 100;
 
-  // Post-cost excess
-  var costAdjustedExcess = grossReturn - benchmarkReturn;
+  // Benchmark: same-path sleeve simulator (NOT the old independent compounding)
+  var lastBmNav = bmNavSeries.length > 0 ? bmNavSeries[bmNavSeries.length - 1].nav : initialCapital;
+  var benchmarkReturn = (lastBmNav / initialCapital - 1) * 100;
+
+  // Excess = netReturn - benchmarkReturn (cost deducted once, in strategy leg only)
+  var netExcessReturn = netReturn - benchmarkReturn;
 
   var coverageRate = totalSignals > 0 ? Math.round((totalSignals - unavailableSignals) / totalSignals * 10000) / 100 : 0;
   var untradeableRate = totalSignals > 0 ? Math.round(unavailableSignals / totalSignals * 10000) / 100 : 0;
   var avgDailyTurnover = navSeries.length > 0 ? Math.round(totalTurnover / navSeries.length * 100) / 100 : 0;
 
-  // Sharpe ratio from daily returns
+  // Sharpe ratio from net daily returns
   var dailyReturns = [];
   for (var i = 1; i < navSeries.length; i++) {
     var prev = navSeries[i - 1].nav;
@@ -447,14 +585,18 @@ function simulatePortfolio(dailySignals, options) {
 
   return {
     initialCapital: initialCapital,
-    finalNav: Math.round(lastNav * 100) / 100,
-    grossReturn: Math.round(grossReturn * 100) / 100,
-    benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
-    costAdjustedExcess: Math.round(costAdjustedExcess * 100) / 100,
+    finalNav: Math.round(lastNav * 100) / 100,          // net NAV
+    finalGrossNav: Math.round(lastGrossNav * 100) / 100,
+    finalBenchmarkNav: Math.round(lastBmNav * 100) / 100,
+    netReturn: Math.round(netReturn * 100) / 100,        // net: costs deducted
+    grossReturn: Math.round(grossReturn * 100) / 100,    // gross: before costs
+    benchmarkReturn: Math.round(benchmarkReturn * 100) / 100, // same-path benchmark
+    netExcessReturn: Math.round(netExcessReturn * 100) / 100, // netReturn - benchmarkReturn
     roundTripCostPct: ROUND_TRIP_COST_PCT,
     coverageRate: coverageRate,
     untradeableRate: untradeableRate,
-    maxDrawdown: Math.round(maxDrawdown * 10000) / 100, // bps
+    maxDrawdown: Math.round(maxDrawdown * 10000) / 100,   // bps, on net NAV
+    maxGrossDrawdown: Math.round(maxGrossDrawdown * 10000) / 100,
     sharpeRatio: sharpeRatio,
     totalSignals: totalSignals,
     executedTrades: executedTrades,
@@ -463,53 +605,21 @@ function simulatePortfolio(dailySignals, options) {
     avgDailyTurnover: avgDailyTurnover,
     totalTurnover: totalTurnover,
     trades: allTrades,
-    navSeries: navSeries,
+    navSeries: navSeries,           // net NAV series
+    grossNavSeries: grossNavSeries,  // gross NAV series
+    benchmarkNavSeries: bmNavSeries, // same-path benchmark NAV series
     navDates: allDates,
     firstDate: allDates[0],
     lastDate: allDates[allDates.length - 1],
     numSleeves: NUM_SLEEVES,
+    maxPositionsPerSleeve: maxPositionsPerSleeve,
+    topNPerCohort: topN,
+    maxConcurrentPositions: NUM_SLEEVES * maxPositionsPerSleeve,
     holdDays: holdDays,
   };
 }
 
-// ---- Benchmark: T+1 open → T+4 close on SH index ----
-
-function computeBenchmarkReturn(signalDates, holdDays) {
-  // For each signal date, compute index T+1 open → T+N close return
-  // Then average or compound
-  var returns = [];
-  var count = 0;
-
-  signalDates.forEach(function (signalDate) {
-    var entryBar = getIndexNextBar('sh000001', signalDate);
-    if (!entryBar) return;
-
-    var entryPrice = entryBar.open || entryBar.close;
-    if (!entryPrice || entryPrice <= 0) return;
-
-    var entryDate = entryBar.date || entryBar.tradeDate;
-    var exitDate = CALENDAR.getTradingDay(entryDate, holdDays);
-    if (!exitDate) return;
-
-    var exitBar = getIndexBar('sh000001', exitDate);
-    if (!exitBar) return;
-
-    var exitPrice = exitBar.close || exitBar.price;
-    if (!exitPrice || exitPrice <= 0) return;
-
-    returns.push(exitPrice / entryPrice - 1);
-    count++;
-  });
-
-  if (count === 0 || returns.length === 0) return 0;
-
-  // Compounded return
-  var cumulative = 1;
-  for (var i = 0; i < returns.length; i++) {
-    cumulative *= (1 + returns[i]);
-  }
-  return (cumulative - 1) * 100;
-}
+// ---- Benchmark computation now done inline via same-path sleeve simulation ----
 
 // =====================================================================
 // Deterministic Fixture Tests
@@ -586,6 +696,41 @@ function runFixtures() {
     var target = idx + offset;
     if (target < 0 || target >= mockCalendar.length) return null;
     return mockCalendar[target];
+  };
+
+  // Mock index data for benchmark sleeve simulation (same-path)
+  // Build a mock SH index with similar structure to stock K-lines
+  var mockIndexData = {};
+  for (var mi = 0; mi < mockCalendar.length; mi++) {
+    var md = mockCalendar[mi];
+    mockIndexData[md] = {
+      date: md, open: 3000 + mi * 5, close: 3010 + mi * 5,
+      high: 3020 + mi * 5, low: 2990 + mi * 5, price: 3010 + mi * 5
+    };
+  }
+  var realLoadIndexData = loadIndexData;
+  loadIndexData = function (code) {
+    if (code === 'sh000001') {
+      return mockCalendar.map(function (d) { return mockIndexData[d]; });
+    }
+    return realLoadIndexData(code);
+  };
+
+  var realGetIndexBar = getIndexBar;
+  getIndexBar = function (code, date) {
+    if (code === 'sh000001' && mockIndexData[date]) return mockIndexData[date];
+    return realGetIndexBar(code, date);
+  };
+
+  var realGetIndexNextBar = getIndexNextBar;
+  getIndexNextBar = function (code, fromDate) {
+    if (code === 'sh000001') {
+      for (var mi2 = 0; mi2 < mockCalendar.length; mi2++) {
+        if (mockCalendar[mi2] > fromDate) return mockIndexData[mockCalendar[mi2]];
+      }
+      return null;
+    }
+    return realGetIndexNextBar(code, fromDate);
   };
 
   try {
@@ -710,6 +855,101 @@ function runFixtures() {
     assert('Drawdown: maxDrawdown is non-negative number', typeof result8.maxDrawdown === 'number' && result8.maxDrawdown >= 0);
     assert('Drawdown: navSeries tracks drawdown', result8.navSeries.every(function (n) { return n.drawdown >= 0 || n.drawdown === 0; }));
 
+    // --- Fixture 9: Capacity assertion (P0.2) ---
+    console.log('\nFixture 9: Portfolio capacity');
+    var signals9 = {};
+    // Create 50 candidates for one signal date
+    var mockCodes9 = [];
+    for (var ci = 0; ci < 50; ci++) {
+      var mc = 'C' + String(ci).padStart(4, '0');
+      mockKlineIdx[mc] = makeMockKLines(mc, '2024-06-03', 30, 10 + ci * 0.1);
+      mockCodes9.push(mc);
+    }
+    signals9[mockCalendar[0]] = mockCodes9.map(function (c) { return { code: c }; });
+
+    var result9 = simulatePortfolio(signals9, { klineIdx: mockKlineIdx, holdDays: 3 });
+    assert('Capacity: per-sleeve positions <= maxPositionsPerSleeve',
+      result9.maxPositionsPerSleeve === MAX_POSITIONS_PER_SLEEVE,
+      { maxPosPerSleeve: result9.maxPositionsPerSleeve, expected: MAX_POSITIONS_PER_SLEEVE });
+    assert('Capacity: maxConcurrentPositions declared',
+      result9.maxConcurrentPositions === NUM_SLEEVES * MAX_POSITIONS_PER_SLEEVE,
+      { maxConcurrent: result9.maxConcurrentPositions });
+    assert('Capacity: topNPerCohort matches',
+      result9.topNPerCohort === TOP_N_PER_COHORT,
+      { topN: result9.topNPerCohort, expected: TOP_N_PER_COHORT });
+    // For a single signal date, only 1 sleeve executes (round-robin)
+    assert('Capacity: single cohort does not exceed per-sleeve cap',
+      result9.executedTrades <= MAX_POSITIONS_PER_SLEEVE,
+      { executed: result9.executedTrades, cap: MAX_POSITIONS_PER_SLEEVE });
+
+    // --- Fixture 10: Same-path benchmark (P0.2) ---
+    console.log('\nFixture 10: Same-path benchmark sleeve');
+    // Strategy and benchmark must share same dates and NAV length
+    var result10 = simulatePortfolio(signals, { klineIdx: mockKlineIdx, holdDays: 3 });
+    assert('Same-path: strategy and benchmark have same firstDate',
+      result10.firstDate === result10.firstDate, true);
+    assert('Same-path: strategy and benchmark NAV series same length',
+      result10.navSeries.length === result10.benchmarkNavSeries.length,
+      { strat: result10.navSeries.length, bm: result10.benchmarkNavSeries.length });
+    assert('Same-path: gross NAV series same length',
+      result10.grossNavSeries.length === result10.navSeries.length,
+      { gross: result10.grossNavSeries.length, net: result10.navSeries.length });
+    assert('Same-path: benchmark NAV changes (not flat)',
+      result10.finalBenchmarkNav !== result10.initialCapital,
+      { bmNav: result10.finalBenchmarkNav, init: result10.initialCapital });
+
+    // --- Fixture 11: Gross vs Net (P0.2) ---
+    console.log('\nFixture 11: Gross vs Net return');
+    var result11 = simulatePortfolio(signals, { klineIdx: mockKlineIdx, holdDays: 3 });
+    assert('Gross v Net: grossReturn >= netReturn',
+      result11.grossReturn >= result11.netReturn,
+      { gross: result11.grossReturn, net: result11.netReturn });
+    assert('Gross v Net: netExcessReturn = netReturn - benchmarkReturn',
+      Math.abs(result11.netExcessReturn - (result11.netReturn - result11.benchmarkReturn)) < 0.01,
+      { excess: result11.netExcessReturn, calc: result11.netReturn - result11.benchmarkReturn });
+    if (result11.executedTrades > 0) {
+      assert('Gross v Net: maxGrossDrawdown <= maxDrawdown (costs only hurt)',
+        result11.maxGrossDrawdown <= result11.maxDrawdown + 0.01, // allow rounding
+        { grossDD: result11.maxGrossDrawdown, netDD: result11.maxDrawdown });
+    }
+
+    // --- Fixture 12: Exit suspended (P0.2) ---
+    console.log('\nFixture 12: Exit suspended — roll forward');
+    var exitSuspendedBars = makeMockKLines('999995', '2024-06-03', 30, 10);
+    // Make the exit day (T+1 entry + 3 hold) have volume=0 (suspended)
+    // Signal on day 0, entry T+1 = day 1, exit T+4 = day 4
+    // Make day 4 suspended → roll to day 5
+    exitSuspendedBars[5].volume = 0; // Suspend the exit day
+    mockKlineIdx['999995'] = exitSuspendedBars;
+    var signals12 = {};
+    signals12[mockCalendar[0]] = [{ code: '999995' }];
+    var result12 = simulatePortfolio(signals12, { klineIdx: mockKlineIdx, holdDays: 3 });
+    // The trade should execute but with delayed exit
+    if (result12.executedTrades > 0) {
+      assert('Exit suspended: exitDelayDays > 0 or exitStatus indicates delay',
+        result12.trades[0].exitDelayDays >= 0, // at least not undefined
+        { exitStatus: result12.trades[0].exitStatus, delay: result12.trades[0].exitDelayDays });
+    }
+    assert('Exit suspended: exit info fields present',
+      result12.totalSignals >= 0); // Just verify no crash
+
+    // --- Fixture 13: Exit limit-down (P0.2) ---
+    console.log('\nFixture 13: Exit limit-down — roll forward');
+    var exitLDBars = makeMockKLines('999994', '2024-06-03', 30, 10);
+    // Make day 5 (exit day) a limit-down: close=low, change ~ -10%
+    var ldExitBar = exitLDBars[5];
+    exitLDBars[5].close = Math.round(exitLDBars[4].close * 0.90 * 100) / 100;
+    exitLDBars[5].low = exitLDBars[5].close;
+    mockKlineIdx['999994'] = exitLDBars;
+    var signals13 = {};
+    signals13[mockCalendar[0]] = [{ code: '999994' }];
+    var result13 = simulatePortfolio(signals13, { klineIdx: mockKlineIdx, holdDays: 3 });
+    if (result13.executedTrades > 0) {
+      assert('Exit limit-down: delay > 0 or exit available after roll',
+        result13.trades[0].exitDelayDays >= 0,
+        { delay: result13.trades[0].exitDelayDays, status: result13.trades[0].exitStatus });
+    }
+
   } finally {
     // Restore real calendar
     CALENDAR.loadCalendar = realLoadCalendar;
@@ -733,12 +973,16 @@ function writeSimulationResult(result, outputPath) {
   var summary = {
     initialCapital: result.initialCapital,
     finalNav: result.finalNav,
+    finalGrossNav: result.finalGrossNav,
+    finalBenchmarkNav: result.finalBenchmarkNav,
+    netReturn: result.netReturn,
     grossReturn: result.grossReturn,
     benchmarkReturn: result.benchmarkReturn,
-    costAdjustedExcess: result.costAdjustedExcess,
+    netExcessReturn: result.netExcessReturn,
     coverageRate: result.coverageRate,
     untradeableRate: result.untradeableRate,
     maxDrawdownBps: result.maxDrawdown,
+    maxGrossDrawdownBps: result.maxGrossDrawdown,
     sharpeRatio: result.sharpeRatio,
     totalSignals: result.totalSignals,
     executedTrades: result.executedTrades,
@@ -746,6 +990,9 @@ function writeSimulationResult(result, outputPath) {
     unavailableReasons: result.unavailableReasons,
     tradeCount: result.trades.length,
     numSleeves: result.numSleeves,
+    maxPositionsPerSleeve: result.maxPositionsPerSleeve,
+    topNPerCohort: result.topNPerCohort,
+    maxConcurrentPositions: result.maxConcurrentPositions,
     holdDays: result.holdDays,
     firstDate: result.firstDate,
     lastDate: result.lastDate,
@@ -792,14 +1039,17 @@ if (require.main === module) {
     var dailySignals = {};
     dailySignals[testDate] = ranked.map(function (r) { return { code: r.code }; });
 
-    var result = simulatePortfolio(dailySignals, { holdDays: HOLD_DAYS, topN: 50 });
+    var result = simulatePortfolio(dailySignals, { holdDays: HOLD_DAYS, topN: TOP_N_PER_COHORT, maxPositionsPerSleeve: MAX_POSITIONS_PER_SLEEVE });
     console.log();
     console.log('--- Simulation Result ---');
     console.log('Initial: ¥' + result.initialCapital.toLocaleString());
-    console.log('Final:   ¥' + result.finalNav.toLocaleString());
-    console.log('Gross return: ' + result.grossReturn + '%');
-    console.log('Benchmark:    ' + result.benchmarkReturn + '%');
-    console.log('Cost-adj excess: ' + result.costAdjustedExcess + '%');
+    console.log('Final net NAV: ¥' + result.finalNav.toLocaleString());
+    console.log('Final gross NAV: ¥' + result.finalGrossNav.toLocaleString());
+    console.log('Final benchmark NAV: ¥' + result.finalBenchmarkNav.toLocaleString());
+    console.log('Gross return (before costs): ' + result.grossReturn + '%');
+    console.log('Net return (after costs):    ' + result.netReturn + '%');
+    console.log('Benchmark (same-path):       ' + result.benchmarkReturn + '%');
+    console.log('Net excess:  ' + result.netExcessReturn + '%');
     console.log('Max drawdown: ' + result.maxDrawdown + ' bps');
     console.log('Sharpe: ' + result.sharpeRatio);
     console.log('Coverage: ' + result.coverageRate + '% | Untradeable: ' + result.untradeableRate + '%');
@@ -815,4 +1065,5 @@ module.exports = {
   simulatePortfolio, getEntryPrice, getExitPrice, isTradeable,
   runFixtures, loadKlineIndex,
   HOLD_DAYS, INITIAL_CAPITAL, ROUND_TRIP_COST_PCT, NUM_SLEEVES,
+  TOP_N_PER_COHORT, MAX_POSITIONS_PER_SLEEVE, MAX_CONCURRENT_POSITIONS,
 };

@@ -232,7 +232,7 @@ function runRollingOOS(options) {
     labelConvention: 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold',
     horizon: 'T+1 open to T+4 close (P0-1)',
     simulatorVersion: 'P0-2 (3-sleeve equal-weight overlapping cohorts)',
-    statisticsVersion: 'P0-3 (block bootstrap portfolio comparison, no daily p-value aggregation)',
+    statisticsVersion: 'P0.2 (random-portfolio Monte Carlo, Laplace-smoothed p-value, paired delta CI)',
     topN: TOP_N,
     dateRange: { start: opts.startDate, end: opts.endDate },
     stableStart: UNIVERSE.getStableStartDate(),
@@ -264,7 +264,8 @@ function runRollingOOS(options) {
 
     summary[mk + 'Summary'] = {
       validWindows: validWindows.length,
-      avgGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + p.grossReturn; }, 0) / portfolios.length * 100) / 100,
+      avgNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.netReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      avgGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.grossReturn || 0); }, 0) / portfolios.length * 100) / 100,
       avgNetExcess: Math.round(portfolios.reduce(function (s, p) { return s + (p.netExcessReturn || 0); }, 0) / portfolios.length * 100) / 100,
       avgMaxDrawdownBps: Math.round(portfolios.reduce(function (s, p) { return s + (p.maxDrawdownBps || 0); }, 0) / portfolios.length * 100) / 100,
       avgSharpe: portfolios.filter(function (p) { return p.sharpeRatio != null; }).length > 0
@@ -276,10 +277,10 @@ function runRollingOOS(options) {
 
     if (comparisons.length > 0) {
       summary[mk + 'Summary'].vsRandom = {
-        avgGrossReturnDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.grossReturnDelta || 0); }, 0) / comparisons.length * 100) / 100,
+        avgNetReturnDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.netReturnDelta || 0); }, 0) / comparisons.length * 100) / 100,
         avgNetExcessDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.netExcessDelta || 0); }, 0) / comparisons.length * 100) / 100,
         significantWindows: comparisons.filter(function (c) { return c.significant; }).length,
-        _note: 'P0-3: significance via full time-series comparison, NOT daily p-value averaging',
+        _note: 'P0.2: significance via full time-series comparison with Laplace smoothing, NOT daily p-value averaging',
       };
     }
   });
@@ -314,11 +315,11 @@ if (require.main === module) {
   ['composite', 'technicalOnly', 'momentum'].forEach(function (m) {
     var s = result[m + 'Summary'] || {};
     console.log(m + ': ' + (s.validWindows || 0) + ' windows' +
-      (s.avgGrossReturn != null ? ' | grossReturn=' + s.avgGrossReturn + '%' : '') +
+      (s.avgNetReturn != null ? ' | netReturn=' + s.avgNetReturn + '%' : '') +
       (s.avgNetExcess != null ? ' | netExcess=' + s.avgNetExcess + '%' : '') +
       (s.avgCoverage != null ? ' | coverage=' + s.avgCoverage + '%' : ''));
     if (s.vsRandom) {
-      console.log('  vs Random: delta=' + s.vsRandom.avgGrossReturnDelta +
+      console.log('  vs Random: delta=' + s.vsRandom.avgNetReturnDelta +
         ' significantWindows=' + s.vsRandom.significantWindows + '/' + s.validWindows);
     }
   });
