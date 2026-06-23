@@ -1122,6 +1122,9 @@ function buildCockpitData() {
     }
   } catch (_) {}
 
+  // P1-UI: Research Lab data
+  result.researchLab = buildResearchLabData();
+
   return result;
 }
 
@@ -1250,6 +1253,163 @@ function buildChangeLog() {
       hasRealData: false,
     },
   ];
+}
+
+// P1-UI: Research Lab data builder
+function buildResearchLabData() {
+  var data = {
+    status: 'loading',
+    labelConvention: 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold',
+    simulatorDesign: '3-sleeve equal-weight overlapping cohorts',
+    statisticsMethod: 'block bootstrap portfolio comparison (no daily p-value averaging)',
+    universe: {
+      type: 'current-file',
+      stableStart: null,
+      survivorshipRisk: true,
+      realFeatures: ['technical', 'hidden'],
+      unavailableFeatures: ['financial', 'capitalFlow', 'event'],
+    },
+    p0Status: 'pending', // pending | pass | unknown
+    p1Model: null,
+    validWindows: 0,
+    latestWindow: null,
+    navCurve: null,
+    randomCI: null,
+    dataHash: null,
+    modelArtifacts: [],
+    warning: null,
+  };
+
+  try {
+    // Universe info
+    var UNIVERSE = require('./mosaic/research/universe_definition');
+    data.universe.stableStart = UNIVERSE.getStableStartDate();
+    var meta = UNIVERSE.getUniverseMetadata();
+    if (meta) {
+      data.universe.stockCount = meta.totalStocks;
+    }
+  } catch (_) {}
+
+  // Check if P0 tests pass (simulator fixtures)
+  try {
+    var SIM = require('./mosaic/research/trade_simulator');
+    var fixtureResults = SIM.runFixtures();
+    if (fixtureResults && fixtureResults.failed === 0 && fixtureResults.passed >= 18) {
+      data.p0Status = 'pass';
+    } else {
+      data.p0Status = 'pending';
+      data.warning = 'P0 simulator fixtures did not all pass. Research results are not interpretable.';
+    }
+  } catch (_) {
+    data.p0Status = 'unknown';
+    data.warning = 'Cannot run P0 simulator fixtures. Research results unverified.';
+  }
+
+  // Check if P0-1 snapshot regeneration happened
+  // Check if any snapshots have the new labelConvention field
+  try {
+    var path = require('path');
+    var fs = require('fs');
+    var snapDir = path.join(__dirname, 'report-engine', 'data', 'research', 'snapshots');
+    if (fs.existsSync(snapDir)) {
+      var files = fs.readdirSync(snapDir).filter(function (f) { return f.endsWith('.jsonl'); }).sort();
+      if (files.length > 0) {
+        var latestFile = files[files.length - 1];
+        var firstLine = fs.readFileSync(path.join(snapDir, latestFile), 'utf8').split('\n')[0];
+        var sample = JSON.parse(firstLine);
+        if (sample.labelConvention) {
+          data.p0DataRegenerated = true;
+        } else {
+          data.p0DataRegenerated = false;
+          data.warning = (data.warning || '') + ' Snapshots not yet regenerated with P0-1 label convention.';
+        }
+      }
+    }
+  } catch (_) {}
+
+  // Load true_walk_forward_summary for model info
+  try {
+    var path = require('path');
+    var fs = require('fs');
+    var tfPath = path.join(__dirname, 'report-engine', 'data', 'research', 'model_artifacts', 'true_walk_forward_summary.json');
+    if (fs.existsSync(tfPath)) {
+      var tf = JSON.parse(fs.readFileSync(tfPath, 'utf8'));
+      if (tf.windows && tf.windows.length > 0) {
+        data.validWindows = tf.windows.filter(function (w) { return !w.error && w.model; }).length;
+        var validWindows = tf.windows.filter(function (w) { return !w.error && w.model; });
+        if (validWindows.length > 0) {
+          var latest = validWindows[validWindows.length - 1];
+          data.latestWindow = {
+            testStart: latest.window ? latest.window.testStart : null,
+            testEnd: latest.window ? latest.window.testEnd : null,
+            testDays: latest.window ? latest.window.testDays : null,
+            lambda: latest.model ? latest.model.lambda : null,
+            testMSE: latest.metrics ? latest.metrics.testMSE : null,
+            avgRankIC: latest.metrics ? latest.metrics.avgRankIC : null,
+            portfolioGrossReturn: latest.portfolio ? latest.portfolio.grossReturn : null,
+            portfolioNetExcess: latest.portfolio ? latest.portfolio.netExcessReturn : null,
+            directionAccuracy: latest.metrics ? latest.metrics.directionAccuracy : null,
+          };
+          data.p1Model = {
+            type: tf.model || 'ridge_regression',
+            features: tf.features || [],
+            standardization: tf.standardization || 'unknown',
+            intercept: tf.intercept || 'unknown',
+          };
+        }
+        data.modelArtifacts = tf.windows.map(function (w) {
+          return {
+            testStart: w.window ? w.window.testStart : null,
+            lambda: w.model ? w.model.lambda : null,
+            rankIC: w.metrics ? w.metrics.avgRankIC : null,
+            grossReturn: w.portfolio ? w.portfolio.grossReturn : null,
+            artifacts: w.artifactsPath || null,
+          };
+        });
+      }
+    }
+  } catch (_) {}
+
+  // Load OOS rolling summary for baseline comparison
+  try {
+    var path = require('path');
+    var fs = require('fs');
+    var oosPath = path.join(__dirname, 'report-engine', 'data', 'research', 'oos_evaluation_results', 'rolling_oos_summary.json');
+    if (fs.existsSync(oosPath)) {
+      var oos = JSON.parse(fs.readFileSync(oosPath, 'utf8'));
+      if (oos.windows && oos.windows.length > 0) {
+        data.oosWindows = oos.windows.length;
+        // Extract random CI from first window with comparison data
+        for (var i = 0; i < oos.windows.length; i++) {
+          var w = oos.windows[i];
+          if (w.models && w.models.technicalOnly && w.models.technicalOnly.randomBootstrap) {
+            var rb = w.models.technicalOnly.randomBootstrap;
+            data.randomCI = {
+              ci95_lower: rb.ci95_grossReturn_lower,
+              ci95_upper: rb.ci95_grossReturn_upper,
+              mean: rb.meanGrossReturn,
+              samples: w.models.technicalOnly.bootstrapSamples,
+            };
+            break;
+          }
+        }
+      }
+    }
+  } catch (_) {}
+
+  // Determine overall status
+  if (data.p0Status === 'pass' && data.p0DataRegenerated && data.validWindows > 0) {
+    data.status = 'operational';
+    data.statusLabel = 'Research Operational — P0 verified, P1 model evaluated';
+  } else if (data.p0Status === 'pass') {
+    data.status = 'p0_verified';
+    data.statusLabel = 'P0 Verified — Data/simulator OK, regenerate snapshots + run evaluations';
+  } else {
+    data.status = 'invalid';
+    data.statusLabel = 'Research results NOT interpretable — simulator/statistics repair pending';
+  }
+
+  return data;
 }
 
 function jsonResponse(res, data, status) {

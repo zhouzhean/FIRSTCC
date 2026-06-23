@@ -1,6 +1,65 @@
-# Francis Investment · A股量化交易系统 v3.4.9.6
+# Francis Investment · A股量化交易系统 v3.4.9.7
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+## v3.4.9.7: Research Validity Repair (P0-P1)
+
+**5 rewrites + 1 new panel** — unified labels, repaired simulator, block bootstrap statistics, standardized walk-forward, Research Lab UI.
+
+### P0 Fixes
+
+**P0-1 — Unified Label Convention (`historical_snapshot.js`):**
+- T close signal → T+1 open entry → hold 3 trading days → T+4 close exit
+- Stock, benchmark, cost all use same `entryDate`/`exitDate`
+- Immutable `unavailable` when no T+1 bar, suspended, limit-up/down, or no exit
+- No fallback to T-close return
+- New fields: `labelConvention`, `entryDate`, `exitDate`, `entryPrice`, `exitPrice`, `targetStatus`, `unavailableReason`
+- Target now uses gross return (T+1 open → T+4 close) rather than close-to-close
+
+**P0-2 — Repaired Trade Simulator (`trade_simulator.js`, rewritten):**
+- Correct event ordering: signal T → pending order → execute T+1 (deduct cash) → exit T+4
+- 3-sleeve equal-weight portfolio for overlapping daily cohorts
+- NAV extends through last exit date (no unsettled positions)
+- Cost deducted once per trade
+- Outputs: gross NAV, net NAV, benchmark NAV, turnover, max drawdown
+- 8 deterministic fixture tests (20 assertions, all pass):
+  - Single trade, last signal exit, overlapping cohorts
+  - Suspended stock, limit-up, limit-down, cost deducted once, known drawdown
+
+**P0-3 — Block Bootstrap Statistics (`baseline_models.js`, rewritten):**
+- NO daily p-value averaging. NO `significantFraction`.
+- Full time-series portfolio returns compared via fixed-seed block bootstrap (≥1000)
+- Two-sided empirical p-value against random baseline
+- `compareFullTimeSeries()` — runs model through simulator, bootstraps random, computes CI/p-value
+- `compareAllModels()` now returns per-date metrics only (diagnostic), no p-values
+- Fixed seed xorshift (seed=42), reproducible
+
+### P1 Fixes
+
+**P1 — Standardized Walk-Forward (`linear_model.js` + `true_walk_forward.js`, rewritten):**
+- Feature standardization: fit on train only, transform val/test unchanged
+- Unregularized intercept in ridge regression
+- `Standardizer` object: `fitStandardizer(X)`, `transformWith(X, std)`
+- Feature matrix now prepends intercept column (unregularized in lambda penalty)
+- `extractFeatures()` unchanged (technical, hidden, signalCount, volatility20d, changePct)
+- Target: `forwardReturnT3` (T+1 open → T+4 close gross return, post P0-1)
+- Per-window: standardizer fit → grid search λ → final fit → predict → simulator
+- Outputs: Rank IC (Kendall tau-b), Top-50 post-cost return, prediction decile calibration
+  - Delta vs technical-only baseline (via `compareFullTimeSeries`)
+- Legacy composite: quarantined as historical control only
+
+**P1-UI — Research Lab Panel (`cockpit.html`/`cockpit.js`/`mosaic_server.js`):**
+- New Panel 11 in Cockpit: "Research Lab"
+- Displays: universe type, stable start, feature mask, P0 status, label convention
+- Prominent "Research results NOT interpretable" banner when P0 pending
+- After P0: latest valid window metrics, random baseline CI, model artifacts
+- Data from `/api/cockpit` → `researchLab` field
+- Renders from combined cockpit data (no separate API call)
+
+### Rollup Changes
+
+- `rolling_oos_evaluation.js`: Uses portfolio-level `compareFullTimeSeries()` per window. No p-value aggregation
+- `mosaic/config.js`: version → v3.4.9.7
 
 ## v3.4.9.6: Making History Trustworthy (Phase 1.1)
 
@@ -338,6 +397,7 @@ STOP_LOSS_COOLDOWN_DAYS: 4
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v3.4.9.7 | 2026-06-23 | Research Validity Repair: P0-1统一标签(T+1开盘→T+4收盘), P0-2重写模拟器(3-sleeve+事件顺序+20断言fixture), P0-3块bootstrap统计(无日均p-value), P1标准化ridge+截距+模拟器评估, P1-UI Research Lab面板 | 
 | v3.4.9.6 | 2026-06-23 | Phase 1.1 诚实化: 7新+3改模块, current-file宇宙, featureAvailability, technical-only基线, T+1开盘模拟, 固定种子bootstrap, 岭回归首个可学模型, 严格train/val/test |
 | v3.4.9.5 | 2026-06-23 | Phase 1 PIT历史研究实验室: 5新模块(data_audit/universal_calendar/historical_snapshot/walk_forward/baseline_models), 835天快照953K记录 |
 | v3.4.9.4.2 | 2026-06-22 | API统计口径统一(quarantined排除), 部署身份fallback(deploy_manifest.json), 验收测试修复(DATA_DIR重定向+真实verifyOneScan) |

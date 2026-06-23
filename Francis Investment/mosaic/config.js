@@ -64,7 +64,7 @@ if (_deployCommit) {
 var _testDataRoot = null;
 
 module.exports = {
-  version: 'v3.4.9.6',
+  version: 'v3.4.9.7',
   _testDataRoot: _testDataRoot,  // mutable: tests set this before requiring modules
   // Phase 0: Release identity — authoritative names
   gitCommit: _gitCommit,          // from git rev-parse (null on cloud)

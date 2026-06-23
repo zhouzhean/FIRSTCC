@@ -301,6 +301,66 @@ autonomy before the following are complete:
 
 ## Required Completion Evidence
 
+## Latest Review: v3.4.9.6 Phase 1.1 (2026-06-23)
+
+### What is genuinely better
+
+- The research universe is now explicitly labelled `current-file`, with a
+  stable-period boundary, daily coverage, and survivorship risk. It must never
+  again be described as full A-share history.
+- Historical financial, capital-flow, and event fields are represented as
+  unavailable rather than silently filled with defaults. The technical-only
+  reference model is therefore a meaningful, honest baseline.
+- A train / validation / test ridge-model scaffold and per-window artefacts now
+  exist. They remain shadow research only.
+- Cloud release identity is verified: v3.4.9.6 / commit `84f97b0`, manifest
+  valid, identity matched.
+
+### P0: Do before interpreting any historical performance
+
+1. **Use one executable label everywhere.** Current snapshots train on
+   `asOf close -> T+3 close`, while the simulator declares `signal at T close
+   -> entry T+1 open -> exit after three holding days`. Rebuild labels using
+   the latter convention, including the benchmark and an explicit unavailable
+   outcome for missing bars, suspensions, and untradeable entry days.
+2. **Repair the portfolio simulator before using return, drawdown, Sharpe, or
+   cost metrics.** It currently processes a signal on T while using a T+1
+   price, ends its NAV series on the last signal date rather than the last
+   exit date, and may report executed trades with zero settled trades. Queue
+   orders for their entry date, extend NAV through all exits, and apply costs
+   once only. Add deterministic fixture tests for one trade, overlapping
+   cohorts, final-day exit, suspension, limit, and known drawdown.
+3. **Repair statistical aggregation.** Do not average daily p-values. The
+   current `significantFraction` denominator is tautological and reports 1
+   whenever non-zero significance exists. Compare time-series, post-cost
+   portfolio returns against a daily matched random distribution using a
+   fixed-seed block/bootstrap across dates; report CI, p-value, and the number
+   of independent dates.
+
+### P1: Research acceptance after P0
+
+- Standardize features from training data only, fit an unregularized intercept,
+  and apply the saved transform unchanged to validation and test data.
+- Evaluate model predictions through the repaired simulator: daily rank IC,
+  top-N post-cost return, turnover, maximum drawdown, and calibration by
+  prediction decile. Direction accuracy alone is not alpha evidence.
+- Treat the legacy composite score as a quarantined comparison only, because
+  it still originated from unavailable dimensions. It cannot be a promotion
+  candidate or a positive control.
+- Add a small Cockpit Research Lab panel with data boundary, feature mask,
+  label/execution convention, latest valid test window, and a prominent
+  `research invalid - simulator/statistics repair pending` state until P0
+  completes.
+
+### Live-loop status
+
+The deployed server has not yet produced a v3.4.9.6 canonical cohort. The
+current cloud API shows `canonicalCohortCount=0`, with 250 old intraday records
+that have `missing_target_date`; they are not usable learning evidence. After
+the next 09:30 canonical run, require a manifest, one canonical run ID, a
+non-null target date, and positive research-eligible count before calling the
+production loop proven.
+
 For every change, report all of the following:
 
 - Files changed and the behavioral reason for each.

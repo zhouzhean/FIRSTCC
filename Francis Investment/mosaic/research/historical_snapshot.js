@@ -10,6 +10,13 @@
  * — Nulls-out unavailable dimensions (financial, capitalFlow, event)
  * — Pre-stable dates marked "exploration only"
  *
+ * P0-1 upgrades (unified label convention):
+ * — Signal T close → T+1 open entry → hold 3 trading days → T+4 close exit
+ * — Stock, benchmark, cost all use same entryDate/exitDate
+ * — Immutable unavailable when no T+1 bar, suspended, limit, or no T+4 bar
+ * — Adds labelConvention, entryDate, exitDate, entryPrice, exitPrice,
+ *   targetStatus, unavailableReason
+ *
  * Output: report-engine/data/research/snapshots/YYYY-MM-DD.jsonl
  *         (one JSONL file per date, one line per stock)
  *
@@ -23,8 +30,10 @@
  *   dimensions: {fundamental, technical, hidden, capitalFlow, event} (null when unavailable),
  *   expectedReturn, confidence, evidenceThresholdPassed,
  *   financial: {roe, debtRatio, revenueGrowth, npGrowth, ocfPerShare, reportDate, announcementDate, _estimated},
- *   regime: [tags], indexSH, benchmarkEntry,
- *   targetDateT3, forwardReturnT3, forwardBenchmarkT3, forwardExcessT3, forwardStatus
+ *   regime: [tags], indexSH,
+ *   labelConvention, entryDate, exitDate, entryPrice, exitPrice,
+ *   targetDateT3 (legacy, =exitDate), forwardReturnT3, forwardBenchmarkT3,
+ *   forwardExcessT3 (post-cost), forwardStatus, targetStatus, unavailableReason
  */
 
 var fs = require('fs');
@@ -41,6 +50,13 @@ var SNAPSHOTS_DIR = path.join(DATA_DIR, 'research', 'snapshots');
 
 // Round-trip cost: 0.025% commission × 2 + 0.1% stamp tax + 0.001% transfer fee × 2 + 0.15% slip × 2
 var ROUND_TRIP_COST_PCT = 0.025 * 2 + 0.1 + 0.001 * 2 + 0.15 * 2;
+
+// P0-1: Unified label convention
+// Signal at T close → entry T+1 open → hold 3 trading days → exit T+4 close
+// Stock, benchmark, cost, untradeable status all use same entryDate/exitDate.
+// No fallback to T-close return. Immutable unavailable when entry/exit impossible.
+var LABEL_CONVENTION = 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold';
+var HOLD_DAYS = 3; // Trading days from entry to exit
 
 // ---- Feature availability (P1.1: honest about what data exists) ----
 // Only technical (from price/volume) and hidden (from derived signals) have real
@@ -122,6 +138,72 @@ function getForwardKline(klineIndex, code, targetDate) {
 
   for (var i = 0; i < bars.length; i++) {
     if (bars[i].date === targetDate) return bars[i];
+  }
+  return null;
+}
+
+// P0-1: Get next trading day's kline bar (for T+1 open entry)
+function getNextDayBar(klineIndex, code, fromDate) {
+  var bars = klineIndex[code];
+  if (!bars || bars.length === 0) return null;
+  for (var i = 0; i < bars.length; i++) {
+    if (bars[i].date > fromDate) return bars[i];
+  }
+  return null;
+}
+
+// P0-1: Check if a stock is tradeable on a given date
+function checkTradeable(klineIndex, code, date) {
+  var bar = getForwardKline(klineIndex, code, date);
+  if (!bar) return { tradeable: false, reason: 'no_data', bar: null };
+
+  // Suspended: zero volume
+  if (!bar.volume || bar.volume === 0) {
+    return { tradeable: false, reason: 'suspended', bar: bar };
+  }
+
+  // Need prev close for limit checks
+  var prevBar = getKlineOnOrBefore(klineIndex, code,
+    CALENDAR.getTradingDay(date, -1) || date);
+  if (!prevBar || prevBar.close <= 0) {
+    return { tradeable: true, reason: 'ok', bar: bar };
+  }
+
+  var changePct = (bar.close / prevBar.close - 1) * 100;
+
+  // Limit-up: close at high and change near +10%
+  if (bar.close >= bar.high && changePct >= 9.5) {
+    return { tradeable: false, reason: 'limit_up', bar: bar, changePct: Math.round(changePct * 100) / 100 };
+  }
+
+  // Limit-down: close at low and change near -10%
+  if (bar.close <= bar.low && changePct <= -9.5) {
+    return { tradeable: false, reason: 'limit_down', bar: bar, changePct: Math.round(changePct * 100) / 100 };
+  }
+
+  return { tradeable: true, reason: 'ok', bar: bar };
+}
+
+// P0-1: Get index bar on exact date (for benchmark entry/exit)
+function getIndexBarOnDate(indexCode, dateStr) {
+  var arr = loadIndexData(indexCode);
+  if (!arr) return null;
+  for (var i = 0; i < arr.length; i++) {
+    var item = arr[i];
+    var d = item.date || item.tradeDate;
+    if (d === dateStr) return item;
+  }
+  return null;
+}
+
+// P0-1: Get next trading day's index bar (for T+1 benchmark entry)
+function getIndexNextBar(indexCode, fromDate) {
+  var arr = loadIndexData(indexCode);
+  if (!arr) return null;
+  for (var i = 0; i < arr.length; i++) {
+    var item = arr[i];
+    var d = item.date || item.tradeDate;
+    if (d > fromDate) return item;
   }
   return null;
 }
@@ -323,23 +405,83 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
       confidenceVal = erResult ? erResult.confidence : null;
     } catch (e) { /* expected_return may fail without complete context */ }
 
-    // Compute forward T+3
-    var targetDateT3 = CALENDAR.getTradingDay(asOfDate, 3);
-    var forwardBar = targetDateT3 ? getForwardKline(klineIdx, code, targetDateT3) : null;
-    var forwardReturnT3 = null, forwardBenchmarkT3 = null, forwardExcessT3 = null, forwardStatus = 'pending';
+    // === P0-1: Unified Label Convention ===
+    // Signal at T close → T+1 open entry → hold 3 trading days → T+4 close exit
+    // Stock, benchmark, cost, all use same entryDate/exitDate.
+    // Immutable unavailable when entry impossible (no T+1 bar, suspended, limit)
+    // or exit impossible (no T+4 bar). No fallback to T-close return.
+    var entryDate = null, exitDate = null;
+    var entryPrice = null, exitPrice = null;
+    var forwardReturn = null, forwardBenchmark = null, forwardExcess = null;
+    var forwardStatus = 'pending';
+    var targetStatus = 'pending';
+    var unavailableReason = null;
 
-    if (targetDateT3 && forwardBar && forwardBar.close > 0 && bar.close > 0) {
-      forwardReturnT3 = Math.round((forwardBar.close / bar.close - 1) * 100 * 100) / 100;
-      var benchmarkExit = getIndexClose('sh000001', targetDateT3);
-      if (benchmarkExit != null && benchmarkEntry != null && benchmarkEntry > 0) {
-        forwardBenchmarkT3 = Math.round((benchmarkExit / benchmarkEntry - 1) * 100 * 100) / 100;
-        forwardExcessT3 = Math.round((forwardReturnT3 - forwardBenchmarkT3 - ROUND_TRIP_COST_PCT) * 100) / 100;
-      }
-      forwardStatus = 'settled';
-    } else if (!targetDateT3) {
-      forwardStatus = 'no_target_date';
-    } else {
+    // Step 1: Find T+1 entry bar
+    var entryBar = getNextDayBar(klineIdx, code, asOfDate);
+    if (!entryBar) {
       forwardStatus = 'unavailable';
+      targetStatus = 'unavailable';
+      unavailableReason = 'no_T+1_bar';
+    } else {
+      entryDate = entryBar.date;
+
+      // Step 2: Check tradeability on entry day
+      var tradeCheck = checkTradeable(klineIdx, code, entryDate);
+      if (!tradeCheck.tradeable) {
+        forwardStatus = 'unavailable';
+        targetStatus = 'unavailable';
+        unavailableReason = 'entry_' + tradeCheck.reason;
+      } else if (!entryBar.open || entryBar.open <= 0) {
+        forwardStatus = 'unavailable';
+        targetStatus = 'unavailable';
+        unavailableReason = 'no_T+1_open';
+      } else {
+        entryPrice = entryBar.open;
+
+        // Step 3: Find T+4 exit bar (T+1 entry + 3 holding days)
+        exitDate = CALENDAR.getTradingDay(entryDate, HOLD_DAYS);
+        var exitBar = exitDate ? getForwardKline(klineIdx, code, exitDate) : null;
+
+        if (!exitDate) {
+          forwardStatus = 'unavailable';
+          targetStatus = 'no_exit_date';
+          unavailableReason = 'no_T+4_date';
+        } else if (!exitBar || !exitBar.close || exitBar.close <= 0) {
+          forwardStatus = 'unavailable';
+          targetStatus = 'unavailable';
+          unavailableReason = 'no_exit_price';
+        } else {
+          exitPrice = exitBar.close;
+
+          // Step 4: Compute returns
+          forwardReturn = Math.round((exitPrice / entryPrice - 1) * 100 * 100) / 100;
+
+          // Step 5: Benchmark — same T+1 open → T+4 close
+          var bmEntryBar = getIndexNextBar('sh000001', asOfDate);
+          var bmEntryPrice = null;
+          if (bmEntryBar) {
+            bmEntryPrice = bmEntryBar.open || bmEntryBar.close;
+          }
+          var bmExitBar = exitDate ? getIndexBarOnDate('sh000001', exitDate) : null;
+          var bmExitPrice = null;
+          if (bmExitBar) {
+            bmExitPrice = bmExitBar.close || bmExitBar.price;
+          }
+
+          if (bmEntryPrice && bmEntryPrice > 0 && bmExitPrice && bmExitPrice > 0) {
+            forwardBenchmark = Math.round((bmExitPrice / bmEntryPrice - 1) * 100 * 100) / 100;
+            forwardExcess = Math.round((forwardReturn - forwardBenchmark - ROUND_TRIP_COST_PCT) * 100) / 100;
+          } else {
+            forwardBenchmark = null;
+            forwardExcess = null;
+            targetStatus = 'benchmark_unavailable';
+          }
+
+          forwardStatus = 'settled';
+          targetStatus = targetStatus === 'benchmark_unavailable' ? 'benchmark_unavailable' : 'settled';
+        }
+      }
     }
 
     var volatility = computeVolatility20d(klineIdx, code, asOfDate);
@@ -385,12 +527,19 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
       financial: financialData,
       regime: regime,
       indexSH: shIdxClose,
-      benchmarkEntry: benchmarkEntry,
-      targetDateT3: targetDateT3,
-      forwardReturnT3: forwardReturnT3,
-      forwardBenchmarkT3: forwardBenchmarkT3,
-      forwardExcessT3: forwardExcessT3,
-      forwardStatus: forwardStatus,
+      // P0-1: Unified label convention fields
+      labelConvention: LABEL_CONVENTION,
+      entryDate: entryDate,
+      exitDate: exitDate,
+      entryPrice: entryPrice,
+      exitPrice: exitPrice,
+      targetDateT3: exitDate,  // legacy name kept for compat, now equals exitDate (T+4)
+      forwardReturnT3: forwardReturn,   // T+1 open → T+4 close (cost not yet deducted)
+      forwardBenchmarkT3: forwardBenchmark, // Benchmark T+1 open → T+4 close
+      forwardExcessT3: forwardExcess,   // forwardReturn - benchmark - roundTripCost
+      forwardStatus: forwardStatus,     // settled | unavailable
+      targetStatus: targetStatus,       // settled | unavailable | benchmark_unavailable | no_exit_date
+      unavailableReason: unavailableReason,  // null when settled; reason string when unavailable
     };
 
     records.push(record);

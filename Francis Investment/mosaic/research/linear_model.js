@@ -1,20 +1,20 @@
 /**
- * P1.1-F: Linear Model — First Learnable Model (Ridge Regression)
+ * P1: Linear Model — Ridge Regression with Standardization + Intercept
  *
- * Closed-form ridge regression via normal equations:  β = (XᵀX + λI)⁻¹ Xᵀy
+ * Closed-form ridge regression:  β = (XᵀX + λI)⁻¹ Xᵀy
  * No gradient descent, no auto-differentiation, no neural networks.
- * No auto-tuning beyond a fixed hyperparameter grid.
  *
- * Features: ONLY real point-in-time data
- *  — technical dimension score (from composite rawScores)
- *  — hidden dimension score (from composite rawScores)
- *  — signalCount (number of H1-H9 signals triggered)
- *  — volatility20d (annualized %)
- *  — changePct (day's % change)
+ * P1 upgrades:
+ *  — Feature standardization: fit mean/std on training data, apply to val/test
+ *  — Unregularized intercept: prepend column of 1s, exclude intercept from λ penalty
+ *  — Fixed λ grid: [0.001, 0.01, 0.1, 1, 10]
+ *  — Pure JS matrix ops
  *
- * Target: T+3 forward excess return (post-cost net of benchmark)
+ * Features (only real PIT data):
+ *  — technical dimension score, hidden dimension score
+ *  — signalCount, volatility20d, changePct
  *
- * Hyperparameters: λ ∈ [0.001, 0.01, 0.1, 1, 10] — selected on validation set
+ * Target: forwardReturnT3 (T+1 open → T+4 close gross return, post P0-1)
  *
  * Shadow only: model artifacts saved, never fed to live simfolio.
  */
@@ -144,44 +144,103 @@ function extractFeatures(snapshot) {
   ];
 }
 
-function buildFeatureMatrix(snapshots) {
+// ---- P1: Feature Standardizer (fit on train, transform val/test) ----
+
+function fitStandardizer(X) {
+  var nFeatures = X[0].length;
+  var means = [];
+  var stds = [];
+
+  for (var j = 0; j < nFeatures; j++) {
+    var sum = 0;
+    for (var i = 0; i < X.length; i++) sum += X[i][j];
+    var mean = sum / X.length;
+    means.push(mean);
+
+    var varSum = 0;
+    for (var i = 0; i < X.length; i++) varSum += (X[i][j] - mean) * (X[i][j] - mean);
+    var std = Math.sqrt(varSum / (X.length - 1)) || 1; // Avoid div by zero
+    stds.push(std);
+  }
+
+  return { means: means, stds: stds };
+}
+
+function transformWith(X, standardizer) {
+  var means = standardizer.means;
+  var stds = standardizer.stds;
+  var result = [];
+  for (var i = 0; i < X.length; i++) {
+    var row = [];
+    for (var j = 0; j < X[i].length; j++) {
+      row.push((X[i][j] - means[j]) / stds[j]);
+    }
+    result.push(row);
+  }
+  return result;
+}
+
+// ---- Build feature matrix with standardization ----
+
+function buildFeatureMatrix(snapshots, standardizer) {
   var X = [];
   var y = [];
   var codes = [];
+  var dates = [];
 
   for (var i = 0; i < snapshots.length; i++) {
     var s = snapshots[i];
-    if (!s || s.forwardStatus !== 'settled' || s.forwardExcessT3 == null) continue;
+    // P0-1: Use forwardReturnT3 (T+1 open → T+4 close gross return) as target
+    // Fall back to forwardExcessT3 for backward compat
+    if (!s || s.forwardStatus !== 'settled') continue;
+    var target = s.forwardReturnT3; // Gross return (P0-1)
+    if (target == null) target = s.forwardExcessT3; // Legacy fallback
+    if (target == null) continue;
 
     var features = extractFeatures(s);
     if (!features) continue;
 
     X.push(features);
-    y.push([s.forwardExcessT3]);
+    // Add intercept column (1s)
+    y.push([target]);
     codes.push(s.code);
+    dates.push(s.asOfDate);
   }
 
-  return { X: X, y: y, codes: codes, nFeatures: FEATURE_NAMES.length, nSamples: X.length };
+  // Apply standardization if provided
+  if (standardizer) {
+    X = transformWith(X, standardizer);
+  }
+
+  // Prepend intercept column (unregularized)
+  for (var i = 0; i < X.length; i++) {
+    X[i].unshift(1);
+  }
+
+  var nFeatures = FEATURE_NAMES.length + 1; // +1 for intercept
+  return { X: X, y: y, codes: codes, dates: dates, nFeatures: nFeatures, nSamples: X.length };
 }
 
-// ---- Ridge Regression (closed-form) ----
+// ---- Ridge Regression (closed-form, with unregularized intercept) ----
 
 function fitRidge(X, y, lambda) {
-  // β = (XᵀX + λI)⁻¹ Xᵀy
+  // β = (XᵀX + λI*)⁻¹ Xᵀy
+  // I* = identity matrix with I*[0][0] = 0 (intercept unregularized)
   var nFeatures = X[0].length;
 
   // XᵀX
   var XT = transpose(X);
   var XTX = matMul(XT, X);
 
-  // XᵀX + λI
+  // XᵀX + λI*  (intercept at column 0 is NOT regularized)
   var lambdaI = identityMatrix(nFeatures);
-  for (var i = 0; i < nFeatures; i++) lambdaI[i][i] *= lambda;
+  lambdaI[0][0] = 0; // Unregularized intercept
+  for (var i = 1; i < nFeatures; i++) lambdaI[i][i] *= lambda;
   var regularized = matAdd(XTX, lambdaI);
 
-  // (XᵀX + λI)⁻¹
+  // (XᵀX + λI*)⁻¹
   var inv = invertMatrix(regularized);
-  if (!inv) return null; // Singular
+  if (!inv) return null;
 
   // Xᵀy
   var XTy = matMul(XT, y);
@@ -189,23 +248,22 @@ function fitRidge(X, y, lambda) {
   // β = inv × Xᵀy
   var beta = matMul(inv, XTy);
 
-  // Extract weights and intercept
-  // Note: this is a no-intercept model. For research purposes,
-  // using raw features without intercept is acceptable.
-  // Each feature is already normalized to roughly similar scales.
-  var weights = beta.map(function (row) { return row[0]; });
+  var allWeights = beta.map(function (row) { return row[0]; });
+  var intercept = allWeights[0];
+  var weights = allWeights.slice(1);
 
   return {
+    intercept: intercept,
     weights: weights,
     featureNames: FEATURE_NAMES,
     lambda: lambda,
-    nFeatures: nFeatures,
+    nFeatures: nFeatures - 1, // Excluding intercept
   };
 }
 
 function predict(model, features) {
   if (!model || !features) return null;
-  var prediction = 0;
+  var prediction = model.intercept || 0;
   for (var i = 0; i < model.weights.length; i++) {
     prediction += model.weights[i] * (features[i] || 0);
   }
@@ -213,11 +271,15 @@ function predict(model, features) {
 }
 
 function computeMSE(model, X, y) {
+  // X columns include intercept (col 0 = all 1s), but predict() only uses weights
+  // We need to strip the intercept column before calling predict
   var total = 0;
   var count = 0;
   var n = Math.min(X.length, y.length);
   for (var i = 0; i < n; i++) {
-    var pred = predict(model, X[i]);
+    // Strip intercept column (col 0) to get feature-only vector
+    var features = X[i].slice(1);
+    var pred = predict(model, features);
     if (pred == null || y[i] == null || !y[i]) continue;
     var err = pred - y[i][0];
     total += err * err;
@@ -326,5 +388,6 @@ if (require.main === module) {
 module.exports = {
   fitRidge, predict, computeMSE, gridSearchLambda,
   extractFeatures, buildFeatureMatrix,
+  fitStandardizer, transformWith,
   FEATURE_NAMES, LAMBDA_GRID, hashData,
 };

@@ -1,17 +1,16 @@
 /**
- * P1.1-E: Rolling Out-of-Sample Evaluation
+ * P0-3: Rolling Out-of-Sample Evaluation (Portfolio-Level Statistics)
  *
  * Evaluates fixed rule-based models on expanding OOS windows.
  * THIS IS NOT TRUE WALK-FORWARD — no model parameters are learned from training data.
  * See true_walk_forward.js for the learnable version (P1).
  *
- * Changes from Phase 1 walk_forward_expander.js:
- *  — Renamed to honest label: "rolling OOS evaluation"
- *  — Default start = stable period (2023-10-30)
- *  — Pre-stable dates excluded from main results (flag: includePreStable)
- *  — Uses trade_simulator for portfolio-level metrics (NAV, true drawdown, turnover)
- *  — Uses v2 baseline_models with fixed-seed bootstrap and p-values
- *  — Compares composite vs technical-only vs momentum vs random
+ * P0-3 upgrades:
+ *  — Full time-series portfolio comparison via compareFullTimeSeries()
+ *  — Block bootstrap (≥200 per window) for random baseline
+ *  — NO daily p-value averaging. NO significantFraction.
+ *  — Uses trade_simulator (P0-2) for portfolio NAV, true drawdown, turnover
+ *  — Output: dailyDetails (diagnostic only), per-model portfolio comparison
  *
  * Output: report-engine/data/research/oos_evaluation_results/
  */
@@ -52,17 +51,6 @@ function loadSnapshotsForDate(dateStr) {
   return { map: map, list: list };
 }
 
-function loadSnapshotsForDates(dates) {
-  var map = {};
-  var list = [];
-  dates.forEach(function (d) {
-    var res = loadSnapshotsForDate(d);
-    Object.keys(res.map).forEach(function (c) { map[c] = res.map[c]; });
-    list = list.concat(res.list);
-  });
-  return { map: map, list: list };
-}
-
 // ---- Window Generation ----
 
 function generateWindows(options) {
@@ -86,7 +74,7 @@ function generateWindows(options) {
   }
 
   var windows = [];
-  var cursor = 252; // ~1 year initial train
+  var cursor = 252;
   var validateSize = 20;
   var testSize = 60;
 
@@ -107,7 +95,6 @@ function generateWindows(options) {
     cursor += WINDOW_STEP_TRADING_DAYS;
   }
 
-  // Filter out pre-stable windows unless explicitly included
   var allWindows = windows;
   if (!includePreStable) {
     windows = windows.filter(function (w) { return !w.isPreStable; });
@@ -116,9 +103,10 @@ function generateWindows(options) {
   return { windows: windows, allWindows: allWindows, tradingDays: allDays, allDaysCount: allDays.length, stableStart: stableStart };
 }
 
-// ---- Single Window Evaluation ----
+// ---- Single Window Evaluation (P0-3: Portfolio-level comparison) ----
 
-function evaluateWindow(windowDef) {
+function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
+  bootstrapSamples = bootstrapSamples || 200;
   var testDates = windowDef.testDates;
   var result = {
     window: {
@@ -138,74 +126,64 @@ function evaluateWindow(windowDef) {
     dailyDetails: [],
   };
 
-  // For each test date, rank and evaluate
+  var snapshotsByDate = {};
+  var prev20MapByDate = {};
   testDates.forEach(function (testDate) {
     var snapRes = loadSnapshotsForDate(testDate);
-    var snapMap = snapRes.map;
-    var snapshots = snapRes.list;
-    var codes = Object.keys(snapMap);
-    if (codes.length < 10) return;
-
-    // Load T-20 for momentum
+    if (Object.keys(snapRes.map).length >= 10) {
+      snapshotsByDate[testDate] = snapRes;
+    }
     var prev20Date = CALENDAR.getTradingDay(testDate, -20);
-    var prev20Res = prev20Date ? loadSnapshotsForDate(prev20Date) : { map: {} };
+    if (prev20Date) {
+      var prevRes = loadSnapshotsForDate(prev20Date);
+      if (Object.keys(prevRes.map).length > 0) {
+        prev20MapByDate[testDate] = prevRes;
+      }
+    }
+  });
 
-    // Run comparison
-    var comparison;
+  if (Object.keys(snapshotsByDate).length === 0) {
+    result.error = 'no_valid_dates_in_window';
+    return result;
+  }
+
+  // Collect per-date details (diagnostic only, no p-values)
+  var dates = Object.keys(snapshotsByDate).sort();
+  dates.forEach(function (testDate) {
+    var snapRes = snapshotsByDate[testDate];
+    var prevRes = prev20MapByDate[testDate] || { map: {} };
     try {
-      comparison = BASELINES.compareAllModels(snapMap, snapshots, prev20Res.map);
+      var comparison = BASELINES.compareAllModels(snapRes.map, snapRes.list, prevRes.map);
       comparison.date = testDate;
+      result.dailyDetails.push(comparison);
     } catch (e) {
-      comparison = { date: testDate, error: e.message };
-    }
-
-    result.dailyDetails.push(comparison);
-  });
-
-  // Aggregate per model
-  var modelNames = ['composite', 'technicalOnly', 'momentum'];
-
-  modelNames.forEach(function (mk) {
-    var validDays = result.dailyDetails.filter(function (d) {
-      return d && d[mk] && d[mk].metrics && d[mk].metrics.avgReturn != null;
-    });
-
-    if (validDays.length === 0) {
-      result.models[mk] = { validDays: 0 };
-      return;
-    }
-
-    var metrics = validDays.map(function (d) { return d[mk].metrics; });
-
-    result.models[mk] = {
-      validDays: validDays.length,
-      avgReturn: Math.round(metrics.reduce(function (s, m) { return s + m.avgReturn; }, 0) / metrics.length * 100) / 100,
-      avgWinRate: Math.round(metrics.reduce(function (s, m) { return s + m.winRate; }, 0) / metrics.length * 100) / 100,
-      avgExcess: metrics[0].avgExcess != null
-        ? Math.round(metrics.reduce(function (s, m) { return s + (m.avgExcess || 0); }, 0) / metrics.length * 100) / 100
-        : null,
-      avgCoverage: Math.round(metrics.reduce(function (s, m) { return s + (m.coverage || 0); }, 0) / metrics.length * 100) / 100,
-    };
-
-    // Aggregate vsRandom stats
-    var vsRandoms = validDays.map(function (d) { return d[mk].vsRandom; }).filter(function (v) { return v && v.pValue != null; });
-    if (vsRandoms.length > 0) {
-      result.models[mk].vsRandom = {
-        avgDelta: Math.round(vsRandoms.reduce(function (s, v) { return s + (v.delta || 0); }, 0) / vsRandoms.length * 100) / 100,
-        avgPValue: Math.round(vsRandoms.reduce(function (s, v) { return s + (v.pValue || 0); }, 0) / vsRandoms.length * 10000) / 10000,
-        significantDays: vsRandoms.filter(function (v) { return v.significant; }).length,
-        beatsRandomDays: vsRandoms.filter(function (v) { return v.beatsRandom; }).length,
-      };
+      result.dailyDetails.push({ date: testDate, error: e.message });
     }
   });
 
-  // Aggregate overlap
-  var overlaps = result.dailyDetails.map(function (d) { return d.overlap; }).filter(function (o) { return o && o.overlapPct != null; });
+  // Overlap summary
+  var overlaps = result.dailyDetails
+    .map(function (d) { return d.overlap; })
+    .filter(function (o) { return o && o.overlapPct != null; });
   if (overlaps.length > 0) {
     result.overlapSummary = {
       avgOverlapPct: Math.round(overlaps.reduce(function (s, o) { return s + o.overlapPct; }, 0) / overlaps.length),
     };
   }
+
+  // P0-3: Full time-series portfolio comparison per model
+  var modelNames = ['composite', 'technicalOnly', 'momentum'];
+
+  modelNames.forEach(function (mk) {
+    try {
+      var comparison = BASELINES.compareFullTimeSeries(
+        mk, snapshotsByDate, prev20MapByDate, klineIdx, bootstrapSamples
+      );
+      result.models[mk] = comparison;
+    } catch (e) {
+      result.models[mk] = { error: e.message };
+    }
+  });
 
   return result;
 }
@@ -217,10 +195,12 @@ function runRollingOOS(options) {
   opts.startDate = opts.startDate || '2023-10-30';
   opts.endDate = opts.endDate || '2026-06-15';
 
-  console.log('=== P1.1-E: Rolling Out-of-Sample Evaluation ===');
+  console.log('=== P0-3: Rolling Out-of-Sample Evaluation (Portfolio-Level) ===');
   console.log('Range: ' + opts.startDate + ' to ' + opts.endDate);
   console.log('Stable start: ' + (UNIVERSE.getStableStartDate() || 'N/A'));
   console.log('Include pre-stable: ' + (opts.includePreStable ? 'YES (exploration only)' : 'no'));
+  console.log('Bootstrap samples: ' + (opts.bootstrapSamples || 200) + ' (per window)');
+  console.log('NOTE: Statistical significance via full time-series comparison. No daily p-value averaging.');
   console.log();
 
   var winResult = generateWindows(opts);
@@ -239,12 +219,20 @@ function runRollingOOS(options) {
 
   if (!fs.existsSync(RESULTS_DIR)) fs.mkdirSync(RESULTS_DIR, { recursive: true });
 
+  // Load kline index once for all windows
+  console.log('Loading kline index...');
+  var klineIdx = SIMULATOR.loadKlineIndex();
+  console.log('Kline index: ' + Object.keys(klineIdx).length + ' stocks');
+
   var summary = {
     generatedAt: new Date().toISOString(),
     mode: 'expanding',
     windowCount: windows.length,
     windowStep: WINDOW_STEP_TRADING_DAYS,
-    horizon: 'T+3 close (snapshot)',
+    labelConvention: 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold',
+    horizon: 'T+1 open to T+4 close (P0-1)',
+    simulatorVersion: 'P0-2 (3-sleeve equal-weight overlapping cohorts)',
+    statisticsVersion: 'P0-3 (block bootstrap portfolio comparison, no daily p-value aggregation)',
     topN: TOP_N,
     dateRange: { start: opts.startDate, end: opts.endDate },
     stableStart: UNIVERSE.getStableStartDate(),
@@ -254,45 +242,48 @@ function runRollingOOS(options) {
 
   windows.forEach(function (w, wi) {
     console.log('Window ' + (wi + 1) + '/' + windows.length + ' — test: ' + w.testDates[0] + ' to ' + w.testDates[w.testDates.length - 1]);
-    var result = evaluateWindow(w);
+    var result = evaluateWindow(w, klineIdx, opts.bootstrapSamples || 200);
     summary.windows.push(result);
 
-    // Write per-window detail
     fs.writeFileSync(
       path.join(RESULTS_DIR, 'window_' + String(wi + 1).padStart(3, '0') + '.json'),
       JSON.stringify(result, null, 2), 'utf8'
     );
   });
 
-  // Aggregate summary
+  // P0-3: Aggregate — portfolio-level metrics per model (no daily averaging)
   var modelNames = ['composite', 'technicalOnly', 'momentum'];
   modelNames.forEach(function (mk) {
-    var validWindows = summary.windows.filter(function (w) { return w.models[mk] && w.models[mk].validDays > 0; });
+    var validWindows = summary.windows.filter(function (w) {
+      return w.models[mk] && !w.models[mk].error && w.models[mk].modelPortfolio;
+    });
     if (validWindows.length === 0) { summary[mk + 'Summary'] = { validWindows: 0 }; return; }
 
-    var m = validWindows.map(function (w) { return w.models[mk]; });
+    var portfolios = validWindows.map(function (w) { return w.models[mk].modelPortfolio; });
+    var comparisons = validWindows.map(function (w) { return w.models[mk].comparison; }).filter(function (c) { return c; });
+
     summary[mk + 'Summary'] = {
       validWindows: validWindows.length,
-      avgReturn: Math.round(m.reduce(function (s, x) { return s + x.avgReturn; }, 0) / m.length * 100) / 100,
-      avgWinRate: Math.round(m.reduce(function (s, x) { return s + x.avgWinRate; }, 0) / m.length * 100) / 100,
-      avgExcess: m[0].avgExcess != null
-        ? Math.round(m.reduce(function (s, x) { return s + (x.avgExcess || 0); }, 0) / m.length * 100) / 100
+      avgGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + p.grossReturn; }, 0) / portfolios.length * 100) / 100,
+      avgNetExcess: Math.round(portfolios.reduce(function (s, p) { return s + (p.netExcessReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      avgMaxDrawdownBps: Math.round(portfolios.reduce(function (s, p) { return s + (p.maxDrawdownBps || 0); }, 0) / portfolios.length * 100) / 100,
+      avgSharpe: portfolios.filter(function (p) { return p.sharpeRatio != null; }).length > 0
+        ? Math.round(portfolios.reduce(function (s, p) { return s + (p.sharpeRatio || 0); }, 0) / portfolios.length * 100) / 100
         : null,
-      avgCoverage: Math.round(m.reduce(function (s, x) { return s + (x.avgCoverage || 0); }, 0) / m.length * 100) / 100,
+      avgCoverage: Math.round(portfolios.reduce(function (s, p) { return s + (p.coverageRate || 0); }, 0) / portfolios.length * 100) / 100,
+      totalExecutedTrades: portfolios.reduce(function (s, p) { return s + (p.executedTrades || 0); }, 0),
     };
 
-    // vsRandom summary
-    var vrWindows = validWindows.filter(function (w) { return w.models[mk].vsRandom; });
-    if (vrWindows.length > 0) {
-      var vr = vrWindows.map(function (w) { return w.models[mk].vsRandom; });
+    if (comparisons.length > 0) {
       summary[mk + 'Summary'].vsRandom = {
-        avgDelta: Math.round(vr.reduce(function (s, v) { return s + v.avgDelta; }, 0) / vr.length * 100) / 100,
-        significantFraction: Math.round(vr.reduce(function (s, v) { return s + v.significantDays; }, 0) / vr.reduce(function (s, v) { return s + v.significantDays + (v.significantDays < vrWindows.length ? 0 : 0); }, 0) * 100) / 100,
+        avgGrossReturnDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.grossReturnDelta || 0); }, 0) / comparisons.length * 100) / 100,
+        avgNetExcessDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.netExcessDelta || 0); }, 0) / comparisons.length * 100) / 100,
+        significantWindows: comparisons.filter(function (c) { return c.significant; }).length,
+        _note: 'P0-3: significance via full time-series comparison, NOT daily p-value averaging',
       };
     }
   });
 
-  // Write summary
   var summaryPath = path.join(RESULTS_DIR, 'rolling_oos_summary.json');
   fs.writeFileSync(summaryPath, JSON.stringify(summary, null, 2), 'utf8');
   console.log('\nSummary written to ' + summaryPath);
@@ -323,12 +314,12 @@ if (require.main === module) {
   ['composite', 'technicalOnly', 'momentum'].forEach(function (m) {
     var s = result[m + 'Summary'] || {};
     console.log(m + ': ' + (s.validWindows || 0) + ' windows' +
-      (s.avgReturn != null ? ' | return=' + s.avgReturn + '%' : '') +
-      (s.avgWinRate != null ? ' | winRate=' + s.avgWinRate + '%' : '') +
-      (s.avgExcess != null ? ' | excess=' + s.avgExcess + '%' : '') +
+      (s.avgGrossReturn != null ? ' | grossReturn=' + s.avgGrossReturn + '%' : '') +
+      (s.avgNetExcess != null ? ' | netExcess=' + s.avgNetExcess + '%' : '') +
       (s.avgCoverage != null ? ' | coverage=' + s.avgCoverage + '%' : ''));
     if (s.vsRandom) {
-      console.log('  vs Random: delta=' + s.vsRandom.avgDelta + ' significantFrac=' + s.vsRandom.significantFraction);
+      console.log('  vs Random: delta=' + s.vsRandom.avgGrossReturnDelta +
+        ' significantWindows=' + s.vsRandom.significantWindows + '/' + s.validWindows);
     }
   });
 }

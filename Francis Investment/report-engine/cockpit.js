@@ -218,6 +218,8 @@ function renderAll(data) {
   fetchPredictionSettlement();
   // v3.4.9.4: Fetch cohort integrity data
   fetchCohortIntegrity();
+  // P1-UI: Render Research Lab from cockpit data
+  renderResearchLab(data.researchLab);
 }
 
 /**
@@ -228,7 +230,7 @@ function renderAllError(msg) {
     'wnb-body', 'api-health-body', 'data-files-body', 'prediction-body',
     'shadow-baseline-body', 'leakage-body', 'permissions-body',
     'tasks-body', 'verify-body', 'prediction-settlement-body', 'calibration-body',
-    'changelog-body', 'failures-body', 'cohort-integrity-body'
+    'changelog-body', 'failures-body', 'cohort-integrity-body', 'research-lab-body'
   ];
   var errorHtml = '<div class="status-error" style="padding:12px;font-size:13px;">'
     + esc(msg) + '</div>';
@@ -957,6 +959,128 @@ function renderPredictionSettlement(data) {
 }
 
 // ══════ Panel 6c: Research Cohort Integrity (v3.4.9.4) ══════
+
+// ---- P1-UI: Research Lab ----
+
+function renderResearchLab(researchLab) {
+  var el = document.getElementById('research-lab-body');
+  if (!researchLab) {
+    el.innerHTML = '<div class="loading">Research Lab data not available</div>';
+    return;
+  }
+
+  // P0 status banner
+  var statusBg, statusColor;
+  if (researchLab.status === 'invalid') {
+    statusBg = '#fee2e2'; statusColor = '#dc2626';
+  } else if (researchLab.status === 'p0_verified') {
+    statusBg = '#fefce8'; statusColor = '#a16207';
+  } else {
+    statusBg = '#f0fdf4'; statusColor = '#16a34a';
+  }
+
+  var html = '';
+
+  // Status banner
+  html += '<div style="padding:8px 12px;margin-bottom:10px;background:' + statusBg + ';border-radius:4px;border-left:3px solid ' + statusColor + ';">';
+  html += '<span style="font-weight:700;color:' + statusColor + ';font-size:13px;">' + esc(researchLab.statusLabel || 'Unknown') + '</span>';
+  if (researchLab.warning) {
+    html += '<div style="font-size:11px;color:' + statusColor + ';margin-top:4px;">' + esc(researchLab.warning) + '</div>';
+  }
+  html += '</div>';
+
+  // Universe info
+  html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">';
+  html += '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
+  html += '<div style="font-size:11px;font-weight:600;">' + esc(researchLab.universe.type || '?') + '</div>';
+  html += '<div style="font-size:9px;color:#64748b;">Universe</div></div>';
+
+  html += '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
+  html += '<div style="font-size:11px;font-weight:600;">' + (researchLab.universe.stableStart || '?') + '</div>';
+  html += '<div style="font-size:9px;color:#64748b;">Stable Start</div></div>';
+
+  html += '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:' + (researchLab.p0Status === 'pass' ? '#f0fdf4' : '#fee2e2') + ';border-radius:4px;border:1px solid #e2e8f0;">';
+  html += '<div style="font-size:11px;font-weight:600;color:' + (researchLab.p0Status === 'pass' ? '#16a34a' : '#dc2626') + ';">' + esc(researchLab.p0Status || '?') + '</div>';
+  html += '<div style="font-size:9px;color:#64748b;">P0 Status</div></div>';
+
+  html += '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
+  html += '<div style="font-size:11px;font-weight:600;">' + (researchLab.validWindows || 0) + '</div>';
+  html += '<div style="font-size:9px;color:#64748b;">Valid Windows</div></div>';
+  html += '</div>';
+
+  // Feature mask
+  var real = researchLab.universe.realFeatures || [];
+  var unavail = researchLab.universe.unavailableFeatures || [];
+  html += '<div style="margin-bottom:8px;font-size:10px;">';
+  html += '<span style="font-weight:600;">Features: </span>';
+  for (var i = 0; i < real.length; i++) {
+    html += '<span style="background:#dcfce7;color:#16a34a;padding:1px 4px;border-radius:3px;margin-right:3px;">' + esc(real[i]) + '</span>';
+  }
+  for (var j = 0; j < unavail.length; j++) {
+    html += '<span style="background:#fee2e2;color:#dc2626;padding:1px 4px;border-radius:3px;margin-right:3px;">' + esc(unavail[j]) + '</span>';
+  }
+  html += '</div>';
+
+  // Label convention
+  html += '<div style="margin-bottom:8px;font-size:9px;color:#94a3b8;font-family:monospace;">';
+  html += 'Label: ' + esc(researchLab.labelConvention || '?') + '</div>';
+
+  // P1 Model info
+  if (researchLab.p1Model) {
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-bottom:8px;">';
+    html += '<span style="font-weight:600;font-size:11px;">P1: ' + esc(researchLab.p1Model.type) + '</span>';
+    html += '<span style="font-size:9px;color:#64748b;margin-left:6px;">features=' + (researchLab.p1Model.features || []).length + '</span>';
+    html += '<span style="font-size:9px;color:#64748b;margin-left:6px;">std=' + esc(researchLab.p1Model.standardization || '?') + '</span>';
+    html += '</div>';
+  }
+
+  // Latest window metrics
+  if (researchLab.latestWindow) {
+    var lw = researchLab.latestWindow;
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-bottom:6px;">';
+    html += '<div style="font-size:10px;font-weight:600;">Latest Valid Window</div>';
+    html += '<div style="font-size:9px;color:#64748b;">' + esc(lw.testStart || '?') + ' → ' + esc(lw.testEnd || '?') + ' (' + (lw.testDays || 0) + ' days)</div>';
+    html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+    html += '<span style="font-size:9px;">λ=' + esc(String(lw.lambda)) + '</span>';
+    html += '<span style="font-size:9px;">MSE=' + esc(String(lw.testMSE)) + '</span>';
+    html += '<span style="font-size:9px;">RankIC=' + esc(String(lw.avgRankIC)) + '</span>';
+    html += '<span style="font-size:9px;">DirAcc=' + esc(String(lw.directionAccuracy)) + '%</span>';
+    html += '<span style="font-size:9px;' + (lw.portfolioGrossReturn > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Gross=' + esc(String(lw.portfolioGrossReturn)) + '%</span>';
+    html += '<span style="font-size:9px;' + (lw.portfolioNetExcess > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Excess=' + esc(String(lw.portfolioNetExcess)) + '%</span>';
+    html += '</div></div>';
+  }
+
+  // Random CI
+  if (researchLab.randomCI) {
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;">';
+    html += '<span style="font-size:10px;font-weight:600;">Random Baseline CI (95%)</span>';
+    html += '<div style="font-size:9px;color:#64748b;">' +
+      'mean=' + esc(String(researchLab.randomCI.mean)) +
+      ' [' + esc(String(researchLab.randomCI.ci95_lower)) +
+      ', ' + esc(String(researchLab.randomCI.ci95_upper)) + ']' +
+      ' n=' + esc(String(researchLab.randomCI.samples)) +
+      '</div></div>';
+  }
+
+  // Model artifacts
+  if (researchLab.modelArtifacts && researchLab.modelArtifacts.length > 0) {
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px;">';
+    html += '<div style="font-size:10px;font-weight:600;">Model Artifacts (' + researchLab.modelArtifacts.length + ' windows)</div>';
+    html += '<div style="max-height:100px;overflow-y:auto;font-size:9px;font-family:monospace;">';
+    for (var ai = 0; ai < Math.min(researchLab.modelArtifacts.length, 6); ai++) {
+      var a = researchLab.modelArtifacts[ai];
+      html += '<div>' + esc(a.testStart || '?') + ' λ=' + esc(String(a.lambda)) + ' IC=' + esc(String(a.rankIC)) + ' gross=' + esc(String(a.grossReturn)) + '%</div>';
+    }
+    html += '</div></div>';
+  }
+
+  // Legacy composite note
+  html += '<div style="border-top:1px solid #e2e8f0;padding-top:4px;margin-top:6px;font-size:9px;color:#94a3b8;">';
+  html += 'Legacy composite: quarantined as historical control only — not used for scoring or promotion.';
+  html += '</div>';
+
+  el.innerHTML = html;
+}
 
 function fetchCohortIntegrity() {
   fetch('/api/cohort-integrity')
