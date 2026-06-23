@@ -1,0 +1,50 @@
+{
+  "frozenAt": "2026-06-23T05:01:29.893Z",
+  "version": "P1-B.1",
+  "purpose": "Record all raw data sources and their state at research initiation",
+  "klines": {
+    "source": "Tencent ifzq API (web.ifzq.gtimg.cn)",
+    "params": "param={sh/sz}{code},day,2020-01-01,,640,qfq",
+    "format": "pre-reconciled daily OHLCV bars",
+    "knownLimitations": [
+      "Turnover field is always 0 (Tencent qfqday does not provide it)",
+      "Max 640 bars per call (~2.5-3 years)",
+      "Pre-reconciled prices mean historical prices are adjusted for all corporate actions"
+    ],
+    "directory": "report-engine/data/klines/"
+  },
+  "indexDaily": {
+    "source": "Sina hq.sinajs.cn (daily close)",
+    "directory": "report-engine/data/market_history/indices/",
+    "indices": [
+      "sh000001.json",
+      "sz399001.json",
+      "sz399006.json"
+    ]
+  },
+  "financialData": {
+    "source": "NOT available with announcement dates",
+    "fallback": "REPORT_DATE + 120 days estimation",
+    "flag": "_announcementDateEstimated: true",
+    "impact": "Fundamental features (PE, ROE, debt ratio) will be stale for 1-4 months in historical snapshots"
+  },
+  "sectorClassification": {
+    "method": "Name-matching against 8 hardcoded sector keyword sets",
+    "mappingFile": null,
+    "alternative": "Eastmoney f100 industry code (current snapshot only, no history)"
+  },
+  "tradingCalendar": {
+    "total": 1709,
+    "byYear": {
+      "2020": 243,
+      "2021": 243,
+      "2022": 242,
+      "2023": 242,
+      "2024": 244,
+      "2025": 245,
+      "2026": 250
+    },
+    "first": "2020-01-02",
+    "last": "2026-12-31"
+  }
+}

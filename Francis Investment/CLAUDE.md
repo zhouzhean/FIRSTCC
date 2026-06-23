@@ -1,6 +1,33 @@
-# Francis Investment · A股量化交易系统 v3.4.9.4.2
+# Francis Investment · A股量化交易系统 v3.4.9.5
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+## v3.4.9.5: Point-in-Time Historical Research Lab (Phase 1)
+
+**5 new modules under `mosaic/research/`** — honest historical data infrastructure. No ML, no auto-tuning, no model promotion. Shadow-only output.
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `data_audit.js` | ~300 | Data coverage audit → `data_coverage_report.json` |
+| `universal_calendar.js` | ~270 | Trading calendar 2020-2026 (1709 days) + raw data manifest |
+| `historical_snapshot.js` | ~470 | Immutable daily point-in-time snapshots (835 dates, 953K records) |
+| `walk_forward_expander.js` | ~330 | Expanding-window walk-forward, 7 windows, T+3 horizon |
+| `baseline_models.js` | ~200 | Three rule-based baselines: composite, momentum, random |
+
+### Walk-Forward Results (2023-07-01 to 2026-06-15, 7 expanding windows)
+
+| Model | avgReturn | winRate | avgExcess (post-cost) | Kendall τ |
+|-------|-----------|---------|-----------------------|-----------|
+| Composite (rule-based) | +0.25% | 45.99% | **-0.46%** | **-0.0274** |
+| Momentum (20-day) | -0.19% | 43.44% | -0.93% | — |
+| Random (equal-weight) | +0.37% | 49.57% | -0.34% | — |
+
+**Key finding**: All three models post negative post-cost excess. Kendall τ near zero — composite scores have essentially no rank correlation with T+3 forward returns. Random baseline marginally outperforms both rule-based models.
+
+### Data Coverage
+- **1578 stocks, 980,031 K-line bars** from Tencent ifzq (2020-01-02 to 2026-06-18)
+- **Financial announcement dates**: NOT available from any API (Eastmoney V2 down). All financial fields flagged `_estimated: true`
+- **Outputs**: `report-engine/data/research/snapshots/` (835 JSONL files), `report-engine/data/research/walk_forward_results/`
 
 ## v3.4.9.4.2: Cohort Visibility and Acceptance Test — 5 files changed.
 

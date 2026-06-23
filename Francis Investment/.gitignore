@@ -59,3 +59,7 @@ report-engine/data/verification/leakage_audit.json
 
 # Secrets
 .env
+
+# v3.4.9.5: Research data outputs (large JSONL files — regeneratable)
+report-engine/data/research/snapshots/
+report-engine/data/research/walk_forward_results/
