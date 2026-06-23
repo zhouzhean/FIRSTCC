@@ -1,18 +1,18 @@
 {
-  "commit": "b60d0252d16c3af557ddc43cf8daa9a00cb33e1e",
-  "version": "v3.4.9.4.2",
-  "deployedAt": "2026-06-23T04:50:00.000Z",
+  "commit": "c219bd142c3062ce0e4cb5d6bedb2b28fb13441f",
+  "version": "v3.4.9.5",
+  "deployedAt": "2026-06-23T10:55:37.370Z",
   "branch": "master",
   "files": {
-    "mosaic/config.js": "1933aadf5b1d162b",
-    "mosaic/research_cohort.js": "cfe8ae827976ae7b",
-    "mosaic/prediction_ledger.js": "86a994aab3169334",
-    "mosaic/simfolio.js": "d232fb8becdc685a",
-    "mosaic/scheduler.js": "2b90bc3807bbaf73",
     "mosaic_server.js": "cc2e6d0cad636bcd",
-    "mosaic/analysis/verification_runner.js": "98fe967228920157",
-    "report-engine/cockpit.html": "f825206dea31359a",
-    "report-engine/cockpit.js": "70dddb560b948b04",
-    "mosaic/test/v3.4.9.4.2_test.js": "b2a44bc1101183a8"
+    "mosaic/config.js": "cc8188f8b77d1309",
+    "mosaic/pipeline.js": "74a9f7570db58e3b",
+    "mosaic/scheduler.js": "2b90bc3807bbaf73",
+    "mosaic/decision_kernel.js": "2f17dc9b98be06bb",
+    "mosaic/simfolio.js": "d232fb8becdc685a",
+    "mosaic/factors/composite.js": "294db5bf8646278e",
+    "mosaic/factors/hidden_signals.js": "71506a0eaea9c0de",
+    "mosaic/collectors/market_data.js": "ad6b140fbfd80b75",
+    "mosaic/predict/expected_return.js": "58c263e95df3cfdd"
   }
 }
