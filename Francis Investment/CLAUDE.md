@@ -1,6 +1,75 @@
-# Francis Investment · A股量化交易系统 v3.4.9.5
+# Francis Investment · A股量化交易系统 v3.4.9.6
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+## v3.4.9.6: Making History Trustworthy (Phase 1.1)
+
+**7 new + 3 modified modules** — honest data boundaries, real feature availability, proper trade simulation.
+
+### New Modules
+
+| Module | Lines | Purpose |
+|--------|-------|---------|
+| `mosaic/research/universe_definition.js` | ~200 | Honest universe boundaries: current-file, stable start 2023-10-27 (90% threshold) |
+| `mosaic/research/data_audit_v2.js` | ~220 | Honest coverage: per-date %, stock-start cliff, gap analysis |
+| `mosaic/research/technical_baseline.js` | ~180 | Technical+hidden only baseline (100% real PIT data) |
+| `mosaic/research/trade_simulator.js` | ~320 | T+1 open entry, T+N close exit, suspension/limit handling, NAV time series |
+| `mosaic/research/rolling_oos_evaluation.js` | ~250 | Renamed from walk_forward: rolling OOS evaluation with trade_simulator metrics |
+| `mosaic/research/linear_model.js` | ~240 | Closed-form ridge regression (normal equations), fixed λ grid |
+| `mosaic/research/true_walk_forward.js` | ~220 | Strict train→validate→test pipeline, per-window model artifacts |
+
+### Modified Modules
+
+| Module | Change |
+|--------|--------|
+| `mosaic/research/historical_snapshot.js` | +featureAvailability, +featureSource, null unavailable dims, +universe metadata, +isPreStable |
+| `mosaic/research/baseline_models.js` | Fixed-seed xorshift (42), 500-sample bootstrap, 95% CI, p-value, unified metrics, compareToRandom |
+| `mosaic/factors/composite.js` | Unchanged — P1.1 dim nulling done in snapshot output, not in production scorer |
+
+### Key Findings (6 OOS windows, 2024-12 to 2026-05)
+
+| Model | avgReturn | winRate | avgExcess | vs Random (δ) | p-value |
+|-------|-----------|---------|-----------|---------------|---------|
+| Composite (rule-based) | +0.09% | 44.6% | -0.51% | -0.07 | 0.95 (ns) |
+| Momentum (20-day) | -0.24% | 43.4% | -0.87% | -0.42 | — |
+| Technical-Only | +0.12% | 48.7% | -0.48% | **-0.04** | — |
+| Random (500 boot) | ~+0.16% | — | — | — | — |
+
+**Critical finding**: Composite vs Technical-Only overlap is **0%** — the unavailable features (financial/capitalFlow/event, all with fake defaults) completely determine composite rankings. Technical-only baseline uses 100% real point-in-time data.
+
+### Linear Model (Ridge, 6 windows)
+
+| Metric | Value |
+|--------|-------|
+| Features | technical, hidden, signalCount, volatility20d, changePct |
+| Best λ | 10 (all windows) |
+| Avg test MSE | 19.20 |
+| Avg MAE | 2.84% |
+| Avg direction acc | 61.59% |
+
+Model artifacts per window saved to `report-engine/data/research/model_artifacts/window_NNN/` (model.json + feature_schema.json + dates.json + data_hash.json). Shadow only.
+
+### Data Boundaries
+
+- **Universe**: 1578 stocks (current-file), source=Tencent ifzq qfq
+- **Stable start**: 2023-10-27 (90% universe coverage, 96% cumulative by first date)
+- **Exploration only**: before 2023-10-30
+- **Survivorship risk**: true (delisted stocks absent)
+- **Available features**: technical (price/vol), hidden (H1-H9) — ONLY
+- **Unavailable**: financial, capitalFlow, event — all null with `_estimated:true`, marked `featureAvailability:false`
+
+### Output Structure (new)
+
+```
+report-engine/data/research/
+├── universe_coverage_index.json
+├── data_coverage_report_v2.json
+├── model_artifacts/window_NNN/{model,feature_schema,dates,data_hash}.json
+├── trade_simulation/{portfolio_nav.jsonl, trade_simulation_summary.json}
+├── oos_evaluation_results/{rolling_oos_summary, window_NNN}.json
+├── snapshots/  (existing, updated schema)
+└── ...
+```
 
 ## v3.4.9.5: Point-in-Time Historical Research Lab (Phase 1)
 

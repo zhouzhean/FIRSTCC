@@ -1,19 +1,26 @@
 /**
- * P1-C: Historical Point-in-Time Daily Snapshots
+ * P1.1: Historical Point-in-Time Daily Snapshots (v2)
  *
  * Builds immutable (asOfDate, stockCode) records for every trading day.
  * Each record captures everything visible ON that date — no forward data.
  *
+ * P1.1 upgrades:
+ * — Adds universeVersion, universeCoverageStatus, survivorshipRisk
+ * — Adds featureAvailability and featureSource (honest about what data exists)
+ * — Nulls-out unavailable dimensions (financial, capitalFlow, event)
+ * — Pre-stable dates marked "exploration only"
+ *
  * Output: report-engine/data/research/snapshots/YYYY-MM-DD.jsonl
  *         (one JSONL file per date, one line per stock)
- *
- * Uses real factor engines (hidden_signals.js, composite.js) for point-in-time replay.
- * Financial data is tagged with _announcementDateEstimated since real dates are unavailable.
  *
  * Schema per record:
  *   asOfDate, code, name, price, open, close, high, low, volume, turnover,
  *   changePct, volatility20d, isTrading,
- *   signals: [id], signalCount, compositeScore, rating, dimensions: {fundamental, technical, hidden, capitalFlow, event},
+ *   universeVersion, universeCoverageStatus, survivorshipRisk,
+ *   featureAvailability: {financial, capitalFlow, event, hidden, technical},
+ *   featureSource: {financial, capitalFlow, event, hidden, technical},
+ *   signals: [id], signalCount, compositeScore, rating,
+ *   dimensions: {fundamental, technical, hidden, capitalFlow, event} (null when unavailable),
  *   expectedReturn, confidence, evidenceThresholdPassed,
  *   financial: {roe, debtRatio, revenueGrowth, npGrowth, ocfPerShare, reportDate, announcementDate, _estimated},
  *   regime: [tags], indexSH, benchmarkEntry,
@@ -28,12 +35,36 @@ var DATA_DIR = path.join(BASE_DIR, 'report-engine', 'data');
 var KLINES_DIR = path.join(DATA_DIR, 'klines');
 var INDICES_DIR = path.join(DATA_DIR, 'market_history', 'indices');
 var CALENDAR = require('./universal_calendar');
-var config = require('../config');
+var UNIVERSE = require('./universe_definition');
 
 var SNAPSHOTS_DIR = path.join(DATA_DIR, 'research', 'snapshots');
 
 // Round-trip cost: 0.025% commission × 2 + 0.1% stamp tax + 0.001% transfer fee × 2 + 0.15% slip × 2
 var ROUND_TRIP_COST_PCT = 0.025 * 2 + 0.1 + 0.001 * 2 + 0.15 * 2;
+
+// ---- Feature availability (P1.1: honest about what data exists) ----
+// Only technical (from price/volume) and hidden (from derived signals) have real
+// point-in-time data. Financial, capital flow, and event dimensions have NO
+// point-in-time data — all related APIs are unavailable for historical dates.
+
+var FEATURE_AVAILABILITY = {
+  financial: false,
+  capitalFlow: false,
+  event: false,
+  hidden: true,
+  technical: true,
+};
+
+var FEATURE_SOURCE = {
+  financial: 'unavailable',
+  capitalFlow: 'unavailable',
+  event: 'unavailable',
+  hidden: 'computed_pt',
+  technical: 'computed_pt',
+};
+
+var UNIVERSE_VERSION = 'current-file';
+var SURVIVORSHIP_RISK = true;
 
 // ---- K-line Index (pre-load all files into memory-indexed structure) ----
 
@@ -198,9 +229,8 @@ function estimateFinancialData(code, asOfDate, klineIndex) {
   // For historical research, financial fields are marked as estimated and only
   // populated if a real API can provide point-in-time values.
   //
-  // Strategy: record financial fields as null with _estimated marker.
-  // Future improvement: batch-download quarterly financial data with announcement dates
-  // from a reliable source (e.g., AKShare, Tushare, or Eastmoney datacenter with corrected API).
+  // P1.1: All financial fields are null. These MUST NOT participate in scoring,
+  // ranking, or any model training. The only real point-in-time data is price/volume.
   return {
     roe: null,
     debtRatio: null,
@@ -210,7 +240,7 @@ function estimateFinancialData(code, asOfDate, klineIndex) {
     reportDate: null,
     announcementDate: null,
     _estimated: true,
-    _note: 'Historical financial data not available with announcement dates. Eastmoney datacenter-web API is offline. Fields preserved for future data integration.'
+    _note: 'Historical financial data not available with announcement dates. Eastmoney datacenter-web API is offline. These fields MUST NOT participate in scoring or ranking. Preserved for future data integration only.'
   };
 }
 
@@ -223,6 +253,9 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
 
   var shIdxClose = getIndexClose('sh000001', asOfDate);
   var benchmarkEntry = shIdxClose;
+
+  // P1.1: Determine if this date is in the stable period
+  var isPreStable = UNIVERSE.isPreStableDate(asOfDate);
 
   for (var ci = 0; ci < codes.length; ci++) {
     var code = codes[ci];
@@ -326,17 +359,26 @@ function buildOneSnapshot(asOfDate, klineIdx, indexKlineIdx, opts) {
       changePct: changePct != null ? Math.round(changePct * 100) / 100 : null,
       volatility20d: volatility != null ? Math.round(volatility * 100) / 100 : null,
       isTrading: true,
+      // P1.1: Universe metadata
+      universeVersion: UNIVERSE_VERSION,
+      universeCoverageStatus: isPreStable ? 'partial' : 'stable',
+      survivorshipRisk: SURVIVORSHIP_RISK,
+      // P1.1: Feature availability — honest about what data is real
+      featureAvailability: FEATURE_AVAILABILITY,
+      featureSource: FEATURE_SOURCE,
       signals: hiddenResult ? hiddenResult.signals.map(function (s) { return s.id; }) : [],
       signalCount: hiddenResult ? hiddenResult.signalCount : 0,
       compositeScore: compositeResult ? compositeResult.compositeScore : null,
       rating: compositeResult ? compositeResult.rating : null,
-      dimensions: compositeResult ? {
-        fundamental: compositeResult.rawScores ? compositeResult.rawScores.fundamental : null,
-        technical: compositeResult.rawScores ? compositeResult.rawScores.technical : null,
-        hidden: compositeResult.rawScores ? compositeResult.rawScores.hidden : null,
-        capitalFlow: compositeResult.rawScores ? compositeResult.rawScores.capitalFlow : null,
-        event: compositeResult.rawScores ? compositeResult.rawScores.event : null,
-      } : null,
+      // P1.1: Null-out unavailable dimensions (only technical and hidden are real)
+      // fundamental, capitalFlow, event are null because zero point-in-time data exists
+      dimensions: {
+        fundamental: null,
+        technical: compositeResult && compositeResult.rawScores ? compositeResult.rawScores.technical : null,
+        hidden: compositeResult && compositeResult.rawScores ? compositeResult.rawScores.hidden : null,
+        capitalFlow: null,
+        event: null,
+      },
       expectedReturn: expectedReturnVal,
       confidence: confidenceVal,
       evidenceThresholdPassed: confidenceVal != null && confidenceVal >= 0.60,
@@ -405,6 +447,13 @@ function buildAllSnapshots(startDate, endDate, opts) {
   console.log('Date range: ' + tradingDays[startIdx] + ' to ' + tradingDays[endIdx] + ' (' + dateCount + ' days)');
   console.log('Stocks in index: ' + klineInfo.count);
 
+  // P1.1: Warn if starting before stable period
+  var stableStart = UNIVERSE.getStableStartDate();
+  if (startDate && startDate < stableStart) {
+    console.log('NOTE: Start date ' + startDate + ' is before stable period (' + stableStart + ').');
+    console.log('Pre-stable snapshots are marked universeCoverageStatus="partial" — exploration only.');
+  }
+
   if (!fs.existsSync(SNAPSHOTS_DIR)) fs.mkdirSync(SNAPSHOTS_DIR, { recursive: true });
 
   var stats = { totalSnapshots: 0, dates: 0, errors: 0 };
@@ -438,10 +487,21 @@ function buildAllSnapshots(startDate, endDate, opts) {
 
 if (require.main === module) {
   var startDate = process.argv[2] || '2024-06-01';
-  var endDate = process.argv[3] || '2024-06-30';
+  var endDate = process.argv[3] || '2024-06-05';
 
-  console.log('=== P1-C: Historical Point-in-Time Snapshot Builder ===');
+  // P1.1: Show universe info
+  var stableStart = UNIVERSE.getStableStartDate();
+  console.log('=== P1.1: Historical Point-in-Time Snapshot Builder ===');
+  console.log('Universe: ' + UNIVERSE_VERSION + ' | Stable start: ' + stableStart);
+  console.log('Features available: technical=' + FEATURE_AVAILABILITY.technical +
+    ' hidden=' + FEATURE_AVAILABILITY.hidden +
+    ' financial=' + FEATURE_AVAILABILITY.financial +
+    ' capitalFlow=' + FEATURE_AVAILABILITY.capitalFlow +
+    ' event=' + FEATURE_AVAILABILITY.event);
   console.log('Range: ' + startDate + ' to ' + endDate);
+  if (startDate < stableStart) {
+    console.log('WARNING: Start date is before stable period. Snapshots will be marked "partial".');
+  }
   console.log();
 
   var result = buildAllSnapshots(startDate, endDate);
@@ -456,8 +516,10 @@ if (require.main === module) {
       var sampleFile = path.join(SNAPSHOTS_DIR, sampleDate + '.jsonl');
       if (fs.existsSync(sampleFile)) {
         var firstLine = fs.readFileSync(sampleFile, 'utf8').split('\n')[0];
-        console.log('\nSample record (' + sampleDate + '):');
-        console.log(JSON.stringify(JSON.parse(firstLine), null, 2));
+        try {
+          console.log('\nSample record (' + sampleDate + '):');
+          console.log(JSON.stringify(JSON.parse(firstLine), null, 2));
+        } catch (e) { console.log('(could not parse sample)'); }
       }
     }
   }
