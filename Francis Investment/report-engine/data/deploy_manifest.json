@@ -1,18 +1,18 @@
 {
-  "commit": "9aa8a690c5a5b484c42528c08231e50e28a1fe44",
-  "version": "v3.4.9.4.1",
-  "deployedAt": "2026-06-22T10:55:12.690Z",
+  "commit": "50d3793b04875ae60d8b441523eb1255c77adc55",
+  "version": "v3.4.9.4.2",
+  "deployedAt": "2026-06-23T04:50:00.000Z",
   "branch": "master",
   "files": {
-    "mosaic/config.js": "9688d3bc772142ac",
+    "mosaic/config.js": "1933aadf5b1d162b",
     "mosaic/research_cohort.js": "cfe8ae827976ae7b",
     "mosaic/prediction_ledger.js": "86a994aab3169334",
     "mosaic/simfolio.js": "d232fb8becdc685a",
     "mosaic/scheduler.js": "2b90bc3807bbaf73",
-    "mosaic_server.js": "b906e37e1dcf9604",
-    "mosaic/analysis/verification_runner.js": "a74d4f1061ed8cd0",
+    "mosaic_server.js": "cc2e6d0cad636bcd",
+    "mosaic/analysis/verification_runner.js": "98fe967228920157",
     "report-engine/cockpit.html": "f825206dea31359a",
-    "report-engine/cockpit.js": "54ad7754989cf7c3",
-    "mosaic/test/v3.4.9.4.1_test.js": "1891d2d7b14c1e9d"
+    "report-engine/cockpit.js": "70dddb560b948b04",
+    "mosaic/test/v3.4.9.4.2_test.js": "b2a44bc1101183a8"
   }
 }

@@ -1216,6 +1216,7 @@ if (require.main === module) {
 
 // v3.4.9.2: Allow tests to redirect data directories
 function _reloadDataDir(newDataDir) {
+  DATA_DIR = newDataDir;   // v3.4.9.4.2: redirect manifest read path for complete test isolation
   SIMFOLIO_DIR = path.join(newDataDir, 'simfolio');
   KLINES_DIR = path.join(newDataDir, 'klines');
   VERIFICATION_DIR = path.join(newDataDir, 'verification');

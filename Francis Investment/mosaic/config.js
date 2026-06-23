@@ -2,20 +2,61 @@
  * Mosaic 量化引擎配置 (Node.js)
  */
 const path = require('path');
+const fs = require('fs');
 
 const BASE_DIR = path.join(__dirname, '..');
 const REPORT_ENGINE_DIR = path.join(BASE_DIR, 'report-engine');
 const DATA_DIR = path.join(REPORT_ENGINE_DIR, 'data');
 
-// Build identity — populated at module load (Phase 0.1)
-var _buildCommit = null;
+// ====== Phase 0: Release Identity ======
+// Always read both sources: git (when available) and deploy_manifest.json.
+// The identityStatus field tells the consumer whether the two agree.
+
+var _gitCommit = null;
 var _buildTimestamp = null;
 try {
   var _cp = require('child_process');
-  _buildCommit = _cp.execSync('git rev-parse HEAD', { cwd: BASE_DIR, encoding: 'utf8', timeout: 5000 }).trim();
+  _gitCommit = _cp.execSync('git rev-parse HEAD', { cwd: BASE_DIR, encoding: 'utf8', timeout: 5000 }).trim();
   _buildTimestamp = new Date().toISOString();
 } catch (_) {
-  // git not available (e.g., scp-only deploy) — leave null
+  // git not available (e.g., scp-only cloud deploy) — _gitCommit stays null
+}
+
+// Always read deploy_manifest.json — never conditional on git availability.
+// The manifest is the authoritative identity when git is absent (cloud).
+var _deployCommit = null;
+var _deployManifestValid = false;
+var _deployFileHashCount = 0;
+try {
+  var _manifestPath = path.join(BASE_DIR, 'report-engine', 'data', 'deploy_manifest.json');
+  if (fs.existsSync(_manifestPath)) {
+    var _manifest = JSON.parse(fs.readFileSync(_manifestPath, 'utf8'));
+    if (_manifest.commit) {
+      _deployCommit = _manifest.commit;
+      if (!_buildTimestamp) _buildTimestamp = _manifest.deployedAt || null;
+      _deployManifestValid = true;
+      if (_manifest.files && typeof _manifest.files === 'object') {
+        _deployFileHashCount = Object.keys(_manifest.files).length;
+      }
+    }
+  }
+} catch (_) {
+  // deploy_manifest.json unreadable — manifest fields stay at null/false/0
+}
+
+// buildCommit is the best available identity: git first, manifest fallback.
+var _buildCommit = _gitCommit || _deployCommit || null;
+
+// identityStatus: matched | mismatch | git_only | manifest_only | manifest_missing
+var _identityStatus = 'manifest_missing';
+if (_deployCommit) {
+  if (_gitCommit) {
+    _identityStatus = (_gitCommit === _deployCommit) ? 'matched' : 'mismatch';
+  } else {
+    _identityStatus = 'manifest_only';
+  }
+} else {
+  _identityStatus = _gitCommit ? 'git_only' : 'manifest_missing';
 }
 
 // v3.4.9.2: Test data root override — set by tests to redirect all file I/O
@@ -23,10 +64,16 @@ try {
 var _testDataRoot = null;
 
 module.exports = {
-  version: 'v3.4.9.4.1',
+  version: 'v3.4.9.4.2',
   _testDataRoot: _testDataRoot,  // mutable: tests set this before requiring modules
-  buildCommit: _buildCommit,
+  // Phase 0: Release identity — authoritative names
+  gitCommit: _gitCommit,          // from git rev-parse (null on cloud)
+  buildCommit: _buildCommit,      // best available (git → manifest fallback)
   buildTimestamp: _buildTimestamp,
+  deployCommit: _deployCommit,    // from deploy_manifest.json
+  deployManifestValid: _deployManifestValid,
+  deployFileHashCount: _deployFileHashCount,
+  identityStatus: _identityStatus,  // matched | mismatch | git_only | manifest_only | manifest_missing
   BASE_DIR,
   REPORT_ENGINE_DIR,
   DATA_DIR,

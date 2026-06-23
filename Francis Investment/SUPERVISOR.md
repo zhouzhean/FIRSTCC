@@ -28,7 +28,23 @@ this into a verbose implementation diary.
 
 ## Current Verified State
 
-Last supervisory review: 2026-06-22, v3.4.9.1 source and cloud review.
+Last supervisory review: 2026-06-22, v3.4.9.4.2 source and cloud review.
+
+### Latest Verified Milestone
+
+- v3.4.9.4 and v3.4.9.4.1 establish a materially better evidence architecture:
+  pure cohort logic, isolated production-path testing, a scheduler-designated
+  09:30 canonical run, immutable decision events, model-version lineage, and
+  separate active versus quarantined cohort counts.
+- v3.4.9.4.2 aligns the two Cockpit/API cohort surfaces: the 250 legacy
+  hash-only records are quarantined and no longer count as active global blocks.
+- Cloud is running v3.4.9.4.2 after the last trading scan, so it has not yet
+  produced a new-format canonical cohort. `canonicalCohortCount=0` and
+  `researchEligible=0` are expected until the next 09:30 scheduled run.
+- The release-identity acceptance gate is still open. The cloud status endpoint
+  reports `deployManifestValid=false`, `deployFileHashCount=0`, and an old
+  Git SHA even though the local deployment manifest records v3.4.9.4.2. Do not
+  treat a cloud sample as reproducible until this mismatch is resolved.
 
 - Cloud API reported v3.4.7 running with valid live quotes for all three core
   indices (`validCoreCount=3`) during the 11:00 scan.
@@ -164,10 +180,29 @@ Labels must be causal and honest. A module is `active_effective` only when its
 documented input was available, it executed, and it changed a score, threshold,
 position size, or gate. "Executed, no decision impact" is a valid state.
 
-## Current Priority: v3.4.9.2 Idempotent Evidence-Loop Proof
+## Current Priority: Release Identity + First Canonical Cohort
 
 Do not add factors, alter strategy thresholds, promote a model, or increase
 autonomy before the following are complete:
+
+### Final Evidence-Foundation Gate
+
+1. **Make the deployment identity authoritative.** The cloud must receive a
+   valid `deploy_manifest.json` containing the actual committed source SHA and
+   file hashes. `/api/status` must expose `deployCommit`, manifest validity,
+   file-hash count, and any disagreement with its local Git state.
+2. **Collect one real designated cohort.** After the next 09:30 task, require
+   a completed manifest, one canonical run ID, no more than 50 unique codes,
+   and positive schema/prediction/research counts. A zero execution count is
+   acceptable only when the kernel records the actual blocking reason.
+3. **Settle that exact cohort.** At T+3, outcomes must be keyed to those
+   prediction IDs, with explicit unavailable records where needed. This proves
+   the live loop once; it does not prove alpha.
+4. **Freeze the execution platform after acceptance.** Further work shifts to
+   point-in-time historical research, rolling out-of-sample tests, and baseline
+   comparison. Only P0 data-integrity regressions may reopen this layer.
+
+### Historical Acceptance Work (Superseded Record)
 
 ### Immediate P0 Acceptance Work
 

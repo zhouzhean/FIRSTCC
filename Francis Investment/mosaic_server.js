@@ -398,19 +398,26 @@ function getLatestReportDate() {
 // ---- API Handlers ----
 
 function apiStatus() {
-  const today = new Date();
-  const dStr = today.toISOString().slice(0, 10);
-  const pStatus = pipeline ? pipeline.getStatus() : null;
-  const sStatus = scheduler ? scheduler.getStatus() : null;
+  var today = new Date();
+  var dStr = today.toISOString().slice(0, 10);
+  var pStatus = pipeline ? pipeline.getStatus() : null;
+  var sStatus = scheduler ? scheduler.getStatus() : null;
+  var cfg = require('./mosaic/config');
   return {
     date: dStr,
     weekday: getWeekdayCN(today),
     isTradingDay: isTradingDay(today),
     latestReport: getLatestReportDate(),
     serverStatus: 'running',
-    version: (require('./mosaic/config').version || 'v3.4.5'),
-    buildCommit: (require('./mosaic/config').buildCommit || null),
-    buildTimestamp: (require('./mosaic/config').buildTimestamp || null),
+    version: (cfg.version || 'v3.4.5'),
+    buildCommit: (cfg.buildCommit || null),
+    buildTimestamp: (cfg.buildTimestamp || null),
+    // Phase 0: Release identity — full identity surface
+    gitCommit: (cfg.gitCommit || null),                // from git (null on cloud)
+    deployCommit: (cfg.deployCommit || null),           // from deploy_manifest.json
+    deployManifestValid: (cfg.deployManifestValid || false),
+    deployFileHashCount: (cfg.deployFileHashCount || 0),
+    identityStatus: (cfg.identityStatus || 'manifest_missing'),  // matched | mismatch | git_only | manifest_only | manifest_missing
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -748,12 +755,19 @@ function normalizeLeakageAudit(audit) {
 }
 
 function buildCockpitData() {
+  var cfg = require('./mosaic/config');
   var result = {
     timestamp: new Date().toISOString(),
     // System info
-    systemVersion: (require('./mosaic/config').version || 'v3.4.5'),
-    buildCommit: (require('./mosaic/config').buildCommit || null),
-    buildTimestamp: (require('./mosaic/config').buildTimestamp || null),
+    systemVersion: (cfg.version || 'v3.4.5'),
+    buildCommit: (cfg.buildCommit || null),
+    buildTimestamp: (cfg.buildTimestamp || null),
+    // Phase 0: Release identity — full identity surface
+    gitCommit: (cfg.gitCommit || null),
+    deployCommit: (cfg.deployCommit || null),
+    deployManifestValid: (cfg.deployManifestValid || false),
+    deployFileHashCount: (cfg.deployFileHashCount || 0),
+    identityStatus: (cfg.identityStatus || 'manifest_missing'),
     serverStartTime: serverStartTime || null,
     lastRestartTime: serverStartTime || null,
     codeVersionMismatch: false,
@@ -2091,6 +2105,8 @@ const server = http.createServer(async function(req, res) {
         researchEligible: 0, executionEligible: 0,
         schemaValid: 0, predictionValid: 0, executionCandidateEligible: 0, globalBlocked: 0,
         canonicalTop50: 0, intradayObservationCount: 0,
+        // v3.4.9.4.2: Active-only cohort counts (quarantined excluded)
+        canonicalCohortCount: 0, intradayCount: 0, quarantinedCount: 0,
         exclusionReasons: {}, t3pending: 0, settledToday: 0, settledOnTargetToday: 0,
         hasLedger: false, hasOutcome: false, runId: null };
 
@@ -2105,6 +2121,13 @@ const server = http.createServer(async function(req, res) {
         for (var pi = 0; pi < plines.length; pi++) {
           try {
             var pentry = JSON.parse(plines[pi]);
+
+            // v3.4.9.4.2: Exclude quarantined entries from all active cohort counts
+            if (pentry.ingestionStatus === 'invalid_schema_v3492') {
+              psRes.quarantinedCount++;
+              continue; // Do NOT count in any other field
+            }
+
             if (pentry.eligible) psRes.eligible++;
             if (pentry.evaluationEligible) psRes.evaluationEligible++;
             // v3.4.9.4: 6-field eligibility
@@ -2117,8 +2140,14 @@ const server = http.createServer(async function(req, res) {
             // Capture runId from first valid entry
             if (!psRes.runId && pentry.runId) psRes.runId = pentry.runId;
             // v3.4.9.2: Separate canonical vs intraday observation counts
-            if (pentry.canonical === true) psRes.canonicalTop50++;
-            else psRes.intradayObservationCount++;
+            // v3.4.9.4.2: Both old and new field names coexist for backward compat
+            if (pentry.canonical === true) {
+              psRes.canonicalCohortCount++;
+              psRes.canonicalTop50++;
+            } else {
+              psRes.intradayCount++;
+              psRes.intradayObservationCount++;
+            }
             var reason = pentry.exclusionReason || 'none';
             psRes.exclusionReasons[reason] = (psRes.exclusionReasons[reason] || 0) + 1;
             // v3.4.9.3: Aggregate researchEligibilityReasons distribution
@@ -2129,7 +2158,7 @@ const server = http.createServer(async function(req, res) {
                 psRes.eligibilityReasons[erk] = (psRes.eligibilityReasons[erk] || 0) + 1;
               }
             } else if (!pentry.researchEligible && pentry.ingestionStatus) {
-              // Marked invalid entries
+              // Marked invalid entries (now filtered above; this handles non-v3492 invalid statuses)
               var ik = pentry.ingestionStatus;
               psRes.eligibilityReasons[ik] = (psRes.eligibilityReasons[ik] || 0) + 1;
             }

@@ -1,13 +1,20 @@
-# Francis Investment · A股量化交易系统 v3.4.9.4.1
+# Francis Investment · A股量化交易系统 v3.4.9.4.2
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。低价(≤20元)非创业板A股子策略，全自动日内交易+24/7自主学习进化+报告引擎。
+
+## v3.4.9.4.2: Cohort Visibility and Acceptance Test — 5 files changed.
+
+- **Change 1 — API 统计口径统一**: `/api/prediction-settlement` 过滤 `invalid_schema_v3492` quarantined 条目，不计入 canonical/intraday/globalBlocked。返回 `canonicalCohortCount`/`intradayCount`/`quarantinedCount`。Prediction Settlement 与 Cohort Integrity 面板数值一致。
+- **Change 2 — 部署身份 fallback**: `config.js` 在 `git rev-parse` 失败时从 `deploy_manifest.json` 读取 commit SHA。`/api/status` 返回 `deployCommit`/`deployManifestValid`/`deployFileHashCount`。Cockpit 面板同步展示。
+- **Change 3 — 验收测试修复**: 删除 `vrManifest || true` 永真。`verification_runner._reloadDataDir` 补全 `DATA_DIR` 重定向（隔离 manifest 读取路径）。Suite A 真实调用 `verifyOneScan`，Suite B 证明 quarantined 不计入 globalBlocked，Suite C 测试 deploy manifest fallback。
+- **Test**: v3.4.9.4.2 → 43 passed; v3.4.9.4.1 → 66 passed; total 109 (local + cloud both).
 
 ## v3.4.9.4.1: Evidence Cohort Production Acceptance — 9 files changed.
 - **P0-1 Manifest 路径统一**: prediction_ledger dataDir 统一为 report-engine/data 根目录。simfolio/mosaic_server/verification_runner 调用 readRunManifest/writeRunManifest 都传 DATA_ROOT，不传 data/simfolio。Manifest 文件落在 data 根而非 simfolio 子目录。
 - **P0-2 Canonical 由 Scheduler 任务身份决定**: Scheduler 启动 full pipeline 时从 reason 提取 scheduledSlot（如 `scheduled_09:30`→`'09:30'`）。makeTradingDecisions 不再用 `new Date()` 判断 canonical。只有 `scanType='full'` + `scheduledSlot='09:30'` 创建 manifest；10:00/11:00/13:00 full + 全部 mid 都是 intraday。
 - **P0-3 六层资格接入真实决策**: 每只候选股真实调用 `expectedReturn.meetsEvidenceThreshold(prediction, dataQualityPenalty)`，写入 executionCandidateEligible。`globalTradePermission = kernelDecision.canBuy && kernelDecision.maxBuysPerDay > 0`（非仅 verdict 字符串）。向后兼容旧调用方式（字符串 verdict）。
-- **P0-4 Cockpit/API 只统计有效当前 cohort**: 旧 250 条 `invalid_schema_v3492` 单独显示为 `quarantinedCount`，不计入 active cohort 的任何字段。`actualBought` 从 `decision_events_YYYY-MM-DD.jsonl` 按 predictionId 汇总（非 prediction ledger 的 wasBought 字段）。API 返回 `canonicalCohortCount`/`intradayCount`/`quarantinedCount` 三个独立数字。
-- **P0-5 测试与部署身份**: 测试开始前立即计算真实 data hash，全部结束后再计算一次——hash 一致。使用固定 fixture（无 Math.random）。真实测试覆盖 no-index/BLOCK/REDUCE/ALLOW/canonical-09:30/noncanonical-10:00。云端无 .git 时通过 `deploy_manifest.json` 记录 commit SHA + 每文件 hash。
+- **P0-4 Cockpit/API 只统计有效当前 cohort**: `_markInvalidLedgerEntries` 启动迁移标记旧 250 条为 `invalid_schema_v3492`（不解析写入）。`actualBought` 从 `decision_events_YYYY-MM-DD.jsonl` 按 predictionId 汇总（非 prediction ledger 的 wasBought 字段）。API 返回 `canonicalCohortCount`/`intradayCount` 独立数字。
+- **P0-5 测试**: 测试开始前立即计算真实 data hash，全部结束后再计算一次——hash 一致。使用固定 fixture（无 Math.random）。真实测试覆盖 no-index/BLOCK/REDUCE/ALLOW/canonical-09:30/noncanonical-10:00。
 - **Test**: v3.4.9.4 → 58 passed; v3.4.9.4.1 → 66 passed (local + cloud both).
 
 ## v3.4.9.4: Evidence Cohort Integrity — 8 files changed, 2 new modules.
@@ -235,6 +242,9 @@ STOP_LOSS_COOLDOWN_DAYS: 4
 
 | 版本 | 日期 | 关键变更 |
 |------|------|----------|
+| v3.4.9.4.2 | 2026-06-22 | API统计口径统一(quarantined排除), 部署身份fallback(deploy_manifest.json), 验收测试修复(DATA_DIR重定向+真实verifyOneScan) |
+| v3.4.9.4.1 | 2026-06-22 | Manifest路径统一, Canonical按Scheduler身份, 6层真实资格, quarantined分离, deploy_manifest.json |
+| v3.4.9.4 | 2026-06-21 | research_cohort+prediction_ledger新模块, 6-field eligibility, daily_research_manifest, canonical cohort |
 | v3.4.5 | 2026-06-18 | 数据总线统一: pipeline写snapshot, 每指数独立freshness, 399006接入, marketDirection修复, decision_audit补全 |
 | v3.4.4 | 2026-06-18 | Session gate (非交易时段禁止买入), 数据总线初始统一, pipeline_summary共享, 样本门控 |
 | v3.4.3 | 2026-06-18 | Kernel Closure: 所有路径过kernel, marketState贯穿全链路 |

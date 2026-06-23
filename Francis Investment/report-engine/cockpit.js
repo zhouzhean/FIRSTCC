@@ -260,6 +260,15 @@ function renderSystemStatus(data) {
     '<span class="sys-value" title="' + esc(data.buildCommit || '') + '">' + esc(versionDisplay) + '</span>' +
     '</div>';
 
+  // v3.4.9.4.2: Phase 0 — deploy identity row showing manifest validity + status
+  var identityLabel = {matched:'✅ Matched', mismatch:'⚠️ Mismatch', git_only:'💻 Git only', manifest_only:'☁️ Manifest', manifest_missing:'❌ Missing'}[data.identityStatus] || 'Unknown';
+  var identityColor = data.identityStatus === 'matched' ? '#16a34a' : data.identityStatus === 'manifest_only' ? '#2563eb' : data.identityStatus === 'mismatch' ? '#dc2626' : '#94a3b8';
+  html += '<div class="sys-row">' +
+    '<span class="sys-label">Deploy ID</span>' +
+    '<span class="sys-value" style="color:' + identityColor + ';font-size:11px;" title="git: ' + esc(data.gitCommit || 'none') + ' | deploy: ' + esc(data.deployCommit || 'none') + ' | files: ' + (data.deployFileHashCount || 0) + '">' +
+    esc(data.deployCommit ? data.deployCommit.slice(0, 7) : '—') + ' · ' + identityLabel + '</span>' +
+    '</div>';
+
   // Server start time
   if (data.serverStartTime) {
     html += '<div class="sys-row">' +
@@ -900,7 +909,7 @@ function renderPredictionSettlement(data) {
     // v3.4.9: Top row — researchEligible + executionEligible (3-tier)
     html += '<div class="ps-counts" style="display:flex;gap:10px;margin-bottom:10px;">' +
       '<div style="flex:1;text-align:center;padding:8px;background:#f8fafc;border-radius:6px;">' +
-      '<div style="font-size:20px;font-weight:700;color:#1e293b;">' + (data.canonicalTop50 || 0) + ' / ' + (data.intradayObservationCount || 0) + '</div>' +
+      '<div style="font-size:20px;font-weight:700;color:#1e293b;">' + (data.canonicalCohortCount || data.canonicalTop50 || 0) + ' / ' + (data.intradayCount || data.intradayObservationCount || 0) + '</div>' +
       '<div style="font-size:10px;color:#64748b;">Canonical / Intraday</div></div>' +
       '<div style="flex:1;text-align:center;padding:8px;background:#fefce8;border-radius:6px;">' +
       '<div style="font-size:20px;font-weight:700;color:#a16207;">' + (data.researchEligible || 0) + '</div>' +
@@ -912,6 +921,13 @@ function renderPredictionSettlement(data) {
       '<div style="font-size:20px;font-weight:700;color:#2563eb;">' + (data.independentDays || 0) + '</div>' +
       '<div style="font-size:10px;color:#64748b;">Ind.Days</div></div>' +
       '</div>';
+
+    // v3.4.9.4.2: Quarantined count — old-format entries excluded from all cohort stats
+    if (data.quarantinedCount > 0) {
+      html += '<div style="margin-bottom:8px;padding:6px 10px;background:#fee2e2;border-radius:4px;text-align:center;border:1px solid #fecaca;">' +
+        '<span style="font-size:11px;color:#dc2626;font-weight:600;">Quarantined: ' + data.quarantinedCount + '</span>' +
+        '<span style="font-size:9px;color:#94a3b8;margin-left:4px;">(old format, excluded from stats)</span></div>';
+    }
 
     // Exclusion reasons
     if (data.exclusionReasons && Object.keys(data.exclusionReasons).length > 0) {
