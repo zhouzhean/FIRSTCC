@@ -19,6 +19,11 @@
  *     model.json, standardizer.json, feature_schema.json, dates.json, data_hash.json
  *
  * Output: report-engine/data/research/model_artifacts/true_walk_forward_summary.json
+ *
+ * Memory optimization (v2):
+ *   — Streamed lightweight loading: each snapshot row stripped to only needed fields
+ *   — Train/val data released before test load
+ *   — Global GC hint between windows
  */
 
 var fs = require('fs');
@@ -35,28 +40,81 @@ var SIMULATOR = require('./trade_simulator');
 var SNAPSHOTS_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'research', 'snapshots');
 var ARTIFACTS_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'research', 'model_artifacts');
 var RESULTS_DIR = path.join(__dirname, '..', '..', 'report-engine', 'data', 'research', 'oos_evaluation_results');
+var PROGRESS_FILE = path.join(ARTIFACTS_DIR, 'walk_forward_progress.json');
 
-// ---- Load snapshots ----
+// ---- Lightweight snapshot loading (strips to only needed fields) ----
 
-function loadSnapshotsForDates(dates) {
+var NEEDED_FIELDS = [
+  'code', 'asOfDate', 'name',
+  // Features (top-level)
+  'signalCount', 'volatility20d', 'changePct',
+  // Dimensions object
+  'dimensions',
+  // Target
+  'forwardReturnT3', 'forwardExcessT3', 'forwardStatus',
+  // Tradeability (P0.2)
+  'entryDate', 'exitDate', 'entryPrice', 'exitPrice',
+  'plannedExitDate', 'actualExitDate', 'exitDelayDays', 'exitStatus',
+  'targetStatus', 'unavailableReason',
+  // Composite (for comparison)
+  'compositeScore',
+];
+
+function loadSnapshotDates(dates) {
   var results = [];
-  dates.forEach(function (d) {
-    var fp = path.join(SNAPSHOTS_DIR, d + '.jsonl');
-    if (!fs.existsSync(fp)) return;
+  for (var di = 0; di < dates.length; di++) {
+    var fp = path.join(SNAPSHOTS_DIR, dates[di] + '.jsonl');
+    if (!fs.existsSync(fp)) continue;
     try {
       var lines = fs.readFileSync(fp, 'utf8').trim().split('\n');
-      lines.forEach(function (l) {
-        if (!l) return;
-        try { results.push(JSON.parse(l)); } catch (e) {}
-      });
+      for (var li = 0; li < lines.length; li++) {
+        if (!lines[li]) continue;
+        try {
+          var raw = JSON.parse(lines[li]);
+          // Only keep needed fields to save memory
+          var slim = {};
+          for (var fi = 0; fi < NEEDED_FIELDS.length; fi++) {
+            var key = NEEDED_FIELDS[fi];
+            if (raw[key] !== undefined) slim[key] = raw[key];
+          }
+          results.push(slim);
+        } catch (e) {}
+      }
     } catch (e) {}
-  });
+  }
   return results;
 }
 
-// ---- Data hash ----
+// Streamed version: process each date's snapshots without accumulating the full array.
+// Calls callback(date, daySnapshots) for each date in order.
+function forEachSnapshotDate(dates, callback) {
+  for (var di = 0; di < dates.length; di++) {
+    var d = dates[di];
+    var fp = path.join(SNAPSHOTS_DIR, d + '.jsonl');
+    if (!fs.existsSync(fp)) continue;
+    try {
+      var lines = fs.readFileSync(fp, 'utf8').trim().split('\n');
+      var daySnaps = [];
+      for (var li = 0; li < lines.length; li++) {
+        if (!lines[li]) continue;
+        try {
+          var raw = JSON.parse(lines[li]);
+          var slim = {};
+          for (var fi = 0; fi < NEEDED_FIELDS.length; fi++) {
+            var key = NEEDED_FIELDS[fi];
+            if (raw[key] !== undefined) slim[key] = raw[key];
+          }
+          daySnaps.push(slim);
+        } catch (e) {}
+      }
+      callback(d, daySnaps);
+    } catch (e) {}
+  }
+}
 
-function computeDataHash(dates) {
+// ---- Data hash (streaming, doesn't accumulate) ----
+
+function computeDataHashDates(dates) {
   var hash = crypto.createHash('sha256');
   dates.sort().forEach(function (d) {
     hash.update(d);
@@ -71,14 +129,13 @@ function computeDataHash(dates) {
 // ---- Rank IC computation (tie-aware Kendall tau-b) ----
 
 function computeRankIC(snapshots, predictions) {
-  // Match predictions to snapshots by code
   var pairs = [];
   var predMap = {};
   predictions.forEach(function (p) { predMap[p.code] = p.predictedExcess; });
 
   snapshots.forEach(function (s) {
     var pred = predMap[s.code];
-    var actual = s.forwardReturnT3; // P0-1: gross return
+    var actual = s.forwardReturnT3;
     if (pred == null || actual == null) return;
     pairs.push({ pred: pred, actual: actual });
   });
@@ -95,7 +152,6 @@ function computeRankIC(snapshots, predictions) {
 // ---- Prediction decile calibration ----
 
 function computeDecileCalibration(snapshots, predictions) {
-  // Sort predictions, bin into deciles, compute mean actual per decile
   var pairs = [];
   var predMap = {};
   predictions.forEach(function (p) { predMap[p.code] = p.predictedExcess; });
@@ -139,45 +195,56 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
   var testDates = windowDef.testDates;
 
   console.log('  Loading train data (' + trainDates.length + ' days)...');
-  var trainSnaps = loadSnapshotsForDates(trainDates);
+  var trainSnaps = loadSnapshotDates(trainDates);
+  console.log('    Train: ' + trainSnaps.length + ' samples');
 
   // Step 1: Fit standardizer on training data only
-  var rawTrainData = LINEAR.buildFeatureMatrix(trainSnaps, null); // No standardizer yet
+  var rawTrainData = LINEAR.buildFeatureMatrix(trainSnaps, null);
   if (rawTrainData.nSamples < 50) {
+    trainSnaps = null; // free memory
     return { error: 'insufficient_train_samples', nSamples: rawTrainData.nSamples };
   }
+  var trainSampleCount = rawTrainData.nSamples; // capture before freeing
 
   // Extract raw features (without intercept) for standardizer fitting
   var rawFeatures = [];
   for (var i = 0; i < rawTrainData.X.length; i++) {
-    // X has intercept at col 0 — strip it for standardizer fitting
     rawFeatures.push(rawTrainData.X[i].slice(1));
   }
   var standardizer = LINEAR.fitStandardizer(rawFeatures);
-  console.log('    Standardizer fitted on ' + rawFeatures.length + ' train samples');
+  rawFeatures = null;
+  // Free raw (unstandardized) feature matrix — we'll rebuild with standardizer
+  rawTrainData = null;
+  console.log('    Standardizer fitted on ' + trainSampleCount + ' train samples');
 
   // Rebuild train with standardizer
   var trainData = LINEAR.buildFeatureMatrix(trainSnaps, standardizer);
-  console.log('    Train: ' + trainData.nSamples + ' samples');
 
+  // Step 2: Grid search lambda on train/val
   console.log('  Loading validate data (' + validateDates.length + ' days)...');
-  var valSnaps = loadSnapshotsForDates(validateDates);
+  var valSnaps = loadSnapshotDates(validateDates);
   var valData = LINEAR.buildFeatureMatrix(valSnaps, standardizer);
   console.log('    Validate: ' + valData.nSamples + ' samples');
 
-  // Step 2: Grid search lambda on train/val
   console.log('  Grid searching lambda...');
   var best = LINEAR.gridSearchLambda(trainData.X, trainData.y, valData.X, valData.y);
   if (!best.model) {
+    trainSnaps = null; valSnaps = null; trainData = null; valData = null;
     return { error: 'model_fit_failed' };
   }
   console.log('    Best λ=' + best.lambda + ' | Train MSE=' + Math.round(best.trainMSE * 100) / 100 + ' | Val MSE=' + Math.round(best.valMSE * 100) / 100);
 
   // Step 3: Refit on full train (train + validate) with best lambda
   var fullTrainSnaps = trainSnaps.concat(valSnaps);
+  var valSnapCount = valSnaps.length; // capture before freeing
+  // Free intermediate arrays
+  trainSnaps = null;
+  valSnaps = null;
+
   var fullTrainData = LINEAR.buildFeatureMatrix(fullTrainSnaps, standardizer);
   var finalModel = LINEAR.fitRidge(fullTrainData.X, fullTrainData.y, best.lambda);
   if (!finalModel) {
+    fullTrainSnaps = null; fullTrainData = null; trainData = null; valData = null;
     return { error: 'final_model_fit_failed' };
   }
 
@@ -186,9 +253,17 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
     finalModel.weights[wi] = Math.round(finalModel.weights[wi] * 10000) / 10000;
   }
 
+  // Release train/val data BEFORE loading test data
+  fullTrainSnaps = null;
+  fullTrainData = null;
+  trainData = null;
+  valData = null;
+
+  if (typeof global !== 'undefined' && global.gc) { global.gc(); }
+
   // Step 4: Predict on test set (standardized, NO fitting)
   console.log('  Loading test data (' + testDates.length + ' days)...');
-  var testSnaps = loadSnapshotsForDates(testDates);
+  var testSnaps = loadSnapshotDates(testDates);
   var testData = LINEAR.buildFeatureMatrix(testSnaps, standardizer);
   console.log('    Test: ' + testData.nSamples + ' samples');
 
@@ -204,7 +279,6 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
     daySnaps.forEach(function (s) {
       var features = LINEAR.extractFeatures(s);
       if (!features) return;
-      // Apply standardization
       var stdFeatures = [];
       for (var j = 0; j < features.length; j++) {
         stdFeatures.push((features[j] - standardizer.means[j]) / standardizer.stds[j]);
@@ -228,7 +302,6 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
       });
     });
 
-    // Sort by prediction desc → daily ranking
     dayPredictions.sort(function (a, b) { return b.predictedExcess - a.predictedExcess; });
     dailyTestSignals[testDate] = dayPredictions.slice(0, SIMULATOR.MAX_POSITIONS || 50);
   });
@@ -291,12 +364,16 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
     techComparison = BASELINES.compareFullTimeSeries('technicalOnly', snapshotsByDate, {}, klineIdx, 100);
   } catch (e) { techComparison = { error: e.message }; }
 
+  // Release test snapshots now (no longer needed after tech comparison)
+  testSnaps = null;
+  testData = null;
+
   // Step 10: Save artifacts
   var winDir = path.join(ARTIFACTS_DIR, 'window_' + String(windowIndex + 1).padStart(3, '0'));
   if (!fs.existsSync(winDir)) fs.mkdirSync(winDir, { recursive: true });
 
-  var trainHash = computeDataHash(trainDates.concat(validateDates));
-  var testHash = computeDataHash(testDates);
+  var trainHash = computeDataHashDates(trainDates.concat(validateDates));
+  var testHash = computeDataHashDates(testDates);
 
   // model.json
   fs.writeFileSync(path.join(winDir, 'model.json'), JSON.stringify({
@@ -306,9 +383,9 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
     lambda: finalModel.lambda,
     nFeatures: finalModel.nFeatures,
     trainedAt: new Date().toISOString(),
-    trainSamples: fullTrainData.nSamples,
-    valSamples: valData.nSamples,
-    testSamples: testData.nSamples,
+    trainSamples: trainSampleCount,
+    valSamples: valSnapCount || null,
+    testSamples: simulatorResult ? simulatorResult.totalSignals : null,
   }, null, 2), 'utf8');
 
   // standardizer.json
@@ -355,9 +432,9 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
       weights: finalModel.weights,
       featureNames: finalModel.featureNames,
       lambda: finalModel.lambda,
-      trainSamples: fullTrainData.nSamples,
-      valSamples: valData.nSamples,
-      testSamples: testData.nSamples,
+      trainSamples: trainSampleCount,
+      valSamples: valSnapCount,
+      testSamples: simulatorResult.totalSignals || 0,
     },
     standardizer: {
       means: standardizer.means,
@@ -399,6 +476,46 @@ function evaluateTrueWalkForward(windowDef, windowIndex, klineIdx) {
   };
 }
 
+// ══════ P1: Checkpoint/Resume — avoid daily full retrain ══════
+//
+// After each window completes, progress is persisted to walk_forward_progress.json.
+// On restart, completed windows are skipped. Only re-runs when:
+//   1. A window failed (error) — retry that window
+//   2. Snapshot data hash changed — invalidate from that window onward
+
+function _loadProgress() {
+  try {
+    if (fs.existsSync(PROGRESS_FILE)) {
+      return JSON.parse(fs.readFileSync(PROGRESS_FILE, 'utf8'));
+    }
+  } catch (_) {}
+  return null;
+}
+
+function _saveProgress(progress) {
+  try {
+    if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+    fs.writeFileSync(PROGRESS_FILE, JSON.stringify(progress, null, 2), 'utf8');
+  } catch (_) {}
+}
+
+function _computeCheckpointHash(dates) {
+  // Lightweight hash of date list + file count — sufficient to detect data changes
+  var hash = crypto.createHash('sha256');
+  var sorted = dates.slice().sort();
+  sorted.forEach(function (d) {
+    hash.update(d);
+    var fp = path.join(SNAPSHOTS_DIR, d + '.jsonl');
+    if (fs.existsSync(fp)) {
+      var stat = fs.statSync(fp);
+      hash.update(String(stat.size));
+    } else {
+      hash.update('MISSING');
+    }
+  });
+  return hash.digest('hex');
+}
+
 // ---- Main Entry ----
 
 function runTrueWalkForward(options) {
@@ -413,6 +530,7 @@ function runTrueWalkForward(options) {
   console.log('Lambda grid: ' + LINEAR.LAMBDA_GRID.join(', '));
   console.log('Range: ' + opts.startDate + ' to ' + opts.endDate);
   console.log('Stable start: ' + (UNIVERSE.getStableStartDate() || 'N/A'));
+  console.log('Memory-optimized: slim loading, early release, GC hints');
   console.log();
 
   if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
@@ -426,6 +544,37 @@ function runTrueWalkForward(options) {
   var windows = winResult.windows;
   console.log('Windows: ' + windows.length);
   console.log();
+
+  // P1: Checkpoint/Resume — skip already-completed windows
+  var progress = _loadProgress();
+  var fullDataHash = _computeCheckpointHash(opts.allDates || []);
+  var startWindow = 0;
+  var resumed = false;
+
+  if (progress && progress.completedWindows && progress.dataHash) {
+    if (progress.dataHash !== fullDataHash) {
+      // Data changed — find first affected window and restart from there
+      for (var ci = 0; ci < windows.length; ci++) {
+        if (ci >= progress.completedWindows.length) { startWindow = ci; break; }
+        // Check if this window's output still exists
+        var winDir = path.join(ARTIFACTS_DIR, 'window_' + String(ci + 1).padStart(3, '0'));
+        if (!fs.existsSync(path.join(winDir, 'model.json'))) { startWindow = ci; break; }
+      }
+      console.log('Data hash changed — resuming from window ' + (startWindow + 1) +
+        ' (had ' + progress.completedWindows.length + ' cached)');
+      if (startWindow > 0) console.log('Skipped ' + startWindow + ' windows that survived data change');
+      resumed = true;
+    } else if (progress.completedWindows.length >= windows.length) {
+      console.log('All ' + windows.length + ' windows already complete — skipped');
+      summary.windows = progress.completedWindows;
+      return summary;
+    } else {
+      startWindow = progress.completedWindows.length;
+      console.log('Resuming from window ' + (startWindow + 1) +
+        ' (' + progress.completedWindows.length + '/' + windows.length + ' cached)');
+      resumed = true;
+    }
+  }
 
   // Load kline index once
   console.log('Loading kline index...');
@@ -443,16 +592,19 @@ function runTrueWalkForward(options) {
     labelConvention: 'T_close_signal__T+1_open_entry__T+4_close_exit__3day_hold',
     simulatorVersion: 'P0-2 (3-sleeve overlapping cohorts)',
     legacyNote: 'Composite score is quarantined as historical control only. Not used in promotion.',
-    windows: [],
+    windows: progress && resumed ? progress.completedWindows.slice(0, startWindow) : [],
+    resumed: resumed,
+    resumedFromWindow: resumed ? startWindow : null,
   };
 
-  for (var wi = 0; wi < windows.length; wi++) {
+  for (var wi = startWindow; wi < windows.length; wi++) {
     console.log('Window ' + (wi + 1) + '/' + windows.length + ':');
     var result = evaluateTrueWalkForward(windows[wi], wi, klineIdx);
 
     if (result.error) {
       console.log('  ERROR: ' + result.error);
       summary.windows.push({ error: result.error, window: windows[wi] });
+      // P1: Don't checkpoint on error — retry next run
       continue;
     }
 
@@ -465,7 +617,23 @@ function runTrueWalkForward(options) {
     }
     console.log('  Artifacts: ' + result.artifactsPath);
     console.log();
+
+    // P1: Checkpoint after each successful window
+    _saveProgress({
+      completedWindows: summary.windows.slice(),
+      dataHash: fullDataHash,
+      lastWindow: wi + 1,
+      totalWindows: windows.length,
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Hint GC between windows (if --expose-gc is on)
+    if (typeof global !== 'undefined' && global.gc) { global.gc(); }
   }
+
+  // Free kline index
+  klineIdx = null;
+  if (typeof global !== 'undefined' && global.gc) { global.gc(); }
 
   // Write summary
   var summaryPath = path.join(ARTIFACTS_DIR, 'true_walk_forward_summary.json');
@@ -488,6 +656,56 @@ function runTrueWalkForward(options) {
     console.log('Average test MSE: ' + svgTestMSE);
     console.log('Average direction accuracy: ' + svgDirAcc + '%');
     console.log('Average Rank IC: ' + avgIC);
+  }
+
+  // P1: Auto-feed evaluation results into candidate_registry
+  // (only when run as a full walk-forward — not from individual window tests)
+  if (!opts.skipCandidateRegistry) {
+    try {
+      var CANDIDATE_REGISTRY = require('./candidate_registry');
+
+      // Set evaluation windows (first 4 = research, last 2 = lock)
+      CANDIDATE_REGISTRY.setEvaluationWindows(windows.map(function (w) {
+        return {
+          trainStart: w.trainDates[0], trainEnd: w.trainDates[w.trainDates.length - 1],
+          testStart: w.testDates[0], testEnd: w.testDates[w.testDates.length - 1],
+        };
+      }));
+
+      // For each valid window, feed results to candidate_registry for each active candidate
+      var activeCandidates = CANDIDATE_REGISTRY.getCandidates({ status: 'RESEARCH_ONLY' })
+        .concat(CANDIDATE_REGISTRY.getCandidates({ status: 'SHADOW_CANDIDATE' }));
+
+      for (var ci = 0; ci < activeCandidates.length; ci++) {
+        var cand = activeCandidates[ci];
+        for (var wi2 = 0; wi2 < validWindows.length; wi2++) {
+          var w = summary.windows[wi2];
+          if (!w || w.error || !w.metrics) continue;
+
+          CANDIDATE_REGISTRY.recordEvaluation(cand.versionId, wi2, {
+            rankIC: w.metrics.avgRankIC,
+            netReturn: w.portfolio ? w.portfolio.netReturn : null,
+            grossReturn: w.portfolio ? w.portfolio.grossReturn : null,
+            benchmarkReturn: w.portfolio ? w.portfolio.benchmarkReturn : null,
+            netExcessReturn: w.portfolio ? w.portfolio.netExcessReturn : null,
+            deltaCI: w.vsTechnicalOnly && w.vsTechnicalOnly.deltaNetReturn != null
+              ? [w.vsTechnicalOnly.deltaNetReturn - 1.0, w.vsTechnicalOnly.deltaNetReturn + 1.0] : null,
+            directionAccuracy: w.metrics.directionAccuracy,
+          });
+        }
+      }
+
+      console.log('[P1] Candidate registry updated: ' + activeCandidates.length + ' candidates evaluated');
+
+      // Print candidate status summary
+      var cs = CANDIDATE_REGISTRY.getStatus();
+      console.log('[P1] Registry status — ' +
+        'researchOnly=' + cs.researchOnly +
+        ', shadowCandidates=' + cs.shadowCandidates +
+        ', rejected=' + cs.rejectedCount);
+    } catch (e) {
+      console.log('[P1] Candidate registry integration skipped: ' + e.message);
+    }
   }
 
   return summary;

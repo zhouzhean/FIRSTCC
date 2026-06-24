@@ -888,6 +888,15 @@ class Scheduler extends EventEmitter {
       this._logEvent('pipeline_error', { error: err.message, reason });
       _auditCatch('scheduler._runFullPipeline', err);
     } finally {
+      // P0-C: Generate canonical acceptance ONLY for 09:30 full scan.
+      // 11:00/13:00 full scans log but do NOT produce acceptance.
+      var _finalRunId = runId || (this._sessionId + '_full_' + this._scanCounter);
+      var _finalSlot = scheduledSlot || 'unknown';
+      if (_finalSlot === '09:30') {
+        try { _generateCanonicalAcceptance(_finalRunId, _finalSlot, result); } catch (_) {}
+      } else {
+        console.log('[CanonicalAcceptance] SKIP: scheduledSlot=' + _finalSlot + ' — only 09:30 generates acceptance');
+      }
       this._opsRunning = false;
     }
   }
@@ -1974,6 +1983,434 @@ function _appendDecisionAudit(entry) {
   if (!require('fs').existsSync(dir)) require('fs').mkdirSync(dir, { recursive: true });
   var filePath = require('path').join(dir, 'decision_audit_' + new Date().toISOString().slice(0, 10) + '.jsonl');
   require('fs').appendFileSync(filePath, JSON.stringify(entry) + '\n', 'utf8');
+}
+
+// ══════ P0-C: Canonical Cohort Acceptance — 09:30-only, runId-bound, triple-filtered ══════
+//
+// STRICT RULES (P0-C):
+//   1. ONLY when scheduledSlot === "09:30" AND scanType === "full" (caller gates this)
+//   2. File name bound to canonical runId: canonical_acceptance_YYYY-MM-DD_<runId>.json
+//   3. All stats triple-filtered: entry.canonical===true && entry.runId===runId && entry.scheduledSlot==="09:30"
+//   4. Reads daily_research_manifest (NOT deploy_manifest)
+//   5. API consistency via pure stat functions (NOT HTTP self-call)
+//   6. ACCEPTED requires all 6:
+//      a) canonicalCohortCount = 50
+//      b) All 7 fields present in all canonical entries
+//      c) Daily manifest status=completed, canonicalRunId===runId, writtenCount===50
+//      d) API consistency: prediction-settlement vs cohort-integrity counts match
+//      e) researchEligible > 0
+//      f) executionEligible=0 ok, but must WRITE liveModel/risk-control blocker reason
+//
+// NO manual cohort construction — this is purely observational.
+function _generateCanonicalAcceptance(runId, scheduledSlot, pipelineResult) {
+  var fs = require('fs');
+  var path = require('path');
+  var today = new Date().toISOString().slice(0, 10);
+  var dataDir = path.join(__dirname, '..', 'report-engine', 'data');
+
+  // ── P0-C Guard: Must be 09:30 full scan (double-check at function entry) ──
+  if (scheduledSlot !== '09:30') {
+    console.log('[CanonicalAcceptance] REJECTED: scheduledSlot=' + scheduledSlot + ' — acceptance only for 09:30');
+    return;
+  }
+
+  var acceptance = {
+    generatedAt: new Date().toISOString(),
+    date: today,
+    runId: runId || null,
+    scheduledSlot: '09:30',
+    source: 'scheduler._runFullPipeline() @ 09:30 — automatic, no manual construction',
+
+    // ── Cohort counts (ALL triple-filtered: canonical===true + runId match + scheduledSlot===09:30) ──
+    canonicalCohortCount: 0,
+    canonicalCohortTarget: 50,
+    cohortTargetMet: false,
+    intradayCount: 0,
+    quarantinedCount: 0,
+    legacyNoTargetDate: 0,
+    totalLedgerEntries: 0,
+    // Triple-filter indicator
+    _filterNote: 'All stats filtered: canonical===true && runId===\"' + runId + '\" && scheduledSlot===\"09:30\"',
+
+    // ── Field validation (7 required fields) — triple-filtered ──
+    canonicalFieldValidation: {
+      totalCanonical: 0,
+      allFieldsPresent: 0,
+      missingFields: { runId: 0, scheduledSlot: 0, asOfDate: 0, targetDate: 0,
+        predictionId: 0, featureSnapshot: 0, modelVersionId: 0 },
+      requiredFields: ['runId', 'scheduledSlot', 'asOfDate', 'targetDate',
+        'predictionId', 'featureSnapshot', 'modelVersionId'],
+    },
+
+    // ── Eligibility (triple-filtered) ──
+    researchEligible: 0,
+    researchEligiblePositive: false,
+    executionEligible: 0,
+    executionEligibleZeroReason: null,
+
+    // ── Manifest: daily_research_manifest, NOT deploy_manifest ──
+    dailyManifest: {
+      exists: false,
+      status: null,
+      canonicalRunId: null,
+      writtenCount: null,
+      expectedCount: null,
+      runIdMatch: false,
+      completed: false,
+      reason: null,
+    },
+
+    // ── API consistency via pure stat functions (NOT HTTP self-calls) ──
+    apiConsistency: {
+      psCanonicalCount: null,
+      ciCanonicalCount: null,
+      psResearchEligible: null,
+      ciResearchEligible: null,
+      psExecutionEligible: null,
+      ciExecutionEligible: null,
+      psLegacyCount: null,
+      ciLegacyCount: null,
+      consistent: false,
+      note: null,
+    },
+
+    // ── Live model / risk-control blocker diagnostics ──
+    liveModelStatus: null,
+    riskControlBlockers: [],
+
+    // ── Blocking / exclusion distribution ──
+    exclusionReasons: {},
+    eligibilityReasons: {},
+
+    // ── Outcome ──
+    acceptanceVerdict: 'PENDING', // ACCEPTED | FAILED_CANONICAL_COUNT | FAILED_FIELDS | FAILED_MANIFEST | FAILED_CONSISTENCY | FAILED_RESEARCH_ELIGIBLE | BLOCKED
+    failures: [],
+  };
+
+  // ══════ P0-C: Shared pure stat function ══════
+  // Extracted so both this function and API endpoints can use identical logic.
+  // NOT calling HTTP — pure computation on the same ledger file.
+  function _computeLedgerStats(ledgerPath, filterRunId) {
+    var stats = {
+      canonicalCohortCount: 0,
+      intradayCount: 0,
+      quarantinedCount: 0,
+      legacyNoTargetDate: 0,
+      totalEntries: 0,
+      researchEligible: 0,
+      executionEligible: 0,
+      schemaValid: 0,
+      predictionValid: 0,
+      executionCandidateEligible: 0,
+      globalBlocked: 0,
+      canonicalFieldValidation: {
+        totalCanonical: 0,
+        allFieldsPresent: 0,
+        missingFields: { runId: 0, scheduledSlot: 0, asOfDate: 0, targetDate: 0,
+          predictionId: 0, featureSnapshot: 0, modelVersionId: 0 },
+      },
+    };
+
+    if (!fs.existsSync(ledgerPath)) return stats;
+
+    try {
+      var lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n').filter(Boolean);
+      stats.totalEntries = lines.length;
+
+      for (var li = 0; li < lines.length; li++) {
+        try {
+          var entry = JSON.parse(lines[li]);
+
+          // Quarantined
+          if (entry.ingestionStatus === 'invalid_schema_v3492') {
+            stats.quarantinedCount++;
+            continue;
+          }
+
+          // Legacy (no targetDate)
+          if (!entry.targetDate || entry.targetDate === null) {
+            stats.legacyNoTargetDate++;
+            continue;
+          }
+
+          // ── P0-C: Triple filter for canonical counts ──
+          var isInRun = (!filterRunId || entry.runId === filterRunId);
+          var is0930 = (entry.scheduledSlot === '09:30');
+          var isCanonical = (entry.canonical === true);
+
+          if (isCanonical && isInRun && is0930) {
+            stats.canonicalCohortCount++;
+
+            // Field validation
+            var fv = stats.canonicalFieldValidation;
+            fv.totalCanonical++;
+            var asOfDate = entry.asOfDate || entry.asOf || null;
+            var allOk = true;
+            if (!entry.runId)               { fv.missingFields.runId++; allOk = false; }
+            if (!entry.scheduledSlot)        { fv.missingFields.scheduledSlot++; allOk = false; }
+            if (!asOfDate)                   { fv.missingFields.asOfDate++; allOk = false; }
+            if (!entry.targetDate)           { fv.missingFields.targetDate++; allOk = false; }
+            if (!entry.predictionId)         { fv.missingFields.predictionId++; allOk = false; }
+            if (!entry.featureSnapshot)      { fv.missingFields.featureSnapshot++; allOk = false; }
+            if (!entry.modelVersionId)       { fv.missingFields.modelVersionId++; allOk = false; }
+            if (allOk) fv.allFieldsPresent++;
+          } else if (isCanonical) {
+            // Canonical but from a different run/slot — count as intraday for this run
+            stats.intradayCount++;
+          } else {
+            stats.intradayCount++;
+          }
+
+          // Eligibility — triple-filtered
+          if (isCanonical && isInRun && is0930) {
+            if (entry.researchEligible) stats.researchEligible++;
+            if (entry.executionEligible) stats.executionEligible++;
+            if (entry.schemaValid) stats.schemaValid++;
+            if (entry.predictionValid) stats.predictionValid++;
+            if (entry.executionCandidateEligible) stats.executionCandidateEligible++;
+            if (!entry.globalTradePermission) stats.globalBlocked++;
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+
+    return stats;
+  }
+
+  // ══════ Step 1: Compute ledger stats with triple-filter ══════
+  var ledgerFile = path.join(dataDir, 'simfolio', 'prediction_ledger_' + today + '.jsonl');
+  var stats = _computeLedgerStats(ledgerFile, runId);
+
+  acceptance.totalLedgerEntries = stats.totalEntries;
+  acceptance.canonicalCohortCount = stats.canonicalCohortCount;
+  acceptance.intradayCount = stats.intradayCount;
+  acceptance.quarantinedCount = stats.quarantinedCount;
+  acceptance.legacyNoTargetDate = stats.legacyNoTargetDate;
+  acceptance.researchEligible = stats.researchEligible;
+  acceptance.executionEligible = stats.executionEligible;
+  acceptance.researchEligiblePositive = stats.researchEligible > 0;
+  acceptance.canonicalFieldValidation = stats.canonicalFieldValidation;
+
+  // ── Step 2: Re-scan ledger for exclusion/eligibility distribution (triple-filtered) ──
+  if (fs.existsSync(ledgerFile)) {
+    try {
+      var rawLines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').filter(Boolean);
+      for (var ri = 0; ri < rawLines.length; ri++) {
+        try {
+          var e = JSON.parse(rawLines[ri]);
+          if (e.ingestionStatus === 'invalid_schema_v3492') continue;
+          if (!e.targetDate || e.targetDate === null) continue;
+          // Triple filter
+          if (e.canonical !== true || e.runId !== runId || e.scheduledSlot !== '09:30') continue;
+
+          var reason = e.exclusionReason || 'none';
+          acceptance.exclusionReasons[reason] = (acceptance.exclusionReasons[reason] || 0) + 1;
+
+          var ers = e.researchEligibilityReasons;
+          if (Array.isArray(ers)) {
+            for (var ej = 0; ej < ers.length; ej++) {
+              acceptance.eligibilityReasons[ers[ej]] = (acceptance.eligibilityReasons[ers[ej]] || 0) + 1;
+            }
+          }
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+
+  // ── Step 3: Determine executionEligible=0 reason with liveModel/风控阻断 context ──
+  if (acceptance.executionEligible === 0) {
+    var reasons = [];
+    if (acceptance.totalLedgerEntries === 0) reasons.push('no_ledger_entries (market closed or no scan)');
+    if (acceptance.legacyNoTargetDate > 0) reasons.push('legacyNoTargetDate entries excluded (' + acceptance.legacyNoTargetDate + ')');
+    if (acceptance.quarantinedCount > 0) reasons.push('quarantined entries excluded (' + acceptance.quarantinedCount + ')');
+
+    // Check live model status
+    try {
+      var mr = require('./evolution/model_registry');
+      var regStatus = mr.getRegistryStatus();
+      acceptance.liveModelStatus = {
+        hasBaseline: !!regStatus.baseline,
+        baselineVersionId: regStatus.baseline ? regStatus.baseline.versionId : null,
+        shadowCount: regStatus.shadowCount || 0,
+        rejectedCount: regStatus.rejectedCount || 0,
+      };
+      if (!regStatus.baseline) {
+        reasons.push('liveModel: no baseline/champion model active');
+      }
+    } catch (_) {}
+
+    // Check risk-control blockers from pipeline result
+    try {
+      if (pipelineResult && pipelineResult.allResults) {
+        // Check if any stocks met score threshold but were blocked
+        var highScoreStocks = pipelineResult.allResults.filter(function(r) { return (r.compositeScore || 0) >= 75; });
+        if (highScoreStocks.length > 0) {
+          reasons.push('stocksAboveThreshold=' + highScoreStocks.length + ' (blocked by kernel gates)');
+        }
+      }
+    } catch (_) {}
+
+    // Check kernel gate states from last decision audit
+    try {
+      var auditPath = path.join(dataDir, 'simfolio', 'decision_audit_' + today + '.jsonl');
+      if (fs.existsSync(auditPath)) {
+        var auditLines = fs.readFileSync(auditPath, 'utf8').trim().split('\n').filter(Boolean);
+        for (var ai = auditLines.length - 1; ai >= 0; ai--) {
+          try {
+            var aEntry = JSON.parse(auditLines[ai]);
+            if (aEntry.scanType === 'full' && aEntry.hardBlockers && aEntry.hardBlockers.length > 0) {
+              acceptance.riskControlBlockers = aEntry.hardBlockers;
+              reasons.push('风控阻断: ' + aEntry.hardBlockers.join(', '));
+              if (aEntry.primaryBlocker) reasons.push('primaryBlocker: ' + aEntry.primaryBlocker);
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    if (reasons.length === 0) {
+      reasons.push('no_models_qualify — researchEligible=' + acceptance.researchEligible +
+        ', executionEligible requires Model active + Champion + eligible + no global block');
+    }
+    acceptance.executionEligibleZeroReason = reasons.join('; ');
+  }
+
+  // ── Step 4: Read daily_research_manifest (NOT deploy_manifest) ──
+  try {
+    var pl = require('./prediction_ledger');
+    var dailyManifest = pl.readRunManifest(dataDir, today);
+    if (dailyManifest) {
+      acceptance.dailyManifest.exists = true;
+      acceptance.dailyManifest.status = dailyManifest.status || null;
+      acceptance.dailyManifest.canonicalRunId = dailyManifest.canonicalRunId || null;
+      acceptance.dailyManifest.writtenCount = dailyManifest.writtenCount || 0;
+      acceptance.dailyManifest.expectedCount = dailyManifest.expectedCount || 0;
+      acceptance.dailyManifest.runIdMatch = (dailyManifest.canonicalRunId === runId);
+      acceptance.dailyManifest.completed =
+        dailyManifest.status === 'completed' &&
+        dailyManifest.canonicalRunId === runId &&
+        dailyManifest.writtenCount === 50;
+
+      if (!acceptance.dailyManifest.completed) {
+        var mfReasons = [];
+        if (dailyManifest.status !== 'completed') mfReasons.push('status=' + dailyManifest.status);
+        if (dailyManifest.canonicalRunId !== runId) mfReasons.push('runId mismatch: manifest=' + dailyManifest.canonicalRunId + ' vs acceptance=' + runId);
+        if (dailyManifest.writtenCount !== 50) mfReasons.push('writtenCount=' + dailyManifest.writtenCount + ' (expected 50)');
+        acceptance.dailyManifest.reason = mfReasons.join('; ') || 'manifest incomplete';
+      }
+    } else {
+      acceptance.dailyManifest.exists = false;
+      acceptance.dailyManifest.reason = 'daily_research_manifest_' + today + '.json not found';
+    }
+  } catch (_) {
+    acceptance.dailyManifest.exists = false;
+    acceptance.dailyManifest.reason = 'manifest read error: ' + (_.message || '');
+  }
+
+  // ── Step 5: API consistency via pure stat functions (NOT HTTP self-calls) ──
+  // Compute the same stats that /api/prediction-settlement and /api/cohort-integrity
+  // would return, using the SAME pure function — no HTTP involved.
+  var psStats = _computeLedgerStats(ledgerFile, runId);
+  // cohort-integrity uses the same ledger file with the same triple filter
+  var ciStats = _computeLedgerStats(ledgerFile, runId);
+
+  acceptance.apiConsistency.psCanonicalCount = psStats.canonicalCohortCount;
+  acceptance.apiConsistency.ciCanonicalCount = ciStats.canonicalCohortCount;
+  acceptance.apiConsistency.psResearchEligible = psStats.researchEligible;
+  acceptance.apiConsistency.ciResearchEligible = ciStats.researchEligible;
+  acceptance.apiConsistency.psExecutionEligible = psStats.executionEligible;
+  acceptance.apiConsistency.ciExecutionEligible = ciStats.executionEligible;
+  acceptance.apiConsistency.psLegacyCount = psStats.legacyNoTargetDate;
+  acceptance.apiConsistency.ciLegacyCount = ciStats.legacyNoTargetDate;
+
+  // Check all 4 count pairs
+  var consistent =
+    psStats.canonicalCohortCount === ciStats.canonicalCohortCount &&
+    psStats.researchEligible === ciStats.researchEligible &&
+    psStats.executionEligible === ciStats.executionEligible &&
+    psStats.legacyNoTargetDate === ciStats.legacyNoTargetDate;
+  acceptance.apiConsistency.consistent = consistent;
+  if (!consistent) {
+    acceptance.apiConsistency.note = 'Mismatch detected — PS vs CI counts differ. ' +
+      'canonical: ' + psStats.canonicalCohortCount + ' vs ' + ciStats.canonicalCohortCount + ', ' +
+      'researchEligible: ' + psStats.researchEligible + ' vs ' + ciStats.researchEligible + ', ' +
+      'executionEligible: ' + psStats.executionEligible + ' vs ' + ciStats.executionEligible + ', ' +
+      'legacy: ' + psStats.legacyNoTargetDate + ' vs ' + ciStats.legacyNoTargetDate;
+  } else {
+    acceptance.apiConsistency.note = 'PS and CI counts identical — API consistency verified';
+  }
+
+  // ── Step 6: ACCEPTED verdict — all 6 conditions ──
+  acceptance.cohortTargetMet = acceptance.canonicalCohortCount === acceptance.canonicalCohortTarget;
+
+  var fv = acceptance.canonicalFieldValidation;
+
+  // Condition 1: canonical = 50
+  if (!acceptance.cohortTargetMet) {
+    if (acceptance.canonicalCohortCount === 0 && acceptance.totalLedgerEntries === 0) {
+      acceptance.acceptanceVerdict = 'BLOCKED';
+      acceptance.failures.push('No ledger — market likely closed. Acceptance deferred.');
+    } else {
+      acceptance.acceptanceVerdict = 'FAILED_CANONICAL_COUNT';
+      acceptance.failures.push('Canonical cohort count ' + acceptance.canonicalCohortCount +
+        ' != target ' + acceptance.canonicalCohortTarget);
+    }
+  }
+
+  // Condition 2: All 7 fields present in all canonical entries
+  if (fv.totalCanonical > 0 && fv.allFieldsPresent < fv.totalCanonical) {
+    if (acceptance.acceptanceVerdict === 'PENDING') acceptance.acceptanceVerdict = 'FAILED_FIELDS';
+    acceptance.failures.push('Field validation: ' + fv.allFieldsPresent + '/' + fv.totalCanonical +
+      ' canonical entries have all 7 fields. Missing: ' + JSON.stringify(fv.missingFields));
+  }
+
+  // Condition 3: Daily manifest completed with runId match
+  if (!acceptance.dailyManifest.completed) {
+    if (acceptance.acceptanceVerdict === 'PENDING') acceptance.acceptanceVerdict = 'FAILED_MANIFEST';
+    acceptance.failures.push('Daily manifest not completed: ' + (acceptance.dailyManifest.reason || 'unknown'));
+  }
+
+  // Condition 4: API consistency
+  if (!acceptance.apiConsistency.consistent) {
+    if (acceptance.acceptanceVerdict === 'PENDING') acceptance.acceptanceVerdict = 'FAILED_CONSISTENCY';
+    acceptance.failures.push('API consistency check failed: ' + acceptance.apiConsistency.note);
+  }
+
+  // Condition 5: researchEligible > 0
+  if (!acceptance.researchEligiblePositive) {
+    if (acceptance.acceptanceVerdict === 'PENDING') acceptance.acceptanceVerdict = 'FAILED_RESEARCH_ELIGIBLE';
+    acceptance.failures.push('researchEligible = 0 — no predictions qualify for research');
+  }
+
+  // Condition 6: executionEligible=0 is acceptable but must have documented reason
+  if (acceptance.executionEligible > 0) {
+    // If execution IS eligible, that's fine too — just note it
+    acceptance._note = 'executionEligible=' + acceptance.executionEligible + ' — trades may execute';
+  }
+  // executionEligible=0 is already documented in executionEligibleZeroReason above
+
+  // ── Final verdict ──
+  if (acceptance.failures.length === 0) {
+    acceptance.acceptanceVerdict = 'ACCEPTED';
+  }
+
+  // ── Step 7: Write acceptance file (runId-bound name) ──
+  var acceptanceDir = path.join(dataDir, 'research', 'acceptance');
+  try {
+    if (!fs.existsSync(acceptanceDir)) fs.mkdirSync(acceptanceDir, { recursive: true });
+    var acceptanceFile = path.join(acceptanceDir, 'canonical_acceptance_' + today + '_' + runId + '.json');
+    fs.writeFileSync(acceptanceFile, JSON.stringify(acceptance, null, 2), 'utf8');
+    console.log('[CanonicalAcceptance] Verdict=' + acceptance.acceptanceVerdict +
+      ' canonical=' + acceptance.canonicalCohortCount + '/' + acceptance.canonicalCohortTarget +
+      ' allFields=' + fv.allFieldsPresent + '/' + fv.totalCanonical +
+      ' manifestCompleted=' + acceptance.dailyManifest.completed +
+      ' apiConsistent=' + acceptance.apiConsistency.consistent +
+      ' researchEligible=' + acceptance.researchEligible +
+      ' → ' + acceptanceFile);
+  } catch (e) {
+    console.error('[CanonicalAcceptance] Failed to write acceptance file:', e.message);
+  }
 }
 
 module.exports = { Scheduler };

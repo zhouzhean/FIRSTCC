@@ -47,13 +47,22 @@ try {
 // buildCommit is the best available identity: git first, manifest fallback.
 var _buildCommit = _gitCommit || _deployCommit || null;
 
-// identityStatus: matched | mismatch | git_only | manifest_only | manifest_missing
+// identityStatus: matched | mismatch | git_only | manifest_verified_no_git | manifest_verified | manifest_missing
+//   matched                     — git + manifest agree (dev machine or full git cloud deploy)
+//   mismatch                    — git + manifest disagree (stale deploy, needs push)
+//   git_only                    — git available, manifest missing (dev without deploy/manifest)
+//   manifest_verified_no_git    — manifest valid, no .git directory (SCP cloud deploy — NORMAL)
+//   manifest_verified           — manifest valid, git failed (unexpected — git dir exists but broken)
+//   manifest_missing            — no identity source available
 var _identityStatus = 'manifest_missing';
 if (_deployCommit) {
   if (_gitCommit) {
     _identityStatus = (_gitCommit === _deployCommit) ? 'matched' : 'mismatch';
   } else {
-    _identityStatus = 'manifest_only';
+    // Distinguish: "no .git dir" (normal cloud) vs ".git exists but git failed" (unexpected)
+    var _gitDirExists = false;
+    try { _gitDirExists = fs.existsSync(path.join(BASE_DIR, '.git')); } catch (_) {}
+    _identityStatus = _gitDirExists ? 'manifest_verified' : 'manifest_verified_no_git';
   }
 } else {
   _identityStatus = _gitCommit ? 'git_only' : 'manifest_missing';
@@ -73,7 +82,7 @@ module.exports = {
   deployCommit: _deployCommit,    // from deploy_manifest.json
   deployManifestValid: _deployManifestValid,
   deployFileHashCount: _deployFileHashCount,
-  identityStatus: _identityStatus,  // matched | mismatch | git_only | manifest_only | manifest_missing
+  identityStatus: _identityStatus,  // matched | mismatch | git_only | manifest_verified_no_git | manifest_verified | manifest_missing
   BASE_DIR,
   REPORT_ENGINE_DIR,
   DATA_DIR,

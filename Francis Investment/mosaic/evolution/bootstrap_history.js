@@ -2028,4 +2028,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { runBootstrap, runBootstrapWithSplit, incrementalUpdate, generateAutoReport, splitTradingDays, runWalkForwardValidation };
+module.exports = { runBootstrap, runBootstrapWithSplit, incrementalUpdate, generateAutoReport, splitTradingDays, runWalkForwardValidation, generateTradingDays };

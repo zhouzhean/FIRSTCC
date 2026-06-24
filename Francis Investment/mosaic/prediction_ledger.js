@@ -25,10 +25,12 @@ try { fs = require('fs'); path = require('path'); } catch (_) {}
 /**
  * Build a single prediction ledger entry with all v3.4.9.4 fields.
  *
+ * P0.2-3: Added scheduledSlot and asOfDate to the entry for canonical cohort acceptance.
+ *
  * @param {Object} candidate — pipeline result (must have code, price, prediction, etc.)
  * @param {string} runId — scheduler-assigned runId
- * @param {Object} context — { today, macroRegime, indexFreshness, indexValues, dataQualityPenalty,
- *                            note, scanType, isCanonical, kernelVerdict, buildCommit,
+ * @param {Object} context — { today, scheduledSlot, macroRegime, indexFreshness, indexValues,
+ *                            dataQualityPenalty, note, scanType, isCanonical, kernelVerdict, buildCommit,
  *                            modelVersionId, meetsEvidenceThreshold, quoteSource, quoteAsOf }
  * @returns {Object} full ledger entry (not yet written to file)
  */
@@ -124,6 +126,8 @@ function buildLedgerEntry(candidate, runId, context) {
     scanId: runId,
     runId: runId,
     asOf: today,
+    asOfDate: today,
+    scheduledSlot: context.scheduledSlot || null,
     timestamp: new Date().toISOString(),
     scanType: context.scanType || 'unknown',
     canonical: isCanonical,

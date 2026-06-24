@@ -218,6 +218,9 @@ function computeDecision(context) {
     if (gs.drawdown && gs.drawdown.status === 'restrict') activeBlocks.push({ gate: 'drawdown', status: 'restrict', label: '回撤限仓', detail: gs.drawdown.description });
     if (gs.marketDirection && gs.marketDirection.status === 'block') activeBlocks.push({ gate: 'marketDirection', status: 'block', label: '市场方向不利', detail: gs.marketDirection.description });
     if (gs.marketDirection && gs.marketDirection.status === 'warn') activeBlocks.push({ gate: 'marketDirection', status: 'warn', label: '市场方向数据不全', detail: gs.marketDirection.description });
+    // P0.2-4: Live model gate — blocks buy when no VALIDATED_LIVE_MODEL
+    if (gs.liveModel && gs.liveModel.status === 'block') activeBlocks.push({ gate: 'liveModel', status: 'block', label: '无验证模型', detail: gs.liveModel.description });
+    if (gs.liveModel && gs.liveModel.status === 'pass') activeBlocks.push({ gate: 'liveModel', status: 'pass', label: '验证模型可用', detail: gs.liveModel.description });
     // Add marketSession/marketData status
     if (gs.marketSession && gs.marketSession.status === 'block') {
       res.marketClosed = true;
@@ -468,6 +471,79 @@ function computeDecision(context) {
         (dqReasons.length > 0 ? '原因：' + dqReasons.join('；') : '多个数据源异常或过期') +
         ' — 在此状态下交易风险不可控，强制禁止买入',
       severity: 'block',
+    });
+    return finalize(result);
+  }
+
+  // ================================================================
+  // HARD BLOCKER 6: No Validated Live Model (P0.2-4)
+  // ================================================================
+  // Checks model_registry for a VALIDATED_LIVE_MODEL.
+  // Currently Ridge-v1 is REJECTED_RESEARCH, no other model has passed P0 validation.
+  // Legacy bootstrap/champion/shadow are Unverified — never used by Kernel.
+  var activeTradingModel = null;
+  var liveModelStatus = 'NO_VALIDATED_LIVE_MODEL';
+  try {
+    var MODEL_REGISTRY = require('./evolution/model_registry');
+    var regStatus = MODEL_REGISTRY.getRegistryStatus();
+    // A validated live model: baseline that is NOT rejected and has valid PIT OOS evidence
+    // Check if any baseline exists and is not REJECTED_RESEARCH
+    if (regStatus.baseline && regStatus.baseline.versionId) {
+      var bl = regStatus.baseline;
+      if (bl.status === 'REJECTED_RESEARCH') {
+        liveModelStatus = 'REJECTED_RESEARCH';
+        activeTradingModel = null;
+      } else if (bl.status === 'baseline' && !regStatus.hasRejectedModel) {
+        // Has active baseline that hasn't been rejected — check P0 evidence
+        // For now, only explicitly validated models qualify
+        liveModelStatus = bl.status === 'baseline' ? 'BASELINE_NEEDS_VALIDATION' : 'UNVERIFIED';
+        activeTradingModel = null;
+      } else {
+        liveModelStatus = 'NO_VALIDATED_LIVE_MODEL';
+        activeTradingModel = null;
+      }
+    }
+    // Also check if any shadow model has passed validation without being rejected
+    if (!activeTradingModel && regStatus.shadows && regStatus.shadows.length > 0) {
+      for (var si = 0; si < regStatus.shadows.length; si++) {
+        var sh = regStatus.shadows[si];
+        if (sh.status !== 'REJECTED_RESEARCH' && sh.p0Validated === true) {
+          activeTradingModel = sh.versionId;
+          liveModelStatus = 'VALIDATED_LIVE_MODEL';
+          break;
+        }
+      }
+    }
+  } catch (_) {
+    liveModelStatus = 'REGISTRY_ERROR';
+  }
+
+  result.activeTradingModel = activeTradingModel;
+  result.liveModelStatus = liveModelStatus;
+
+  if (liveModelStatus !== 'VALIDATED_LIVE_MODEL') {
+    result.canBuy = false;
+    result.finalVerdict = 'BLOCK';
+    result.finalVerdictLabel = '无验证模型/禁止实盘';
+    result.maxBuysPerDay = 0;
+    var liveModelReason = '当前 liveModelStatus=' + liveModelStatus + ' — ';
+    if (liveModelStatus === 'REJECTED_RESEARCH') {
+      liveModelReason += 'Ridge-v1 已被冻结为 REJECTED_RESEARCH（6 窗口 Rank IC 全负），无替代模型通过 P0 验证。Legacy bootstrap/champion/shadow 仅展示，不得用于实盘决策。';
+    } else if (liveModelStatus === 'NO_VALIDATED_LIVE_MODEL') {
+      liveModelReason += '模型注册表中无可用于实盘交易的已验证模型。Legacy bootstrap/champion/shadow 为未验证历史数据，仅展示。需新的 P0-PIT-OOS 验证模型方可启用买入。';
+    } else if (liveModelStatus === 'BASELINE_NEEDS_VALIDATION') {
+      liveModelReason += '当前 baseline 模型未经 P0 PIT-OOS 完整验证。需通过 Research Lab 6 窗口评估后方可启用买入。';
+    } else {
+      liveModelReason += '模型注册表无法确认验证状态。禁止买入以保护资金安全。';
+    }
+    result.hardBlockers.push({
+      gate: 'liveModel',
+      reason: liveModelReason,
+      severity: 'block',
+      errorCode: 'NO_VALIDATED_LIVE_MODEL',
+      activeTradingModel: activeTradingModel,
+      liveModelStatus: liveModelStatus,
+      _note: 'Legacy bootstrap/champion/shadow are labeled Legacy/Unverified — for display only, never used by Kernel',
     });
     return finalize(result);
   }
@@ -763,6 +839,19 @@ function _buildAllGateStates(ctx, decision) {
       description: dqPenalty > 0
         ? '数据质量惩罚-' + dqPenalty + '分(score:' + dqQualityScore + ')：' + dqReasons.join('；')
         : '数据质量正常，无惩罚',
+    },
+    // P0.2-4: Live model validation gate
+    liveModel: {
+      status: (decision && decision.liveModelStatus === 'VALIDATED_LIVE_MODEL') ? 'pass' : 'block',
+      activeTradingModel: (decision && decision.activeTradingModel) || null,
+      liveModelStatus: (decision && decision.liveModelStatus) || 'NO_VALIDATED_LIVE_MODEL',
+      description: (decision && decision.liveModelStatus === 'VALIDATED_LIVE_MODEL')
+        ? '验证模型可用：' + ((decision && decision.activeTradingModel) || 'unknown')
+        : (decision && decision.liveModelStatus === 'REJECTED_RESEARCH'
+          ? '当前模型 REJECTED_RESEARCH（Ridge-v1 Rank IC 全负），无替代已验证模型。Legacy 仅展示，不用于 Kernel。'
+          : (decision && decision.liveModelStatus === 'BASELINE_NEEDS_VALIDATION'
+            ? 'Baseline 模型未经 PIT-OOS 验证，不可用于实盘。'
+            : '无验证模型可用于实盘交易。Legacy 模型仅展示。')),
     },
   };
 }

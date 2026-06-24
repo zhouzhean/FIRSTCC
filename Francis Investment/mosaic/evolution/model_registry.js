@@ -32,12 +32,15 @@ var _state = {
   // v3.3.1: Per-shadow forward sample tracking
   forwardSamples: {},       // { versionId: { total, hits, dates[], directionHitRate } }
   demotionLog: [],          // [{ baseline, reason, date, baselineIC, bestShadowIC }]
+  // P0.3: Independent rejected models — persists across restarts, blocks promotion/buy
+  rejectedModels: [],       // [{ versionId, status:'REJECTED_RESEARCH', rejectedAt, rejectionEvidence }]
 };
 
 var CONFIG = {};
 var REGISTRY_FILE = null;
 var FORWARD_SAMPLES_FILE = null;
 var DEMOTION_LOG_FILE = null;
+var REJECTED_MODELS_FILE = null;
 
 // Load config and state on require
 (function _init() {
@@ -52,6 +55,9 @@ var DEMOTION_LOG_FILE = null;
     DEMOTION_LOG_FILE = mrConfig.demotionLogFile
       ? path.join(__dirname, '..', '..', mrConfig.demotionLogFile)
       : path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'demotion_log.json');
+    REJECTED_MODELS_FILE = mrConfig.rejectedModelsFile
+      ? path.join(__dirname, '..', '..', mrConfig.rejectedModelsFile)
+      : path.join(__dirname, '..', '..', 'report-engine', 'data', 'evolution', 'rejected_models.json');
     _state.maxVersions = mrConfig.maxVersions || 20;
     _state.maxLogs = CONFIG.shadowLogMaxEntries || 500;
 
@@ -78,6 +84,8 @@ var DEMOTION_LOG_FILE = null;
       if (saved.promotionHistory) _state.promotionHistory = saved.promotionHistory;
       if (saved.forwardSamples) _state.forwardSamples = saved.forwardSamples;
       if (saved.demotionLog) _state.demotionLog = saved.demotionLog;
+      // P0.3: Restore rejectedModels from main registry or from separate file
+      if (saved.rejectedModels) _state.rejectedModels = saved.rejectedModels;
     }
 
     // Restore forward samples from separate file (v3.3.1 persistence)
@@ -95,6 +103,14 @@ var DEMOTION_LOG_FILE = null;
         if (dlData && Array.isArray(dlData)) _state.demotionLog = dlData;
       } catch (_) {}
     }
+
+    // P0.3: Restore rejected models from separate file (authoritative source for persistence)
+    if (fs.existsSync(REJECTED_MODELS_FILE)) {
+      try {
+        var rjData = JSON.parse(fs.readFileSync(REJECTED_MODELS_FILE, 'utf8'));
+        if (rjData && Array.isArray(rjData)) _state.rejectedModels = rjData;
+      } catch (_) {}
+    }
   } catch (_) {}
 })();
 
@@ -110,6 +126,7 @@ function _persist() {
       promotionHistory: _state.promotionHistory,
       forwardSamples: _state.forwardSamples,
       demotionLog: _state.demotionLog.slice(-50),
+      rejectedModels: _state.rejectedModels,
       updatedAt: new Date().toISOString(),
     }, null, 2), 'utf8');
 
@@ -123,6 +140,11 @@ function _persist() {
     // Persist demotion log separately
     try {
       fs.writeFileSync(DEMOTION_LOG_FILE, JSON.stringify(_state.demotionLog.slice(-50), null, 2), 'utf8');
+    } catch (_) {}
+
+    // P0.3: Persist rejected models separately (authoritative source)
+    try {
+      fs.writeFileSync(REJECTED_MODELS_FILE, JSON.stringify(_state.rejectedModels, null, 2), 'utf8');
     } catch (_) {}
   } catch (_) {}
 }
@@ -462,6 +484,8 @@ function evaluateShadow(dateStr) {
   for (var i = 0; i < _state.shadows.length; i++) {
     var shadow = _state.shadows[i];
     if (shadow.status !== 'shadow') continue;
+    // P0.3: Skip REJECTED models — they are permanently blocked
+    if (shadow.status === 'REJECTED_RESEARCH') continue;
 
     var shadowIC = _computeRankIC(shadow.versionId, verificationData);
     shadow.evaluationDays = (shadow.evaluationDays || 0) + 1;
@@ -644,6 +668,13 @@ function promoteToBaseline(versionId, reason) {
   }
   if (!shadow) return null;
 
+  // P0.3: REJECTED_RESEARCH models are permanently blocked from promotion
+  // Check BOTH the authoritative rejectedModels[] list AND inline status
+  if (shadow.status === 'REJECTED_RESEARCH' || hasRejectedModelById(versionId)) {
+    console.log('[ModelRegistry] BLOCKED: ' + versionId + ' is REJECTED_RESEARCH — cannot promote');
+    return null;
+  }
+
   // v3.3.1: Safety net — run full criteria check even if already done in evaluateShadow
   // IMPORTANT: pass the REAL baseline IC, not the shadow's own IC
   if (shadow.status === 'shadow') {
@@ -725,9 +756,20 @@ function getBaselineParams() {
 function getRegistryStatus() {
   return {
     enabled: CONFIG.enabled || false,
+    allowAutoPromotion: CONFIG.allowAutoPromotion || false,
     baseline: _state.baseline,
     shadowCount: _state.shadows.filter(function(s) { return s.status === 'shadow'; }).length,
     retiredCount: _state.shadows.filter(function(s) { return s.status === 'retired'; }).length,
+    rejectedCount: _state.rejectedModels.length,
+    rejectedModels: getRejectedModels().map(function(r) {
+      return {
+        versionId: r.versionId,
+        status: r.status,
+        rejectedAt: r.rejectedAt,
+        evidence: r.rejectionEvidence,
+      };
+    }),
+    hasRejectedModel: hasRejectedModel(),
     shadows: _state.shadows.filter(function(s) { return s.status === 'shadow'; }).map(function(s) {
       var fwdSam = _getForwardSamples(s.versionId);
       return {
@@ -764,7 +806,119 @@ function retireVersion(versionId) {
   return false;
 }
 
+// ══════ P0.3: Research Rejection — formal negative-result recording ══════
+
+/**
+ * [P0.3] Formally reject a model with research evidence.
+ * The model status is set to REJECTED_RESEARCH — permanently blocked from:
+ *  - Automatic promotion (evaluateShadow will never promote a REJECTED model)
+ *  - Champion assignment
+ *  - Buy qualification / live trading
+ *
+ * Artifacts are PRESERVED as a negative baseline for future comparison.
+ *
+ * @param {string} versionId — model version to reject (or null to reject current baseline)
+ * @param {object} evidence — { reason, windowsChecked, avgRankIC, allRankICs, pairedDeltaCI }
+ * @returns {object|null} rejection record or null if not found
+ */
+function rejectModel(versionId, evidence) {
+  if (!versionId) return null;
+
+  // P0.3 IDEMPOTENCY: If already in rejectedModels[], do NOT re-write demotionLog.
+  // Return the existing rejection record unchanged.
+  for (var rj = 0; rj < _state.rejectedModels.length; rj++) {
+    if (_state.rejectedModels[rj].versionId === versionId) {
+      console.log('[ModelRegistry] IDEMPOTENT: ' + versionId + ' already REJECTED_RESEARCH — skipping duplicate rejection');
+      return _state.rejectedModels[rj];
+    }
+  }
+
+  // P0.3: Check if the target is currently in shadows (as shadow or baseline).
+  // A target not found in shadows AND not the baseline is still acceptable —
+  // we register it directly into rejectedModels[] (persistence-only rejection).
+  var target = null;
+  var wasBaseline = false;
+  for (var i = 0; i < _state.shadows.length; i++) {
+    if (_state.shadows[i].versionId === versionId) {
+      target = _state.shadows[i];
+      break;
+    }
+  }
+
+  // Also check baseline
+  if (!target && _state.baseline && _state.baseline.versionId === versionId) {
+    target = _state.baseline;
+    wasBaseline = true;
+  }
+
+  // Update shadow/baseline status if target exists in active state
+  if (target) {
+    target.status = 'REJECTED_RESEARCH';
+    target.rejectedAt = new Date().toISOString();
+    target.rejectionEvidence = evidence || {};
+    // If target was the baseline, demote it — an REJECTED model cannot be baseline
+    if (wasBaseline) {
+      _state.baseline = null;
+    }
+  }
+
+  // P0.3: Always write into independent rejectedModels[] — this is the authoritative list.
+  // Even if the model was never registered (target not found), the rejection record
+  // persists so it can't be re-registered.
+  var rejectionRecord = {
+    versionId: versionId,
+    status: 'REJECTED_RESEARCH',
+    rejectedAt: target ? target.rejectedAt : new Date().toISOString(),
+    rejectionEvidence: evidence || {},
+  };
+  _state.rejectedModels.push(rejectionRecord);
+
+  // Write ONE demotionLog entry — only on first rejection (guaranteed by idempotency check above)
+  _state.demotionLog.push({
+    baseline: versionId,
+    reason: 'REJECTED_RESEARCH: ' + (evidence ? evidence.reason : 'no_alpha'),
+    date: new Date().toISOString().slice(0, 10),
+    evidence: evidence,
+  });
+
+  _persist();
+  console.log('[ModelRegistry] REJECTED_RESEARCH: ' + versionId +
+    ' — blocked from promotion, Champion, buy qualification. Artifacts preserved.');
+  return rejectionRecord;
+}
+
+/**
+ * [P0.3] Check if any model is REJECTED — reads from the authoritative rejectedModels[].
+ */
+function hasRejectedModel() {
+  if (_state.rejectedModels.length > 0) return true;
+  // Also scan live state for any models rejected before rejectedModels[] was split out
+  if (_state.baseline && _state.baseline.status === 'REJECTED_RESEARCH') return true;
+  for (var i = 0; i < _state.shadows.length; i++) {
+    if (_state.shadows[i].status === 'REJECTED_RESEARCH') return true;
+  }
+  return false;
+}
+
+/**
+ * [P0.3] Get all rejected models with their evidence — reads from the authoritative rejectedModels[].
+ */
+function getRejectedModels() {
+  return _state.rejectedModels.slice();
+}
+
+/**
+ * [P0.3] Check if a specific versionId is in rejectedModels[].
+ */
+function hasRejectedModelById(versionId) {
+  for (var i = 0; i < _state.rejectedModels.length; i++) {
+    if (_state.rejectedModels[i].versionId === versionId) return true;
+  }
+  return false;
+}
+
 // ── Internal helpers ──
+
 
 /**
  * [v3.3.1] Build a (predictionDate, code, horizon) → predictedReturn map from shadow logs.
@@ -1008,4 +1162,9 @@ module.exports = {
   getBaselineParams,
   getRegistryStatus,
   retireVersion,
+  // P0.3: REJECTED_RESEARCH
+  rejectModel,
+  hasRejectedModel,
+  getRejectedModels,
+  hasRejectedModelById,
 };

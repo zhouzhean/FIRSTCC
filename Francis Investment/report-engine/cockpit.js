@@ -263,8 +263,19 @@ function renderSystemStatus(data) {
     '</div>';
 
   // v3.4.9.4.2: Phase 0 — deploy identity row showing manifest validity + status
-  var identityLabel = {matched:'✅ Matched', mismatch:'⚠️ Mismatch', git_only:'💻 Git only', manifest_only:'☁️ Manifest', manifest_missing:'❌ Missing'}[data.identityStatus] || 'Unknown';
-  var identityColor = data.identityStatus === 'matched' ? '#16a34a' : data.identityStatus === 'manifest_only' ? '#2563eb' : data.identityStatus === 'mismatch' ? '#dc2626' : '#94a3b8';
+  var identityLabel = {
+    matched: '✅ Matched',
+    mismatch: '⚠️ Mismatch',
+    git_only: '💻 Git only',
+    manifest_verified_no_git: '☁️ Verified (no git)',
+    manifest_verified: '⚠️ Manifest (git broken)',
+    manifest_missing: '❌ Missing'
+  }[data.identityStatus] || 'Unknown';
+  var identityColor =
+    data.identityStatus === 'matched' ? '#16a34a' :
+    data.identityStatus === 'manifest_verified_no_git' ? '#2563eb' :
+    data.identityStatus === 'manifest_verified' ? '#d97706' :
+    data.identityStatus === 'mismatch' ? '#dc2626' : '#94a3b8';
   html += '<div class="sys-row">' +
     '<span class="sys-label">Deploy ID</span>' +
     '<span class="sys-value" style="color:' + identityColor + ';font-size:11px;" title="git: ' + esc(data.gitCommit || 'none') + ' | deploy: ' + esc(data.deployCommit || 'none') + ' | files: ' + (data.deployFileHashCount || 0) + '">' +

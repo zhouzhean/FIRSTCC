@@ -782,6 +782,7 @@ function _appendPredictionLedger(candidates, context, scanType, kernelDecision, 
     for (var i = 0; i < topN; i++) {
       var entry = pl.buildLedgerEntry(candidates[i], runId, {
         today: today,
+        scheduledSlot: (context && context.scheduledSlot) || null,
         scanType: scanType || 'unknown',
         isCanonical: (context && context.isCanonical) === true,
         macroRegime: (context && context.macroRegime) || null,
@@ -957,6 +958,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     today: today,
     scanType: scanType,
     isCanonical: _isCanonical,
+    scheduledSlot: scheduledSlot || null,
     note: null,
     macroRegime: macroContext && macroContext.riskState ? macroContext.riskState.regime : null,
     dataQualityPenalty: dqReport ? dqReport.penalty : 0,
