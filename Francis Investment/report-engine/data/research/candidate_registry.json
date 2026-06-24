@@ -1,0 +1,44 @@
+{
+  "candidates": [],
+  "hypotheses": [
+    {
+      "id": "H1",
+      "name": "Momentum + Volatility",
+      "description": "Technical composite score weighted by inverse 20-day volatility. Higher weight to low-volatility technical signals — reward steady trends, penalize erratic price action.",
+      "features": [
+        "technical",
+        "volatility20d"
+      ],
+      "interaction": "technical / (1 + volatility20d)",
+      "lockedAt": "2026-06-24",
+      "rationale": "Classic low-vol anomaly adapted to A-share: stable trending stocks outperform high-vol names on a risk-adjusted basis over T+3 horizon."
+    },
+    {
+      "id": "H2",
+      "name": "Derived Hidden-Signal Bundle",
+      "description": "Hidden signal composite (H1-H9) as sole input. No price features, no volatility, no volume. Derives statistical features from the hidden-signal bundle — NOT non-price or alternative data.",
+      "features": [
+        "hidden"
+      ],
+      "interaction": null,
+      "lockedAt": "2026-06-24",
+      "rationale": "If hidden signals carry genuine alpha uncorrelated with price, a pure hidden-signal model should show positive Rank IC independent of technical factors. Failure = hidden signals are just transformed price data."
+    },
+    {
+      "id": "H3",
+      "name": "Signal-Volume Interaction",
+      "description": "Interaction term: signalCount × compositeScore. Tests whether the confluence of multiple signals (high signalCount) amplifies or dampens the composite score's predictive power.",
+      "features": [
+        "signalCount",
+        "compositeScore"
+      ],
+      "interaction": "signalCount * compositeScore",
+      "lockedAt": "2026-06-24",
+      "rationale": "When many signals agree (high signalCount), the composite score should be more reliable. The interaction term captures this amplification effect. Weak interaction = signal diversity doesn't improve reliability."
+    }
+  ],
+  "evaluationWindows": [],
+  "transitions": [],
+  "lastEvaluationDate": null,
+  "updatedAt": "2026-06-24T15:00:00.000Z"
+}

@@ -11,7 +11,7 @@
  *
  * Pre-locked hypotheses (3 technical alpha hypotheses):
  *   H1 — Momentum + Volatility: technical score weighted by inverse volatility
- *   H2 — Pure Hidden Signals: H1-H9 composite only, no price features
+ *   H2 — Derived Hidden-Signal Bundle: H1-H9 composite, no price features
  *   H3 — Signal-Volume Interaction: signalCount × compositeScore interaction term
  *
  * Unified pipeline rules:
@@ -54,10 +54,10 @@ var PRELOCKED_HYPOTHESES = [
   },
   {
     id: 'H2',
-    name: 'Pure Hidden Signals',
+    name: 'Derived Hidden-Signal Bundle',
     description: 'Hidden signal composite (H1-H9) as sole input. No price features, ' +
-      'no volatility, no volume. Tests whether non-price information carries ' +
-      'standalone predictive power.',
+      'no volatility, no volume. Derives statistical features from the hidden-signal ' +
+      'bundle — NOT non-price or alternative data.',
     features: ['hidden'],
     interaction: null,
     lockedAt: '2026-06-24',
@@ -82,26 +82,410 @@ var PRELOCKED_HYPOTHESES = [
 
 // ── Initialization ──
 
-(function _init() {
-  try {
-    var config = require('../config');
-    var baseDir = config.DATA_DIR || path.join(__dirname, '..', '..', 'report-engine', 'data');
-    DATA_DIR = baseDir;
-    REGISTRY_FILE = path.join(baseDir, 'research', 'candidate_registry.json');
+/**
+ * P1.2: Injectable registry factory — creates a fully independent instance.
+ * Does NOT mutate module-global DATA_DIR/_state — returns a clean exports object.
+ *
+ * @param {object} options
+ * @param {string} options.dataDir — override DATA_DIR (default: config.DATA_DIR)
+ * @returns {object} REGISTRY — fresh API object with its own state
+ */
+function createRegistry(options) {
+  var opts = options || {};
 
-    if (fs.existsSync(REGISTRY_FILE)) {
-      var saved = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
-      if (saved.candidates) _state.candidates = saved.candidates;
-      if (saved.hypotheses) _state.hypotheses = saved.hypotheses;
-      if (saved.evaluationWindows) _state.evaluationWindows = saved.evaluationWindows;
-      if (saved.transitions) _state.transitions = saved.transitions;
-      if (saved.lastEvaluationDate) _state.lastEvaluationDate = saved.lastEvaluationDate;
+  // P1.2: Independent state — no mutation of module-global _state/DATA_DIR
+  var registryState = {
+    candidates: [],
+    hypotheses: [],
+    evaluationWindows: [],
+    transitions: [],
+    lastEvaluationDate: null,
+  };
+
+  var _registryFile = null;
+  var _dataDir = null;
+
+  try {
+    if (opts.dataDir) {
+      _dataDir = opts.dataDir;
+      _registryFile = path.join(_dataDir, 'research', 'candidate_registry.json');
+      if (!fs.existsSync(path.join(_dataDir, 'research'))) {
+        fs.mkdirSync(path.join(_dataDir, 'research'), { recursive: true });
+      }
+    } else {
+      var config = require('../config');
+      _dataDir = config.DATA_DIR || path.join(__dirname, '..', '..', 'report-engine', 'data');
+      _registryFile = path.join(_dataDir, 'research', 'candidate_registry.json');
     }
 
-    // Ensure pre-locked hypotheses are always present (merge on restart)
-    _ensureHypotheses();
+    if (fs.existsSync(_registryFile)) {
+      var saved = JSON.parse(fs.readFileSync(_registryFile, 'utf8'));
+      if (saved.candidates) registryState.candidates = saved.candidates;
+      if (saved.hypotheses) registryState.hypotheses = saved.hypotheses;
+      if (saved.evaluationWindows) registryState.evaluationWindows = saved.evaluationWindows;
+      if (saved.transitions) registryState.transitions = saved.transitions;
+      if (saved.lastEvaluationDate) registryState.lastEvaluationDate = saved.lastEvaluationDate;
+    }
+
+    // Ensure pre-locked hypotheses are always present
+    var existingIds = {};
+    for (var i = 0; i < registryState.hypotheses.length; i++) {
+      existingIds[registryState.hypotheses[i].id] = true;
+    }
+    for (var j = 0; j < PRELOCKED_HYPOTHESES.length; j++) {
+      if (!existingIds[PRELOCKED_HYPOTHESES[j].id]) {
+        registryState.hypotheses.push(PRELOCKED_HYPOTHESES[j]);
+      }
+    }
   } catch (_) {}
-})();
+
+  function _persistLocal() {
+    if (!_registryFile || !fs) return;
+    try {
+      var dir = path.dirname(_registryFile);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(_registryFile, JSON.stringify({
+        candidates: registryState.candidates,
+        hypotheses: registryState.hypotheses,
+        evaluationWindows: registryState.evaluationWindows,
+        transitions: registryState.transitions.slice(-100),
+        lastEvaluationDate: registryState.lastEvaluationDate,
+        updatedAt: new Date().toISOString(),
+      }, null, 2), 'utf8');
+    } catch (_) {}
+  }
+
+  // ── Build independent API ──
+
+  var REGISTRY = {
+    getHypotheses: function () {
+      return registryState.hypotheses.slice();
+    },
+    getHypothesis: function (id) {
+      for (var i = 0; i < registryState.hypotheses.length; i++) {
+        if (registryState.hypotheses[i].id === id) return registryState.hypotheses[i];
+      }
+      return null;
+    },
+    PRELOCKED_HYPOTHESES: PRELOCKED_HYPOTHESES,
+
+    registerCandidate: function (spec) {
+      var hypothesis = REGISTRY.getHypothesis(spec.hypothesisId);
+      if (!hypothesis) return { error: 'unknown_hypothesis', hypothesisId: spec.hypothesisId };
+
+      var versionId = spec.versionId || ('candidate_' + spec.hypothesisId + '_' + Date.now());
+
+      var entry = {
+        versionId: versionId,
+        hypothesisId: spec.hypothesisId,
+        hypothesis: hypothesis.name,
+        status: 'RESEARCH_ONLY',
+        registeredAt: new Date().toISOString(),
+        model: spec.model || {},
+        metrics: spec.metrics || {},
+        window: spec.window || {},
+        artifactsPath: spec.artifactsPath || null,
+        strategyHash: spec.strategyHash || null,
+        featureSchemaHash: spec.featureSchemaHash || null,
+        snapshotHash: spec.snapshotHash || null,
+        windowPlanHash: spec.windowPlanHash || null,
+        executionHash: spec.executionHash || null,
+        evaluatedWindows: [],
+        lastEvaluated: null,
+        evaluationNotes: null,
+        shadowSince: null,
+        forwardSamples: 0,
+        rejectedAt: null,
+        rejectionEvidence: null,
+      };
+
+      registryState.candidates.push(entry);
+      _persistLocal();
+
+      console.log('[CandidateRegistry] Registered ' + versionId +
+        ' (hypothesis=' + spec.hypothesisId + ', status=RESEARCH_ONLY' +
+        (spec.strategyHash ? ', strategyHash=' + spec.strategyHash.slice(0, 12) + '...' : '') + ')');
+
+      return { versionId: versionId, status: 'RESEARCH_ONLY' };
+    },
+
+    promoteToShadowCandidate: function (versionId) {
+      var candidate = null;
+      for (var i = 0; i < registryState.candidates.length; i++) {
+        if (registryState.candidates[i].versionId === versionId) { candidate = registryState.candidates[i]; break; }
+      }
+      if (!candidate) return { error: 'not_found', versionId: versionId };
+      if (candidate.status === 'REJECTED_RESEARCH') {
+        return { error: 'rejected_permanent', versionId: versionId, reason: 'REJECTED_RESEARCH models cannot be promoted' };
+      }
+      if (candidate.status === 'SHADOW_CANDIDATE') {
+        return { promoted: true, versionId: versionId, reason: 'already_shadow_candidate' };
+      }
+
+      var researchWindows = REGISTRY.getResearchWindowIndices();
+      var evaluatedSet = {};
+      for (var wi = 0; wi < (candidate.evaluatedWindows || []).length; wi++) {
+        evaluatedSet[candidate.evaluatedWindows[wi]] = true;
+      }
+      var missingWindows = [];
+      for (var rw = 0; rw < researchWindows.length; rw++) {
+        if (!evaluatedSet[researchWindows[rw]]) missingWindows.push(researchWindows[rw]);
+      }
+      if (missingWindows.length > 0) {
+        return { promoted: false, versionId: versionId,
+          reason: 'missing research windows: ' + JSON.stringify(missingWindows) };
+      }
+
+      var evals = candidate.evaluationResults || [];
+      if (evals.length < researchWindows.length) {
+        return { promoted: false, versionId: versionId,
+          reason: 'insufficient evaluation results: ' + evals.length + '/' + researchWindows.length };
+      }
+
+      var researchEvals = evals.filter(function (e) { return researchWindows.indexOf(e.windowIndex) >= 0; });
+      var avgIC = researchEvals.reduce(function (s, e) { return s + (e.rankIC || 0); }, 0) / researchEvals.length;
+      if (avgIC <= 0) {
+        return { promoted: false, versionId: versionId, reason: 'avg Rank IC <= 0 (' + avgIC.toFixed(4) + ')' };
+      }
+
+      var positiveReturnWindows = researchEvals.filter(function (e) { return (e.netReturn || 0) > 0; }).length;
+      if (positiveReturnWindows < 2) {
+        return { promoted: false, versionId: versionId,
+          reason: 'netReturn > 0 in only ' + positiveReturnWindows + '/4 research windows (need ≥2)' };
+      }
+
+      var allDeltaCI = researchEvals.map(function (e) { return e.deltaCI || [0, 0]; });
+      var allCINegative = allDeltaCI.every(function (ci) { return ci[1] < 0; });
+      if (allCINegative) {
+        return { promoted: false, versionId: versionId,
+          reason: 'paired delta CI fully negative across all research windows' };
+      }
+
+      candidate.status = 'SHADOW_CANDIDATE';
+      candidate.shadowSince = new Date().toISOString();
+      registryState.transitions.push({
+        from: 'RESEARCH_ONLY', to: 'SHADOW_CANDIDATE', hypothesisId: candidate.hypothesisId,
+        versionId: versionId, reason: 'research gates passed: avgIC=' + avgIC.toFixed(4) +
+          ', positiveWindows=' + positiveReturnWindows + '/4', date: new Date().toISOString().slice(0, 10),
+        evidence: { avgRankIC: avgIC, positiveReturnWindows: positiveReturnWindows, allDeltaCI: allDeltaCI },
+      });
+      _persistLocal();
+      console.log('[CandidateRegistry] PROMOTED: ' + versionId + ' → SHADOW_CANDIDATE (avgIC=' + avgIC.toFixed(4) + ')');
+      return { promoted: true, versionId: versionId, status: 'SHADOW_CANDIDATE', avgRankIC: avgIC, positiveReturnWindows: positiveReturnWindows };
+    },
+
+    rejectCandidate: function (versionId, evidence) {
+      var candidate = null;
+      for (var i = 0; i < registryState.candidates.length; i++) {
+        if (registryState.candidates[i].versionId === versionId) { candidate = registryState.candidates[i]; break; }
+      }
+      if (!candidate) return { error: 'not_found', versionId: versionId };
+      if (candidate.status === 'REJECTED_RESEARCH') {
+        return { rejected: true, versionId: versionId, status: 'REJECTED_RESEARCH', alreadyRejected: true };
+      }
+      var previousStatus = candidate.status;
+      candidate.status = 'REJECTED_RESEARCH';
+      candidate.rejectedAt = new Date().toISOString();
+      candidate.rejectionEvidence = evidence || {};
+      try {
+        var MODEL_REGISTRY = require('../evolution/model_registry');
+        MODEL_REGISTRY.rejectModel(versionId, evidence);
+      } catch (_) {}
+      registryState.transitions.push({
+        from: previousStatus, to: 'REJECTED_RESEARCH', hypothesisId: candidate.hypothesisId,
+        versionId: versionId, reason: evidence ? evidence.reason : 'no_alpha',
+        date: new Date().toISOString().slice(0, 10), evidence: evidence,
+      });
+      _persistLocal();
+      console.log('[CandidateRegistry] REJECTED_RESEARCH: ' + versionId + ' — artifacts preserved.');
+      return { rejected: true, versionId: versionId, status: 'REJECTED_RESEARCH' };
+    },
+
+    setEvaluationWindows: function (windows) {
+      registryState.evaluationWindows = windows.map(function (w, i) {
+        return {
+          index: i, windowId: 'window_' + String(i + 1).padStart(3, '0'),
+          role: i < 4 ? 'research' : 'lock',
+          trainStart: w.trainStart, trainEnd: w.trainEnd,
+          testStart: w.testStart, testEnd: w.testEnd,
+        };
+      });
+      _persistLocal();
+    },
+
+    getResearchWindowIndices: function () {
+      return registryState.evaluationWindows
+        .filter(function (w) { return w.role === 'research'; })
+        .map(function (w) { return w.index; });
+    },
+
+    getLockWindowIndices: function () {
+      return registryState.evaluationWindows
+        .filter(function (w) { return w.role === 'lock'; })
+        .map(function (w) { return w.index; });
+    },
+
+    recordEvaluation: function (versionId, windowIndex, results) {
+      var candidate = null;
+      for (var i = 0; i < registryState.candidates.length; i++) {
+        if (registryState.candidates[i].versionId === versionId) { candidate = registryState.candidates[i]; break; }
+      }
+      if (!candidate) return { error: 'not_found', versionId: versionId };
+      if (candidate.status === 'REJECTED_RESEARCH') {
+        return { error: 'rejected_permanent', versionId: versionId };
+      }
+
+      var windowRole = 'research';
+      var windowId = null;
+      for (var wi = 0; wi < registryState.evaluationWindows.length; wi++) {
+        if (registryState.evaluationWindows[wi].index === windowIndex) {
+          windowRole = registryState.evaluationWindows[wi].role;
+          windowId = registryState.evaluationWindows[wi].windowId || null;
+          break;
+        }
+      }
+
+      if (windowRole === 'lock' && candidate.status === 'RESEARCH_ONLY') {
+        return { error: 'lock_windows_require_shadow_candidate', versionId: versionId, currentStatus: candidate.status };
+      }
+
+      // P1.2: Idempotency check
+      if (candidate.evaluationResults) {
+        for (var ei = 0; ei < candidate.evaluationResults.length; ei++) {
+          var er = candidate.evaluationResults[ei];
+          if (er.windowIndex === windowIndex &&
+              er.snapshotHash === (results.snapshotHash || candidate.snapshotHash || null) &&
+              er.executionHash === (results.executionHash || candidate.executionHash || null)) {
+            console.log('[CandidateRegistry] IDEMPOTENT: window ' + windowIndex + ' already recorded for ' + versionId);
+            return { recorded: false, alreadyRecorded: true, versionId: versionId, windowIndex: windowIndex };
+          }
+        }
+      }
+
+      if (!candidate.evaluationResults) candidate.evaluationResults = [];
+      candidate.evaluationResults.push({
+        windowIndex: windowIndex, windowRole: windowRole,
+        rankIC: results.rankIC, netReturn: results.netReturn, grossReturn: results.grossReturn,
+        benchmarkReturn: results.benchmarkReturn, netExcessReturn: results.netExcessReturn,
+        deltaCI: results.deltaCI || null, directionAccuracy: results.directionAccuracy,
+        candidateVersionId: results.candidateVersionId || versionId,
+        hypothesisId: results.hypothesisId || candidate.hypothesisId,
+        strategyHash: results.strategyHash || candidate.strategyHash || null,
+        featureSchemaHash: results.featureSchemaHash || candidate.featureSchemaHash || null,
+        snapshotHash: results.snapshotHash || candidate.snapshotHash || null,
+        windowPlanHash: results.windowPlanHash || candidate.windowPlanHash || null,
+        executionHash: results.executionHash || candidate.executionHash || null,
+        windowId: results.windowId || windowId || null,
+        costAssumptions: results.costAssumptions || null,
+        benchmarkStatus: results.benchmarkStatus || null,
+        windowDates: results.windowDates || null,
+        evaluatedAt: new Date().toISOString(),
+      });
+
+      if (!candidate.evaluatedWindows) candidate.evaluatedWindows = [];
+      if (candidate.evaluatedWindows.indexOf(windowIndex) < 0) {
+        candidate.evaluatedWindows.push(windowIndex);
+      }
+
+      candidate.lastEvaluated = new Date().toISOString();
+      registryState.lastEvaluationDate = new Date().toISOString().slice(0, 10);
+      _persistLocal();
+
+      // Auto-promotion
+      var researchWindows = REGISTRY.getResearchWindowIndices();
+      var allResearchDone = researchWindows.every(function (rw) {
+        return candidate.evaluatedWindows.indexOf(rw) >= 0;
+      });
+
+      if (allResearchDone && candidate.status === 'RESEARCH_ONLY') {
+        REGISTRY.promoteToShadowCandidate(versionId);
+      }
+
+      return { recorded: true, versionId: versionId, windowIndex: windowIndex, windowRole: windowRole,
+        status: candidate.status, allResearchDone: allResearchDone };
+    },
+
+    getCandidates: function (opts) {
+      var filter = (opts || {}).status || null;
+      var hypothesisId = (opts || {}).hypothesisId || null;
+      var results = registryState.candidates.slice();
+      if (filter) results = results.filter(function (c) { return c.status === filter; });
+      if (hypothesisId) results = results.filter(function (c) { return c.hypothesisId === hypothesisId; });
+      return results;
+    },
+
+    getStatus: function () {
+      var activeCandidates = registryState.candidates.filter(function (c) { return c.status !== 'REJECTED_RESEARCH'; });
+      var shadowCandidates = registryState.candidates.filter(function (c) { return c.status === 'SHADOW_CANDIDATE'; });
+      var rejected = registryState.candidates.filter(function (c) { return c.status === 'REJECTED_RESEARCH'; });
+      return {
+        totalHypotheses: registryState.hypotheses.length,
+        hypotheses: registryState.hypotheses.map(function (h) { return { id: h.id, name: h.name }; }),
+        totalCandidates: registryState.candidates.length,
+        activeCandidates: activeCandidates.length,
+        researchOnly: activeCandidates.filter(function (c) { return c.status === 'RESEARCH_ONLY'; }).length,
+        shadowCandidates: shadowCandidates.length,
+        rejectedCount: rejected.length,
+        evaluationWindows: {
+          total: registryState.evaluationWindows.length,
+          research: REGISTRY.getResearchWindowIndices().length,
+          lock: REGISTRY.getLockWindowIndices().length,
+          windows: registryState.evaluationWindows,
+        },
+        lastEvaluationDate: registryState.lastEvaluationDate,
+        transitions: registryState.transitions.slice(-20),
+      };
+    },
+
+    getFinalVerdict: function (versionId) {
+      var candidate = null;
+      for (var i = 0; i < registryState.candidates.length; i++) {
+        if (registryState.candidates[i].versionId === versionId) { candidate = registryState.candidates[i]; break; }
+      }
+      if (!candidate) return { error: 'not_found', versionId: versionId };
+      var lockWindows = REGISTRY.getLockWindowIndices();
+      var evals = candidate.evaluationResults || [];
+      var lockEvals = evals.filter(function (e) { return lockWindows.indexOf(e.windowIndex) >= 0; });
+      var allWindows = REGISTRY.getResearchWindowIndices().concat(lockWindows);
+      var allDone = allWindows.every(function (wi) {
+        return (candidate.evaluatedWindows || []).indexOf(wi) >= 0;
+      });
+      if (!allDone) {
+        return { versionId: versionId, status: candidate.status, complete: false,
+          windowsCompleted: (candidate.evaluatedWindows || []).length, windowsTotal: allWindows.length };
+      }
+      var lockAvgIC = lockEvals.length > 0
+        ? lockEvals.reduce(function (s, e) { return s + (e.rankIC || 0); }, 0) / lockEvals.length : null;
+      var lockAvgNetReturn = lockEvals.length > 0
+        ? lockEvals.reduce(function (s, e) { return s + (e.netReturn || 0); }, 0) / lockEvals.length : null;
+      var lockPositiveWindows = lockEvals.filter(function (e) { return (e.netReturn || 0) > 0; }).length;
+      var lockConfirmed = lockAvgIC != null && lockAvgIC > 0 && lockPositiveWindows >= 1;
+      return {
+        versionId: versionId, hypothesisId: candidate.hypothesisId, status: candidate.status, complete: true,
+        lockConfirmation: { confirmed: lockConfirmed, lockAvgRankIC: lockAvgIC,
+          lockAvgNetReturn: lockAvgNetReturn, lockPositiveWindows: lockPositiveWindows, lockTotalWindows: lockWindows.length },
+        verdict: lockConfirmed ? 'LOCK_CONFIRMED' : 'LOCK_FAILED',
+        recommendation: lockConfirmed ? 'Candidate may be considered for live shadow tracking' : 'Candidate should remain RESEARCH_ONLY',
+      };
+    },
+
+    createRegistry: createRegistry,
+  };
+
+  // If this is a test instance, DON'T pollute module.exports with the test state
+  // Only the returned REGISTRY object has the isolated state.
+  // For production (no dataDir override), also set up module.exports delegates.
+  if (!opts.dataDir) {
+    // Production mode: set module-global vars AND wire delegates
+    // (module.exports functions delegate to the global state)
+    // We'll set up the module.exports below, after REGISTRY is defined
+  }
+
+  return REGISTRY;
+}
+
+// Default init (production mode — uses config.DATA_DIR)
+createRegistry({});
 
 function _ensureHypotheses() {
   var existingIds = {};
@@ -165,14 +549,20 @@ function getHypothesis(id) {
  * @param {object} spec.metrics — { avgRankIC, directionAccuracy, netReturn, ... }
  * @param {object} spec.window — { trainStart, trainEnd, testStart, testEnd }
  * @param {string} spec.artifactsPath — path to window artifacts
+ * @param {string} spec.strategyHash — deterministic hash of hypothesis definition + features + interaction
+ * @param {string} spec.featureSchemaHash — deterministic hash of feature → source mapping
+ * @param {string} spec.snapshotHash — deterministic hash of input snapshot data
+ * @param {string} spec.windowPlanHash — deterministic hash of window definitions
+ * @param {string} spec.executionHash — deterministic hash of cost/topN/sleeves execution config
+ * @param {string} spec.versionId — optional override (used by findOrCreateCandidate)
  * @returns {object} { versionId, status }
  */
 function registerCandidate(spec) {
   var hypothesis = getHypothesis(spec.hypothesisId);
   if (!hypothesis) return { error: 'unknown_hypothesis', hypothesisId: spec.hypothesisId };
 
-  var ts = Date.now();
-  var versionId = 'candidate_' + spec.hypothesisId + '_' + ts;
+  // P1.1: Support stable hash-based versionId (from findOrCreateCandidate)
+  var versionId = spec.versionId || ('candidate_' + spec.hypothesisId + '_' + Date.now());
 
   var entry = {
     versionId: versionId,
@@ -184,6 +574,12 @@ function registerCandidate(spec) {
     metrics: spec.metrics || {},
     window: spec.window || {},
     artifactsPath: spec.artifactsPath || null,
+    // P1.1: Immutable hashes for reproducibility and cross-referencing
+    strategyHash: spec.strategyHash || null,
+    featureSchemaHash: spec.featureSchemaHash || null,
+    snapshotHash: spec.snapshotHash || null,
+    windowPlanHash: spec.windowPlanHash || null,
+    executionHash: spec.executionHash || null,
     // Track which windows have been evaluated
     evaluatedWindows: [],
     // Last evaluation
@@ -201,7 +597,8 @@ function registerCandidate(spec) {
   _persist();
 
   console.log('[CandidateRegistry] Registered ' + versionId +
-    ' (hypothesis=' + spec.hypothesisId + ', status=RESEARCH_ONLY)');
+    ' (hypothesis=' + spec.hypothesisId + ', status=RESEARCH_ONLY' +
+    (spec.strategyHash ? ', strategyHash=' + spec.strategyHash.slice(0, 12) + '...' : '') + ')');
 
   return { versionId: versionId, status: 'RESEARCH_ONLY' };
 }
@@ -343,6 +740,8 @@ function rejectCandidate(versionId, evidence) {
       alreadyRejected: true };
   }
 
+  // Save previousStatus BEFORE mutation (line 354 sets to REJECTED_RESEARCH)
+  var previousStatus = candidate.status;
   candidate.status = 'REJECTED_RESEARCH';
   candidate.rejectedAt = new Date().toISOString();
   candidate.rejectionEvidence = evidence || {};
@@ -354,7 +753,7 @@ function rejectCandidate(versionId, evidence) {
   } catch (_) {}
 
   _state.transitions.push({
-    from: candidate.status === 'SHADOW_CANDIDATE' ? 'SHADOW_CANDIDATE' : 'RESEARCH_ONLY',
+    from: previousStatus,
     to: 'REJECTED_RESEARCH',
     hypothesisId: candidate.hypothesisId,
     versionId: versionId,
@@ -381,6 +780,7 @@ function setEvaluationWindows(windows) {
   _state.evaluationWindows = windows.map(function (w, i) {
     return {
       index: i,
+      windowId: 'window_' + String(i + 1).padStart(3, '0'), // e.g., 'window_001'
       role: i < 4 ? 'research' : 'lock',
       trainStart: w.trainStart,
       trainEnd: w.trainEnd,
@@ -419,7 +819,15 @@ function getLockWindowIndices() {
  *
  * @param {string} versionId
  * @param {number} windowIndex
- * @param {object} results — { rankIC, netReturn, grossReturn, benchmarkReturn, netExcessReturn, deltaCI, directionAccuracy }
+ * @param {object} results — {
+ *   // Core metrics
+ *   rankIC, netReturn, grossReturn, benchmarkReturn, netExcessReturn,
+ *   deltaCI, directionAccuracy,
+ *   // P1: Immutable identity fields (required)
+ *   candidateVersionId, hypothesisId,
+ *   strategyHash, featureSchemaHash, snapshotHash,
+ *   windowId, costAssumptions, benchmarkStatus, windowDates,
+ * }
  */
 function recordEvaluation(versionId, windowIndex, results) {
   var candidate = null;
@@ -437,9 +845,11 @@ function recordEvaluation(versionId, windowIndex, results) {
   }
 
   var windowRole = 'research';
+  var windowId = null;
   for (var wi = 0; wi < _state.evaluationWindows.length; wi++) {
     if (_state.evaluationWindows[wi].index === windowIndex) {
       windowRole = _state.evaluationWindows[wi].role;
+      windowId = _state.evaluationWindows[wi].windowId || null;
       break;
     }
   }
@@ -451,11 +861,25 @@ function recordEvaluation(versionId, windowIndex, results) {
       currentStatus: candidate.status };
   }
 
-  // Record evaluation
+  // P1.2: Idempotency check — same (versionId, windowIndex, snapshotHash, executionHash) → no duplicate
+  if (candidate.evaluationResults) {
+    for (var ei = 0; ei < candidate.evaluationResults.length; ei++) {
+      var er = candidate.evaluationResults[ei];
+      if (er.windowIndex === windowIndex &&
+          er.snapshotHash === (results.snapshotHash || candidate.snapshotHash || null) &&
+          er.executionHash === (results.executionHash || candidate.executionHash || null)) {
+        console.log('[CandidateRegistry] IDEMPOTENT: window ' + windowIndex + ' already recorded for ' + versionId);
+        return { recorded: false, alreadyRecorded: true, versionId: versionId, windowIndex: windowIndex };
+      }
+    }
+  }
+
+  // Record evaluation — P1.2: full record with all required identity fields
   if (!candidate.evaluationResults) candidate.evaluationResults = [];
   candidate.evaluationResults.push({
     windowIndex: windowIndex,
     windowRole: windowRole,
+    // Core metrics
     rankIC: results.rankIC,
     netReturn: results.netReturn,
     grossReturn: results.grossReturn,
@@ -463,6 +887,18 @@ function recordEvaluation(versionId, windowIndex, results) {
     netExcessReturn: results.netExcessReturn,
     deltaCI: results.deltaCI || null,
     directionAccuracy: results.directionAccuracy,
+    // P1.2: Immutable identity fields
+    candidateVersionId: results.candidateVersionId || versionId,
+    hypothesisId: results.hypothesisId || candidate.hypothesisId,
+    strategyHash: results.strategyHash || candidate.strategyHash || null,
+    featureSchemaHash: results.featureSchemaHash || candidate.featureSchemaHash || null,
+    snapshotHash: results.snapshotHash || candidate.snapshotHash || null,
+    windowPlanHash: results.windowPlanHash || candidate.windowPlanHash || null,
+    executionHash: results.executionHash || candidate.executionHash || null,
+    windowId: results.windowId || windowId || null,
+    costAssumptions: results.costAssumptions || null,
+    benchmarkStatus: results.benchmarkStatus || null,
+    windowDates: results.windowDates || null,
     evaluatedAt: new Date().toISOString(),
   });
 
@@ -478,7 +914,8 @@ function recordEvaluation(versionId, windowIndex, results) {
   _persist();
   console.log('[CandidateRegistry] Window ' + windowIndex + ' (' + windowRole +
     ') recorded for ' + versionId + ': rankIC=' + (results.rankIC != null ? results.rankIC.toFixed(4) : 'null') +
-    ', netReturn=' + (results.netReturn != null ? results.netReturn + '%' : 'null'));
+    ', netReturn=' + (results.netReturn != null ? results.netReturn + '%' : 'null') +
+    (results.strategyHash ? ', strategyHash=' + results.strategyHash.slice(0, 8) + '...' : ''));
 
   // Auto-transition: if all research windows complete, attempt promotion
   var researchWindows = getResearchWindowIndices();
@@ -641,25 +1078,23 @@ function getFinalVerdict(versionId) {
   };
 }
 
-module.exports = {
-  // Hypotheses
-  getHypotheses,
-  getHypothesis,
-  PRELOCKED_HYPOTHESES,
+// P1.2: Production init wires module.exports to global state instance.
+// createRegistry({dataDir}) returns a fully independent instance (for tests).
+// createRegistry({}) (no dataDir) initializes the global module exports.
 
-  // Candidate lifecycle
-  registerCandidate,
-  promoteToShadowCandidate,
-  rejectCandidate,
-  recordEvaluation,
+var _productionRegistry = null;
 
-  // Window management
-  setEvaluationWindows,
-  getResearchWindowIndices,
-  getLockWindowIndices,
+function _initProduction() {
+  if (_productionRegistry) return;
+  _productionRegistry = createRegistry({});
+  // Wire module.exports to production instance
+  for (var key in _productionRegistry) {
+    if (_productionRegistry.hasOwnProperty(key) && key !== 'createRegistry') {
+      module.exports[key] = _productionRegistry[key];
+    }
+  }
+}
 
-  // Query
-  getCandidates,
-  getStatus,
-  getFinalVerdict,
-};
+_initProduction();
+
+module.exports.createRegistry = createRegistry;

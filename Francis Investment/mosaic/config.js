@@ -539,6 +539,28 @@ module.exports = {
     holdDays: 3,                         // Trading days from entry to exit
   },
 
+  // ---- P1: Candidate Runner (Hypothesis-Specific Walk-Forward) ----
+  CANDIDATE_RUNNER: {
+    enabled: false,                        // Disabled by default — enable after verification
+    hypotheses: ['H1', 'H2', 'H3'],       // Which hypotheses to evaluate
+    windowsStart: 0,                       // First window index (0-based)
+    windowsEnd: 5,                         // Last window index (inclusive)
+    monteCarloSamples: 100,               // MC samples for baseline comparison
+    scheduleTime: { hour: 3, minute: 0 }, // Run after weight_grid_search completes
+    dayOfWeek: [0, 3],                     // Sunday + Wednesday (twice weekly)
+    costAssumptions: {
+      roundTripCostPct: 0.452,            // commission 0.025%×2 + stamp 0.1% + transfer 0.001%×2 + slip 0.15%×2
+      commissionRate: 0.00025,
+      stampTaxRate: 0.001,
+      transferFeeRate: 0.00001,
+      slippagePct: 0.0015,
+    },
+    benchmarkConfig: {
+      index: '000001.SH',                  // Shanghai Composite
+      enabled: true,
+    },
+  },
+
   // ---- v3.3.1: Walk-Forward Validation (Out-of-Sample) ----
   WALK_FORWARD: {
     enabled: true,

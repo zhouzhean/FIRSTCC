@@ -144,6 +144,184 @@ function extractFeatures(snapshot) {
   ];
 }
 
+// ---- P1: Feature Subset Extraction (per-hypothesis feature selection) ----
+
+/**
+ * Extract a subset of features from a snapshot, specified by featureName list.
+ * Maps feature names to their snapshot sources:
+ *   'technical'       → dimensions.technical
+ *   'hidden'          → dimensions.hidden
+ *   'signalCount'     → top-level signalCount
+ *   'volatility20d'   → top-level volatility20d
+ *   'changePct'       → top-level changePct
+ *   'compositeScore'  → top-level compositeScore
+ *
+ * Returns null if ANY requested feature's source is missing (strict — no zero-fill).
+ * For top-level numeric fields (signalCount, volatility20d, changePct, compositeScore),
+ * missing values default to 0 (matching existing extractFeatures behavior).
+ *
+ * @param {object} snapshot
+ * @param {string[]} featureNames — e.g., ['technical', 'volatility20d'] for H1
+ * @returns {number[]|null}
+ */
+function extractFeatureSubset(snapshot, featureNames) {
+  if (!snapshot || !featureNames || featureNames.length === 0) return null;
+
+  var dims = snapshot.dimensions || {};
+  var result = [];
+
+  for (var fi = 0; fi < featureNames.length; fi++) {
+    var name = featureNames[fi];
+    var val = null;
+
+    switch (name) {
+      case 'technical':
+        val = dims.technical;
+        break;
+      case 'hidden':
+        val = dims.hidden;
+        break;
+      case 'signalCount':
+        val = snapshot.signalCount != null ? snapshot.signalCount : 0;
+        break;
+      case 'volatility20d':
+        val = snapshot.volatility20d != null ? snapshot.volatility20d : 0;
+        break;
+      case 'changePct':
+        val = snapshot.changePct != null ? snapshot.changePct : 0;
+        break;
+      case 'compositeScore':
+        val = snapshot.compositeScore != null ? snapshot.compositeScore : 0;
+        break;
+      default:
+        // Unknown feature name — return null (fail closed)
+        return null;
+    }
+
+    if (val == null) return null; // Non-nullable source missing (technical, hidden)
+    result.push(val);
+  }
+
+  return result;
+}
+
+// ---- P1.1: Feature Derivation (hypothesis-specific interaction terms) ----
+
+/**
+ * Apply a hypothesis's interaction formula to derive a new feature value.
+ * Supported interactions:
+ *   — 'technical / (1 + volatility20d)' → H1: inverse-vol-weighted technical
+ *   — 'signalCount * compositeScore'     → H3: signal confluence amplification
+ *   — null (H2)                           → no interaction
+ *
+ * @param {object} snapshot
+ * @param {object} hypothesis — { id, features, interaction }
+ * @returns {number|null} derived interaction value, or null if unavailable
+ */
+function applyInteraction(snapshot, hypothesis) {
+  if (!snapshot || !hypothesis || !hypothesis.interaction) return null;
+
+  var interaction = hypothesis.interaction;
+  var dims = snapshot.dimensions || {};
+
+  // H1: technical / (1 + volatility20d)
+  if (interaction === 'technical / (1 + volatility20d)') {
+    var tech = dims.technical;
+    var vol20 = snapshot.volatility20d != null ? snapshot.volatility20d : 0;
+    if (tech == null) return null;
+    return tech / (1 + Math.abs(vol20));
+  }
+
+  // H3: signalCount * compositeScore
+  if (interaction === 'signalCount * compositeScore') {
+    var sigCnt = snapshot.signalCount != null ? snapshot.signalCount : 0;
+    var compScore = snapshot.compositeScore != null ? snapshot.compositeScore : 0;
+    return sigCnt * compScore;
+  }
+
+  // Unknown interaction — fail closed
+  return null;
+}
+
+/**
+ * Derive the full feature vector for a snapshot given a hypothesis.
+ * Extracts the base feature subset, then appends the interaction term if defined.
+ * The returned vector is RAW (unstandardized) — caller must standardize before predict.
+ *
+ * @param {object} snapshot
+ * @param {object} hypothesis — { id, features, interaction }
+ * @returns {number[]|null} raw feature vector, or null if required features missing
+ */
+function deriveFeatures(snapshot, hypothesis) {
+  if (!snapshot || !hypothesis) return null;
+
+  // Extract base features
+  var baseFeatures = extractFeatureSubset(snapshot, hypothesis.features);
+  if (!baseFeatures) return null;
+
+  // Apply interaction if specified
+  if (hypothesis.interaction) {
+    var interactionVal = applyInteraction(snapshot, hypothesis);
+    if (interactionVal == null) return null;
+    baseFeatures.push(interactionVal);
+  }
+
+  return baseFeatures;
+}
+
+/**
+ * Build feature matrix using only the specified feature subset.
+ * Same structure as buildFeatureMatrix but uses extractFeatureSubset.
+ *
+ * @param {object[]} snapshots
+ * @param {object|null} standardizer — { means, stds } or null
+ * @param {string[]} featureNames — subset of features to use
+ * @param {object|null} hypothesis — optional { id, features, interaction } for deriveFeatures
+ * @returns {object} { X, y, codes, dates, nFeatures, nSamples }
+ */
+function buildFeatureMatrixWithFeatures(snapshots, standardizer, featureNames, hypothesis) {
+  var X = [];
+  var y = [];
+  var codes = [];
+  var dates = [];
+
+  var useDerive = !!(hypothesis && hypothesis.interaction);
+
+  for (var i = 0; i < snapshots.length; i++) {
+    var s = snapshots[i];
+    // P0-1: Use forwardReturnT3 as target, fallback to forwardExcessT3
+    if (!s || s.forwardStatus !== 'settled') continue;
+    var target = s.forwardReturnT3;
+    if (target == null) target = s.forwardExcessT3;
+    if (target == null) continue;
+
+    // P1.1: Use deriveFeatures when hypothesis has interaction
+    var features = useDerive
+      ? deriveFeatures(s, hypothesis)
+      : extractFeatureSubset(s, featureNames);
+    if (!features) continue;
+
+    X.push(features);
+    y.push([target]);
+    codes.push(s.code);
+    dates.push(s.asOfDate);
+  }
+
+  // Apply standardization if provided
+  if (standardizer) {
+    X = transformWith(X, standardizer);
+  }
+
+  // Prepend intercept column (unregularized)
+  for (var i = 0; i < X.length; i++) {
+    X[i].unshift(1);
+  }
+
+  // Feature count = base features + (1 if interaction) + 1 for intercept
+  var nFeatures = (useDerive ? featureNames.length + 1 : featureNames.length) + 1; // +1 for intercept
+  return { X: X, y: y, codes: codes, dates: dates, nFeatures: nFeatures, nSamples: X.length };
+}
+
 // ---- P1: Feature Standardizer (fit on train, transform val/test) ----
 
 function fitStandardizer(X) {
@@ -388,6 +566,8 @@ if (require.main === module) {
 module.exports = {
   fitRidge, predict, computeMSE, gridSearchLambda,
   extractFeatures, buildFeatureMatrix,
+  extractFeatureSubset, buildFeatureMatrixWithFeatures,
+  applyInteraction, deriveFeatures,
   fitStandardizer, transformWith,
   FEATURE_NAMES, LAMBDA_GRID, hashData,
 };

@@ -234,12 +234,26 @@ function loadKlineIndex() {
 
 function simulatePortfolio(dailySignals, options) {
   // dailySignals: { signalDate: [{code, ...} sorted by rank] }
-  // options: { holdDays, initialCapital, maxPositionsPerSleeve, topN, klineIdx }
+  // options: { holdDays, initialCapital, maxPositionsPerSleeve, topN, klineIdx, costAssumptions }
   var opts = options || {};
   var holdDays = opts.holdDays || HOLD_DAYS;
   var initialCapital = opts.initialCapital || INITIAL_CAPITAL;
   var maxPositionsPerSleeve = opts.maxPositionsPerSleeve || MAX_POSITIONS_PER_SLEEVE;
   var topN = opts.topN || TOP_N_PER_COHORT;
+
+  // P1.1: Use custom cost assumptions if provided, otherwise use hardcoded defaults
+  var roundTripCostPct = ROUND_TRIP_COST_PCT;
+  if (opts.costAssumptions) {
+    var ca = opts.costAssumptions;
+    // Derive round-trip cost % from individual components
+    // commission×2 + stamp tax + transfer fee×2 + slippage×2
+    roundTripCostPct = (
+      (ca.commissionRate || 0.00025) * 2 +
+      (ca.stampTaxRate || 0.001) +
+      (ca.transferFeeRate || 0.00001) * 2 +
+      (ca.slippagePct || 0.0015) * 2
+    ) * 100; // Convert to percentage points
+  }
 
   var klineIdx = opts.klineIdx;
   if (!klineIdx) {
@@ -327,7 +341,7 @@ function simulatePortfolio(dailySignals, options) {
         if (pos.exitDate === currentDate) {
           var exitPrice = pos._exitPrice;
           var grossProceeds = pos.shares * exitPrice;
-          var sellCost = grossProceeds * (ROUND_TRIP_COST_PCT / 100 / 2);
+          var sellCost = grossProceeds * (roundTripCostPct / 100 / 2);
           var netProceeds = grossProceeds - sellCost;
 
           // Net cash gets the after-cost proceeds
@@ -337,7 +351,7 @@ function simulatePortfolio(dailySignals, options) {
 
           pos.exitPrice = exitPrice;
           pos.grossReturn = (exitPrice / pos.entryPrice - 1) * 100;
-          pos.netReturn = pos.grossReturn - ROUND_TRIP_COST_PCT;
+          pos.netReturn = pos.grossReturn - roundTripCostPct;
           totalTurnover += grossProceeds;
           totalGrossTurnover += pos.entryPrice * pos.shares;
           executedTrades++;
@@ -385,7 +399,7 @@ function simulatePortfolio(dailySignals, options) {
         if (shares <= 0) { unavailableSignals++; return; }
 
         var grossCost = shares * entry.price;
-        var buyCost = grossCost * (ROUND_TRIP_COST_PCT / 100 / 2);
+        var buyCost = grossCost * (roundTripCostPct / 100 / 2);
         var netCost = grossCost + buyCost;
         if (netCost > sleeve.cash) { unavailableSignals++; return; }
 
@@ -597,7 +611,7 @@ function simulatePortfolio(dailySignals, options) {
     grossReturn: Math.round(grossReturn * 100) / 100,    // gross: before costs
     benchmarkReturn: Math.round(benchmarkReturn * 100) / 100, // same-path benchmark
     netExcessReturn: Math.round(netExcessReturn * 100) / 100, // netReturn - benchmarkReturn
-    roundTripCostPct: ROUND_TRIP_COST_PCT,
+    roundTripCostPct: roundTripCostPct,
     coverageRate: coverageRate,
     untradeableRate: untradeableRate,
     maxDrawdown: Math.round(maxDrawdown * 10000) / 100,   // bps, on net NAV

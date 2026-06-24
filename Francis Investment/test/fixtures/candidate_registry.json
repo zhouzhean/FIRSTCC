@@ -1,0 +1,262 @@
+{
+  "candidates": [
+    {
+      "versionId": "candidate_H1_1782307319600",
+      "hypothesisId": "H1",
+      "hypothesis": "Momentum + Volatility",
+      "status": "REJECTED_RESEARCH",
+      "registeredAt": "2026-06-24T13:21:59.600Z",
+      "model": {
+        "intercept": 0.001,
+        "weights": [
+          0.5,
+          -0.2
+        ],
+        "featureNames": [
+          "technical",
+          "volatility20d"
+        ],
+        "lambda": 0.1
+      },
+      "metrics": {
+        "avgRankIC": 0.03,
+        "netReturn": 1.5
+      },
+      "window": {
+        "trainStart": "2023-10-30",
+        "trainEnd": "2024-06-15",
+        "testStart": "2024-06-17",
+        "testEnd": "2024-09-15"
+      },
+      "artifactsPath": "test/artifacts/H1_v1",
+      "evaluatedWindows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "lastEvaluated": "2026-06-24T13:21:59.602Z",
+      "evaluationNotes": null,
+      "shadowSince": "2026-06-24T13:21:59.603Z",
+      "forwardSamples": 0,
+      "rejectedAt": "2026-06-24T13:21:59.603Z",
+      "rejectionEvidence": {
+        "reason": "test rejection — lock windows failed",
+        "windowsChecked": 6,
+        "avgRankIC": 0.01,
+        "allRankICs": [
+          0.03,
+          0.035,
+          0.04,
+          0.045,
+          -0.02,
+          -0.03
+        ]
+      },
+      "evaluationResults": [
+        {
+          "windowIndex": 0,
+          "windowRole": "research",
+          "rankIC": 0.03,
+          "netReturn": -0.3,
+          "grossReturn": 2,
+          "benchmarkReturn": 0.5,
+          "netExcessReturn": 0.7,
+          "deltaCI": [
+            -0.1,
+            1.5
+          ],
+          "directionAccuracy": 52,
+          "evaluatedAt": "2026-06-24T13:21:59.601Z"
+        },
+        {
+          "windowIndex": 1,
+          "windowRole": "research",
+          "rankIC": 0.034999999999999996,
+          "netReturn": 1.2,
+          "grossReturn": 2,
+          "benchmarkReturn": 0.5,
+          "netExcessReturn": 0.7,
+          "deltaCI": [
+            -0.1,
+            1.5
+          ],
+          "directionAccuracy": 53,
+          "evaluatedAt": "2026-06-24T13:21:59.602Z"
+        },
+        {
+          "windowIndex": 2,
+          "windowRole": "research",
+          "rankIC": 0.04,
+          "netReturn": 1.2,
+          "grossReturn": 2,
+          "benchmarkReturn": 0.5,
+          "netExcessReturn": 0.7,
+          "deltaCI": [
+            -0.1,
+            1.5
+          ],
+          "directionAccuracy": 54,
+          "evaluatedAt": "2026-06-24T13:21:59.602Z"
+        },
+        {
+          "windowIndex": 3,
+          "windowRole": "research",
+          "rankIC": 0.045,
+          "netReturn": 1.2,
+          "grossReturn": 2,
+          "benchmarkReturn": 0.5,
+          "netExcessReturn": 0.7,
+          "deltaCI": [
+            -0.1,
+            1.5
+          ],
+          "directionAccuracy": 55,
+          "evaluatedAt": "2026-06-24T13:21:59.602Z"
+        }
+      ]
+    }
+  ],
+  "hypotheses": [
+    {
+      "id": "H1",
+      "name": "Momentum + Volatility",
+      "description": "Technical composite score weighted by inverse 20-day volatility. Higher weight to low-volatility technical signals — reward steady trends, penalize erratic price action.",
+      "features": [
+        "technical",
+        "volatility20d"
+      ],
+      "interaction": "technical / (1 + volatility20d)",
+      "lockedAt": "2026-06-24",
+      "rationale": "Classic low-vol anomaly adapted to A-share: stable trending stocks outperform high-vol names on a risk-adjusted basis over T+3 horizon."
+    },
+    {
+      "id": "H2",
+      "name": "Pure Hidden Signals",
+      "description": "Hidden signal composite (H1-H9) as sole input. No price features, no volatility, no volume. Tests whether non-price information carries standalone predictive power.",
+      "features": [
+        "hidden"
+      ],
+      "interaction": null,
+      "lockedAt": "2026-06-24",
+      "rationale": "If hidden signals carry genuine alpha uncorrelated with price, a pure hidden-signal model should show positive Rank IC independent of technical factors. Failure = hidden signals are just transformed price data."
+    },
+    {
+      "id": "H3",
+      "name": "Signal-Volume Interaction",
+      "description": "Interaction term: signalCount × compositeScore. Tests whether the confluence of multiple signals (high signalCount) amplifies or dampens the composite score's predictive power.",
+      "features": [
+        "signalCount",
+        "compositeScore"
+      ],
+      "interaction": "signalCount * compositeScore",
+      "lockedAt": "2026-06-24",
+      "rationale": "When many signals agree (high signalCount), the composite score should be more reliable. The interaction term captures this amplification effect. Weak interaction = signal diversity doesn't improve reliability."
+    }
+  ],
+  "evaluationWindows": [
+    {
+      "index": 0,
+      "role": "research",
+      "trainStart": "d1",
+      "trainEnd": "d2",
+      "testStart": "d3",
+      "testEnd": "d4"
+    },
+    {
+      "index": 1,
+      "role": "research",
+      "trainStart": "d5",
+      "trainEnd": "d6",
+      "testStart": "d7",
+      "testEnd": "d8"
+    },
+    {
+      "index": 2,
+      "role": "research",
+      "trainStart": "d9",
+      "trainEnd": "d10",
+      "testStart": "d11",
+      "testEnd": "d12"
+    },
+    {
+      "index": 3,
+      "role": "research",
+      "trainStart": "d13",
+      "trainEnd": "d14",
+      "testStart": "d15",
+      "testEnd": "d16"
+    },
+    {
+      "index": 4,
+      "role": "lock",
+      "trainStart": "d17",
+      "trainEnd": "d18",
+      "testStart": "d19",
+      "testEnd": "d20"
+    },
+    {
+      "index": 5,
+      "role": "lock",
+      "trainStart": "d21",
+      "trainEnd": "d22",
+      "testStart": "d23",
+      "testEnd": "d24"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "RESEARCH_ONLY",
+      "to": "SHADOW_CANDIDATE",
+      "hypothesisId": "H1",
+      "versionId": "candidate_H1_1782307319600",
+      "reason": "research gates passed: avgIC=0.0375, positiveWindows=3/4",
+      "date": "2026-06-24",
+      "evidence": {
+        "avgRankIC": 0.037500000000000006,
+        "positiveReturnWindows": 3,
+        "allDeltaCI": [
+          [
+            -0.1,
+            1.5
+          ],
+          [
+            -0.1,
+            1.5
+          ],
+          [
+            -0.1,
+            1.5
+          ],
+          [
+            -0.1,
+            1.5
+          ]
+        ]
+      }
+    },
+    {
+      "from": "RESEARCH_ONLY",
+      "to": "REJECTED_RESEARCH",
+      "hypothesisId": "H1",
+      "versionId": "candidate_H1_1782307319600",
+      "reason": "test rejection — lock windows failed",
+      "date": "2026-06-24",
+      "evidence": {
+        "reason": "test rejection — lock windows failed",
+        "windowsChecked": 6,
+        "avgRankIC": 0.01,
+        "allRankICs": [
+          0.03,
+          0.035,
+          0.04,
+          0.045,
+          -0.02,
+          -0.03
+        ]
+      }
+    }
+  ],
+  "lastEvaluationDate": "2026-06-24",
+  "updatedAt": "2026-06-24T13:21:59.607Z"
+}

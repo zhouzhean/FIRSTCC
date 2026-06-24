@@ -14,6 +14,7 @@
  *   20:00 → 自我质疑循环 (self_reflection)
  *   周六 10:00 → 因子组合挖掘 (weekend_factor_mining)
  *   周日 14:00 → 进化周报 (weekly_report) [v2.7.0]
+ *   周日/周三 03:00 → 候选模型步前向评估 (candidate_evaluation) [P1]
  *
  * 防重复：每个任务每天只执行一次（按 (taskId, dateStr) 去重）
  * 任务历史持久化到 data/simfolio/evo_task_history.json [v2.7.0]
@@ -210,6 +211,24 @@ function checkAndRun(now, dateStr) {
     });
   }
 
+  // --- [P1]: Candidate Evaluation (Sunday + Wednesday 03:00-03:45) ---
+  var CANDIDATE_RUNNER_CONFIG;
+  try { CANDIDATE_RUNNER_CONFIG = require('../config').CANDIDATE_RUNNER; } catch (_) { CANDIDATE_RUNNER_CONFIG = { enabled: false }; }
+  if (CANDIDATE_RUNNER_CONFIG.enabled) {
+    var crDay = CANDIDATE_RUNNER_CONFIG.dayOfWeek || [0, 3];
+    var crHour = (CANDIDATE_RUNNER_CONFIG.scheduleTime || { hour: 3 }).hour;
+    var crMin = (CANDIDATE_RUNNER_CONFIG.scheduleTime || { minute: 0 }).minute;
+    if (crDay.indexOf(day) >= 0 && h === crHour && m >= crMin && m < crMin + 45) {
+      tryRunTask('candidate_evaluation', dateStr, function() {
+        var runner = require('../research/candidate_runner');
+        return runner.runAllHypotheses({
+          monteCarloSamples: CANDIDATE_RUNNER_CONFIG.monteCarloSamples || 100,
+          costAssumptions: CANDIDATE_RUNNER_CONFIG.costAssumptions,
+        });
+      });
+    }
+  }
+
   // === Catch-up: if past a task's window and it hasn't run today, run now ===
   tryRunCatchup(now, dateStr);
 }
@@ -244,6 +263,7 @@ function tryRunCatchup(now, dateStr) {
     { id: 'self_reflection',         hour: 20, minute: 0, days: [0,1,2,3,4,5,6] }, // Daily
     { id: 'weekend_factor_mining',   hour: 10, minute: 0, days: [6] },          // Sat only
     { id: 'weekly_report',           hour: 14, minute: 0, days: [0] },          // Sun only
+    { id: 'candidate_evaluation',    hour: 3,  minute: 0, days: [0, 3] },       // Sun + Wed [P1]
   ];
 
   for (var i = 0; i < taskSchedules.length; i++) {
@@ -321,6 +341,17 @@ function tryRunCatchup(now, dateStr) {
       case 'weekly_report':
         tryRunTask(taskId, dateStr, function() {
           return runWeeklyReport(dateStr);
+        });
+        break;
+      case 'candidate_evaluation':
+        tryRunTask(taskId, dateStr, function() {
+          var runner = require('../research/candidate_runner');
+          var cfg;
+          try { cfg = require('../config').CANDIDATE_RUNNER; } catch (_) { cfg = { enabled: true }; }
+          return runner.runAllHypotheses({
+            monteCarloSamples: cfg.monteCarloSamples || 100,
+            costAssumptions: cfg.costAssumptions,
+          });
         });
         break;
     }
@@ -762,6 +793,7 @@ function getStatus() {
       { time: '20:00', task: 'self_reflection', desc: '自我质疑循环' },
       { time: '周六 10:00', task: 'weekend_factor_mining', desc: '因子组合挖掘' },
       { time: '周日 14:00', task: 'weekly_report', desc: '进化周报 [v2.7]' },
+      { time: '周日/周三 03:00', task: 'candidate_evaluation', desc: '候选模型步前向评估 (P1)' },
     ],
   };
 }

@@ -2087,100 +2087,14 @@ function _generateCanonicalAcceptance(runId, scheduledSlot, pipelineResult) {
     failures: [],
   };
 
-  // ══════ P0-C: Shared pure stat function ══════
-  // Extracted so both this function and API endpoints can use identical logic.
-  // NOT calling HTTP — pure computation on the same ledger file.
-  function _computeLedgerStats(ledgerPath, filterRunId) {
-    var stats = {
-      canonicalCohortCount: 0,
-      intradayCount: 0,
-      quarantinedCount: 0,
-      legacyNoTargetDate: 0,
-      totalEntries: 0,
-      researchEligible: 0,
-      executionEligible: 0,
-      schemaValid: 0,
-      predictionValid: 0,
-      executionCandidateEligible: 0,
-      globalBlocked: 0,
-      canonicalFieldValidation: {
-        totalCanonical: 0,
-        allFieldsPresent: 0,
-        missingFields: { runId: 0, scheduledSlot: 0, asOfDate: 0, targetDate: 0,
-          predictionId: 0, featureSnapshot: 0, modelVersionId: 0 },
-      },
-    };
-
-    if (!fs.existsSync(ledgerPath)) return stats;
-
-    try {
-      var lines = fs.readFileSync(ledgerPath, 'utf8').trim().split('\n').filter(Boolean);
-      stats.totalEntries = lines.length;
-
-      for (var li = 0; li < lines.length; li++) {
-        try {
-          var entry = JSON.parse(lines[li]);
-
-          // Quarantined
-          if (entry.ingestionStatus === 'invalid_schema_v3492') {
-            stats.quarantinedCount++;
-            continue;
-          }
-
-          // Legacy (no targetDate)
-          if (!entry.targetDate || entry.targetDate === null) {
-            stats.legacyNoTargetDate++;
-            continue;
-          }
-
-          // ── P0-C: Triple filter for canonical counts ──
-          var isInRun = (!filterRunId || entry.runId === filterRunId);
-          var is0930 = (entry.scheduledSlot === '09:30');
-          var isCanonical = (entry.canonical === true);
-
-          if (isCanonical && isInRun && is0930) {
-            stats.canonicalCohortCount++;
-
-            // Field validation
-            var fv = stats.canonicalFieldValidation;
-            fv.totalCanonical++;
-            var asOfDate = entry.asOfDate || entry.asOf || null;
-            var allOk = true;
-            if (!entry.runId)               { fv.missingFields.runId++; allOk = false; }
-            if (!entry.scheduledSlot)        { fv.missingFields.scheduledSlot++; allOk = false; }
-            if (!asOfDate)                   { fv.missingFields.asOfDate++; allOk = false; }
-            if (!entry.targetDate)           { fv.missingFields.targetDate++; allOk = false; }
-            if (!entry.predictionId)         { fv.missingFields.predictionId++; allOk = false; }
-            if (!entry.featureSnapshot)      { fv.missingFields.featureSnapshot++; allOk = false; }
-            if (!entry.modelVersionId)       { fv.missingFields.modelVersionId++; allOk = false; }
-            if (allOk) fv.allFieldsPresent++;
-          } else if (isCanonical) {
-            // Canonical but from a different run/slot — count as intraday for this run
-            stats.intradayCount++;
-          } else {
-            stats.intradayCount++;
-          }
-
-          // Eligibility — triple-filtered
-          if (isCanonical && isInRun && is0930) {
-            if (entry.researchEligible) stats.researchEligible++;
-            if (entry.executionEligible) stats.executionEligible++;
-            if (entry.schemaValid) stats.schemaValid++;
-            if (entry.predictionValid) stats.predictionValid++;
-            if (entry.executionCandidateEligible) stats.executionCandidateEligible++;
-            if (!entry.globalTradePermission) stats.globalBlocked++;
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-
-    return stats;
-  }
+  // ══════ P0-C.1: Shared stat function from cohort_stats.js ══════
+  // Single source of truth — same module used by /api/prediction-settlement
+  // and /api/cohort-integrity. No more inline duplicate logic or tautological checks.
+  var cohortStats = require('./research/cohort_stats');
 
   // ══════ Step 1: Compute ledger stats with triple-filter ══════
-  var ledgerFile = path.join(dataDir, 'simfolio', 'prediction_ledger_' + today + '.jsonl');
-  var stats = _computeLedgerStats(ledgerFile, runId);
-
+  var stats = cohortStats.buildCanonicalRunStats(dataDir, today, runId);
+  // Populate acceptance from buildCanonicalRunStats (includes exclusionReasons + eligibilityReasons)
   acceptance.totalLedgerEntries = stats.totalEntries;
   acceptance.canonicalCohortCount = stats.canonicalCohortCount;
   acceptance.intradayCount = stats.intradayCount;
@@ -2190,32 +2104,9 @@ function _generateCanonicalAcceptance(runId, scheduledSlot, pipelineResult) {
   acceptance.executionEligible = stats.executionEligible;
   acceptance.researchEligiblePositive = stats.researchEligible > 0;
   acceptance.canonicalFieldValidation = stats.canonicalFieldValidation;
-
-  // ── Step 2: Re-scan ledger for exclusion/eligibility distribution (triple-filtered) ──
-  if (fs.existsSync(ledgerFile)) {
-    try {
-      var rawLines = fs.readFileSync(ledgerFile, 'utf8').trim().split('\n').filter(Boolean);
-      for (var ri = 0; ri < rawLines.length; ri++) {
-        try {
-          var e = JSON.parse(rawLines[ri]);
-          if (e.ingestionStatus === 'invalid_schema_v3492') continue;
-          if (!e.targetDate || e.targetDate === null) continue;
-          // Triple filter
-          if (e.canonical !== true || e.runId !== runId || e.scheduledSlot !== '09:30') continue;
-
-          var reason = e.exclusionReason || 'none';
-          acceptance.exclusionReasons[reason] = (acceptance.exclusionReasons[reason] || 0) + 1;
-
-          var ers = e.researchEligibilityReasons;
-          if (Array.isArray(ers)) {
-            for (var ej = 0; ej < ers.length; ej++) {
-              acceptance.eligibilityReasons[ers[ej]] = (acceptance.eligibilityReasons[ers[ej]] || 0) + 1;
-            }
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-  }
+  // buildCanonicalRunStats already computes reasons — no separate Step 2 needed
+  acceptance.exclusionReasons = stats.exclusionReasons;
+  acceptance.eligibilityReasons = stats.eligibilityReasons;
 
   // ── Step 3: Determine executionEligible=0 reason with liveModel/风控阻断 context ──
   if (acceptance.executionEligible === 0) {
@@ -2308,37 +2199,37 @@ function _generateCanonicalAcceptance(runId, scheduledSlot, pipelineResult) {
     acceptance.dailyManifest.reason = 'manifest read error: ' + (_.message || '');
   }
 
-  // ── Step 5: API consistency via pure stat functions (NOT HTTP self-calls) ──
-  // Compute the same stats that /api/prediction-settlement and /api/cohort-integrity
-  // would return, using the SAME pure function — no HTTP involved.
-  var psStats = _computeLedgerStats(ledgerFile, runId);
-  // cohort-integrity uses the same ledger file with the same triple filter
-  var ciStats = _computeLedgerStats(ledgerFile, runId);
+  // ── Step 5: API consistency — real PS vs CI stat functions (NOT same function twice) ──
+  // P0-C.1: Calls the ACTUAL shared functions used by the API endpoints.
+  // buildPredictionSettlementStats and buildCohortIntegrityStats differ in their
+  // data sources (outcome ledger vs decision events) — this is a REAL consistency check.
+  var psStats = cohortStats.buildPredictionSettlementStats(dataDir, today);
+  var ciStats = cohortStats.buildCohortIntegrityStats(dataDir, today);
 
   acceptance.apiConsistency.psCanonicalCount = psStats.canonicalCohortCount;
   acceptance.apiConsistency.ciCanonicalCount = ciStats.canonicalCohortCount;
   acceptance.apiConsistency.psResearchEligible = psStats.researchEligible;
-  acceptance.apiConsistency.ciResearchEligible = ciStats.researchEligible;
+  acceptance.apiConsistency.ciResearchEligible = ciStats.counts.researchEligible;
   acceptance.apiConsistency.psExecutionEligible = psStats.executionEligible;
-  acceptance.apiConsistency.ciExecutionEligible = ciStats.executionEligible;
+  acceptance.apiConsistency.ciExecutionEligible = ciStats.counts.executionEligible;
   acceptance.apiConsistency.psLegacyCount = psStats.legacyNoTargetDate;
   acceptance.apiConsistency.ciLegacyCount = ciStats.legacyNoTargetDate;
 
-  // Check all 4 count pairs
+  // Check all 4 count pairs — now validates DIFFERENT code paths
   var consistent =
     psStats.canonicalCohortCount === ciStats.canonicalCohortCount &&
-    psStats.researchEligible === ciStats.researchEligible &&
-    psStats.executionEligible === ciStats.executionEligible &&
+    psStats.researchEligible === ciStats.counts.researchEligible &&
+    psStats.executionEligible === ciStats.counts.executionEligible &&
     psStats.legacyNoTargetDate === ciStats.legacyNoTargetDate;
   acceptance.apiConsistency.consistent = consistent;
   if (!consistent) {
     acceptance.apiConsistency.note = 'Mismatch detected — PS vs CI counts differ. ' +
       'canonical: ' + psStats.canonicalCohortCount + ' vs ' + ciStats.canonicalCohortCount + ', ' +
-      'researchEligible: ' + psStats.researchEligible + ' vs ' + ciStats.researchEligible + ', ' +
-      'executionEligible: ' + psStats.executionEligible + ' vs ' + ciStats.executionEligible + ', ' +
+      'researchEligible: ' + psStats.researchEligible + ' vs ' + ciStats.counts.researchEligible + ', ' +
+      'executionEligible: ' + psStats.executionEligible + ' vs ' + ciStats.counts.executionEligible + ', ' +
       'legacy: ' + psStats.legacyNoTargetDate + ' vs ' + ciStats.legacyNoTargetDate;
   } else {
-    acceptance.apiConsistency.note = 'PS and CI counts identical — API consistency verified';
+    acceptance.apiConsistency.note = 'PS and CI counts identical — API consistency verified (P0-C.1 shared module)';
   }
 
   // ── Step 6: ACCEPTED verdict — all 6 conditions ──

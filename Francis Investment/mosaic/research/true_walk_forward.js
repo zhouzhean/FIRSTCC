@@ -658,55 +658,10 @@ function runTrueWalkForward(options) {
     console.log('Average Rank IC: ' + avgIC);
   }
 
-  // P1: Auto-feed evaluation results into candidate_registry
-  // (only when run as a full walk-forward — not from individual window tests)
-  if (!opts.skipCandidateRegistry) {
-    try {
-      var CANDIDATE_REGISTRY = require('./candidate_registry');
-
-      // Set evaluation windows (first 4 = research, last 2 = lock)
-      CANDIDATE_REGISTRY.setEvaluationWindows(windows.map(function (w) {
-        return {
-          trainStart: w.trainDates[0], trainEnd: w.trainDates[w.trainDates.length - 1],
-          testStart: w.testDates[0], testEnd: w.testDates[w.testDates.length - 1],
-        };
-      }));
-
-      // For each valid window, feed results to candidate_registry for each active candidate
-      var activeCandidates = CANDIDATE_REGISTRY.getCandidates({ status: 'RESEARCH_ONLY' })
-        .concat(CANDIDATE_REGISTRY.getCandidates({ status: 'SHADOW_CANDIDATE' }));
-
-      for (var ci = 0; ci < activeCandidates.length; ci++) {
-        var cand = activeCandidates[ci];
-        for (var wi2 = 0; wi2 < validWindows.length; wi2++) {
-          var w = summary.windows[wi2];
-          if (!w || w.error || !w.metrics) continue;
-
-          CANDIDATE_REGISTRY.recordEvaluation(cand.versionId, wi2, {
-            rankIC: w.metrics.avgRankIC,
-            netReturn: w.portfolio ? w.portfolio.netReturn : null,
-            grossReturn: w.portfolio ? w.portfolio.grossReturn : null,
-            benchmarkReturn: w.portfolio ? w.portfolio.benchmarkReturn : null,
-            netExcessReturn: w.portfolio ? w.portfolio.netExcessReturn : null,
-            deltaCI: w.vsTechnicalOnly && w.vsTechnicalOnly.deltaNetReturn != null
-              ? [w.vsTechnicalOnly.deltaNetReturn - 1.0, w.vsTechnicalOnly.deltaNetReturn + 1.0] : null,
-            directionAccuracy: w.metrics.directionAccuracy,
-          });
-        }
-      }
-
-      console.log('[P1] Candidate registry updated: ' + activeCandidates.length + ' candidates evaluated');
-
-      // Print candidate status summary
-      var cs = CANDIDATE_REGISTRY.getStatus();
-      console.log('[P1] Registry status — ' +
-        'researchOnly=' + cs.researchOnly +
-        ', shadowCandidates=' + cs.shadowCandidates +
-        ', rejected=' + cs.rejectedCount);
-    } catch (e) {
-      console.log('[P1] Candidate registry integration skipped: ' + e.message);
-    }
-  }
+  // P1: Candidate evaluation is now handled by candidate_runner.js.
+  // Each hypothesis (H1/H2/H3) gets its own independent walk-forward run
+  // with hypothesis-specific feature subsets, rankings, trade simulations, and OOS metrics.
+  // The old auto-feed loop (same Ridge results recycled to all candidates) has been removed.
 
   return summary;
 }
@@ -720,4 +675,13 @@ if (require.main === module) {
   runTrueWalkForward({ startDate: startDate, endDate: endDate });
 }
 
-module.exports = { runTrueWalkForward, evaluateTrueWalkForward };
+module.exports = {
+  runTrueWalkForward,
+  evaluateTrueWalkForward,
+  // Shared utilities exported for candidate_runner.js
+  loadSnapshotDates,
+  forEachSnapshotDate,
+  computeDataHashDates,
+  computeRankIC,
+  computeDecileCalibration,
+};

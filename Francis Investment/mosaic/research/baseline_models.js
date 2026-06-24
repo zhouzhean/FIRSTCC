@@ -330,6 +330,144 @@ function compareToRandomPortfolio(modelResult, mcDist) {
 }
 
 /**
+ * P1.1 / P1.2: Compare pre-computed model daily rankings against random-portfolio Monte Carlo.
+ *
+ * P1.2 upgrade:
+ *   — Accepts executionConfig {costAssumptions, topN, holdDays, maxPositionsPerSleeve, numSleeves}
+ *     and applies IDENTICAL config to BOTH candidate AND every random control portfolio.
+ *   — CI from empirical (modelMinusRandom) delta quantiles at 2.5%/97.5% (fixed seed),
+ *     NOT from mean ± 1.96*SD.
+ *   — Returns and persists executionHash, actual roundTripCostPct, topN, holdDays.
+ *
+ * @param {object} modelDailySignals — { date: [ {code, predictedExcess}, ... ] }
+ * @param {object} snapshotsByDate — { date: { map: {code: snapshot}, list: [snapshots] } }
+ * @param {object} klineIdx — stock kline index
+ * @param {object} executionConfig — { costAssumptions, topN, holdDays, maxPositionsPerSleeve, numSleeves, mcSamples }
+ * @returns {object} { modelPortfolio, randomMeanNetReturn, pairedDelta_*, pValue, executionHash }
+ */
+function compareRankingsAgainstRandom(modelDailySignals, snapshotsByDate, klineIdx, executionConfig) {
+  var ec = executionConfig || {};
+  var topN = ec.topN || TOP_N;
+  var holdDays = ec.holdDays || HOLD_DAYS;
+  var mcSamples = ec.mcSamples || MONTE_CARLO_SAMPLES;
+  var costAssumptions = ec.costAssumptions || null;
+  var maxPositionsPerSleeve = ec.maxPositionsPerSleeve || MAX_POSITIONS_PER_SLEEVE;
+  var numSleeves = ec.numSleeves || NUM_SLEEVES;
+
+  var dates = Object.keys(modelDailySignals).sort();
+  if (dates.length === 0) return { error: 'no_model_rankings' };
+
+  console.log('Running random-portfolio comparison for ' + dates.length + ' dates (' + mcSamples + ' MC samples)...');
+
+  // Shared simulator options — identical for model AND random
+  var simOpts = {
+    klineIdx: klineIdx,
+    holdDays: holdDays,
+    topN: topN,
+    maxPositionsPerSleeve: maxPositionsPerSleeve,
+    numSleeves: numSleeves,
+  };
+  if (costAssumptions) simOpts.costAssumptions = costAssumptions;
+
+  // Compute execution hash from the config that is actually used
+  var crypto = require('crypto');
+  var execHash = crypto.createHash('sha256');
+  execHash.update('execConfig:v2|');
+  execHash.update(JSON.stringify(costAssumptions || {}));
+  execHash.update('|topN:' + topN);
+  execHash.update('|holdDays:' + holdDays);
+  execHash.update('|maxPosPerSleeve:' + maxPositionsPerSleeve);
+  execHash.update('|numSleeves:' + numSleeves);
+  var executionHash = execHash.digest('hex');
+
+  // Run model portfolio through simulator (with executionConfig)
+  var sim = require('./trade_simulator');
+  var modelResult = sim.simulatePortfolio(modelDailySignals, simOpts);
+
+  // Derive actual roundTripCostPct from result
+  var actualRoundTripCostPct = modelResult.roundTripCostPct != null ? modelResult.roundTripCostPct : sim.ROUND_TRIP_COST_PCT;
+
+  // Run random-portfolio Monte Carlo with IDENTICAL executionConfig
+  var rng = createRNG(RANDOM_SEED);
+  var randomNetReturns = [];
+  for (var mc = 0; mc < mcSamples; mc++) {
+    // Fixed per-sample seed for reproducibility
+    var sampleRng = createRNG(RANDOM_SEED + mc * 100003 + 1);
+    var randomSignals = {};
+    var dateKeys = Object.keys(snapshotsByDate).sort();
+    for (var di = 0; di < dateKeys.length; di++) {
+      var dk = dateKeys[di];
+      var pool = snapshotsByDate[dk].list || [];
+      if (pool.length < topN) continue;
+      var randPool = [];
+      for (var pi = 0; pi < pool.length; pi++) {
+        randPool.push({
+          code: pool[pi].code,
+          predictedExcess: sampleRng(),
+        });
+      }
+      randPool.sort(function (a, b) { return b.predictedExcess - a.predictedExcess; });
+      randomSignals[dk] = randPool.slice(0, topN);
+    }
+    if (Object.keys(randomSignals).length === 0) continue;
+    var randResult = sim.simulatePortfolio(randomSignals, simOpts);
+    randomNetReturns.push(randResult.netReturn != null ? randResult.netReturn : 0);
+  }
+
+  // P1.2: Compute modelMinusRandom deltas for EMPIRICAL quantile CI (not mean±1.96*SD)
+  var deltas = [];
+  for (var di = 0; di < randomNetReturns.length; di++) {
+    deltas.push((modelResult.netReturn || 0) - randomNetReturns[di]);
+  }
+  deltas.sort(function (a, b) { return a - b; });
+  var dN = deltas.length;
+  var pairedDelta_mean = dN > 0 ? deltas.reduce(function (s, v) { return s + v; }, 0) / dN : null;
+  var pairedDelta_ci95_lower = dN > 0 ? deltas[Math.max(0, Math.floor(dN * 0.025))] : null;
+  var pairedDelta_ci95_upper = dN > 0 ? deltas[Math.min(dN - 1, Math.floor(dN * 0.975))] : null;
+
+  // Random distribution stats (for display)
+  randomNetReturns.sort(function (a, b) { return a - b; });
+  var randomMean = randomNetReturns.reduce(function (s, v) { return s + v; }, 0) / randomNetReturns.length;
+  var randomSD = 0;
+  for (var ri = 0; ri < randomNetReturns.length; ri++) {
+    randomSD += (randomNetReturns[ri] - randomMean) * (randomNetReturns[ri] - randomMean);
+  }
+  randomSD = Math.sqrt(randomSD / (randomNetReturns.length - 1));
+
+  // Laplace-smoothed p-value: how extreme is model return vs random distribution?
+  var extremeCount = 0;
+  for (var ei = 0; ei < randomNetReturns.length; ei++) {
+    if (randomNetReturns[ei] >= modelResult.netReturn) extremeCount++;
+  }
+  var pValue = (extremeCount + 1) / (mcSamples + 1);
+
+  console.log('  Model net: ' + (modelResult.netReturn != null ? modelResult.netReturn.toFixed(2) + '%' : 'N/A'));
+  console.log('  Random mean net: ' + randomMean.toFixed(2) + '% (SD=' + randomSD.toFixed(2) + '%)');
+  console.log('  Paired delta (empirical): ' + (pairedDelta_mean != null ? pairedDelta_mean.toFixed(2) : 'N/A') + '% [' + (pairedDelta_ci95_lower != null ? pairedDelta_ci95_lower.toFixed(2) : 'N/A') + ', ' + (pairedDelta_ci95_upper != null ? pairedDelta_ci95_upper.toFixed(2) : 'N/A') + ']');
+  console.log('  p-value: ' + pValue.toFixed(4) + ' (extreme=' + extremeCount + '/' + mcSamples + ')');
+
+  return {
+    randomMeanNetReturn: randomMean,
+    randomSDNetReturn: randomSD,
+    pairedDelta_mean: pairedDelta_mean,
+    pairedDelta_ci95_lower: pairedDelta_ci95_lower,
+    pairedDelta_ci95_upper: pairedDelta_ci95_upper,
+    pValue: pValue,
+    extremeCount: extremeCount,
+    monteCarloSamples: mcSamples,
+    modelNetReturn: modelResult.netReturn,
+    modelGrossReturn: modelResult.grossReturn,
+    // P1.2: Execution identity
+    executionHash: executionHash,
+    actualRoundTripCostPct: actualRoundTripCostPct,
+    topN: topN,
+    holdDays: holdDays,
+    maxPositionsPerSleeve: maxPositionsPerSleeve,
+    numSleeves: numSleeves,
+  };
+}
+
+/**
  * Full time-series portfolio comparison.
  * Runs model through simulator, then deterministic random-portfolio Monte Carlo,
  * computes two-sided empirical p-value with Laplace smoothing.
@@ -614,7 +752,7 @@ module.exports = {
   rankByComposite, rankByMomentum, rankByRandom,
   computeMetrics, compareAllModels,
   buildDailyRankings, runRandomPortfolioMonteCarlo, computeBootstrapDistribution,
-  compareToRandomPortfolio, compareFullTimeSeries,
+  compareToRandomPortfolio, compareFullTimeSeries, compareRankingsAgainstRandom,
   kendallTauB, createRNG,
   ROUND_TRIP_COST_PCT, MONTE_CARLO_SAMPLES, TOP_N, RANDOM_SEED,
 };

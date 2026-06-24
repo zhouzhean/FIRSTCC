@@ -429,6 +429,69 @@ For every change, report all of the following:
 
 ## Supervisory Change Log
 
+## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
+
+### What is verified locally
+
+- `cohort_stats.js` is now the common implementation used by the two cohort
+  API routes and by the scheduler's canonical acceptance calculation. Its
+  isolated consistency test passes 11/11.
+- Candidate research now has hypothesis-specific interaction features,
+  train-only standardization in the runner, deterministic candidate version
+  IDs, configurable simulator costs, and isolated test directories. Focused
+  candidate tests pass 14/14 and registry tests pass 26/26.
+- The candidate scheduler remains disabled. That is correct: none of these
+  candidates may influence Simfolio or trade qualification.
+
+### Current release status
+
+- These changes are **local and uncommitted** at this review. They are not a
+  cloud release. Cloud remains `v3.4.9.7`, commit `9b26157`, with
+  `identityStatus=manifest_verified_no_git`.
+- Cloud reports a current scheduler pipeline but `latestReport=2026-05-22`.
+  Treat report/data freshness as unresolved observability work; do not infer
+  fresh research input from the scheduler timestamp alone.
+
+### Required P1.2 corrections before enabling Candidate Runner
+
+1. **Use one execution configuration in candidate and random control.**
+   `compareRankingsAgainstRandom()` currently falls back to its own default
+   costs, Top-N, holding period, and sleeve capacity. Pass the exact candidate
+   execution object into both model and random simulations, then include its
+   hash in both stored records. Otherwise a custom-cost candidate is compared
+   with a different-cost control.
+2. **Repair lock-window evidence.** The lock path still builds `deltaCI` from
+   legacy `vsBenchmark` plus/minus a fabricated 1.0. It must use the same
+   empirical `vsRandom` delta distribution as research windows, and persist
+   `windowPlanHash` and `executionHash` for windows 5 and 6.
+3. **Make resume and records idempotent.** Reconstruct completed work from the
+   registry as well as the progress file. `recordEvaluation()` must replace or
+   reject a duplicate `(candidateVersionId, windowId, snapshotHash)` record.
+   A lost progress file must never double-count evidence or change promotion.
+4. **Replace the mutable pseudo-factory.** `createRegistry({dataDir})` mutates
+   module-global state and returns the same module object. Use a true isolated
+   registry instance or a runner dependency-injection option; reset all state
+   on a data-root switch. Test isolation must not depend on require order.
+5. **Fix the standardization test.** Its test standardizer has two columns but
+   the asserted H1 vector has three including the interaction, producing a
+   `NaN` third value. Assert a known finite transformed vector and assert the
+   runner's prediction equals that finite calculation.
+6. **Keep inference precision.** Candidate runner rounds fitted weights before
+   prediction. Preserve full coefficients for ranking/inference and write a
+   separately rounded display artifact only.
+7. **Use empirical MC intervals.** Store the per-iteration model-minus-random
+   deltas and take deterministic 2.5%/97.5% quantiles. Do not present
+   `mean +/- 1.96 * randomSD` as a paired confidence interval.
+
+### Next scientific step after P1.2
+
+Run H1 only, in a single fixed research window, with the repaired runner and
+the same execution config for strategy, index and random controls. Inspect the
+artifact manually. Only then run H1's four research windows; run H2 and H3
+sequentially afterwards. A candidate remains `RESEARCH_ONLY` until four
+pre-registered windows and two untouched lock windows have passed. No neural
+model, factor expansion, or live trading change is justified before then.
+
 | Version | Supervisory conclusion |
 |---|---|
 | v3.4.6 | Market data became fail-closed; Top 50 ledger and evidence gating were introduced. |
