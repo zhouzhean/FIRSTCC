@@ -1,7 +1,7 @@
 {
-  "commit": "cfcf8d82d0a9b4f8e5091f51c7ac84baca7d1fc0",
+  "commit": "9b261571e7c974f98cf532fbf98a1690fc4713bd",
   "version": "v3.4.9.7",
-  "deployedAt": "2026-06-24T13:12:00.000Z",
+  "deployedAt": "2026-06-24T14:10:00.000Z",
   "branch": "master",
   "files": {
     "mosaic_server.js": "0a8d69c3d818d678",
