@@ -103,6 +103,43 @@ function generateWindows(options) {
   return { windows: windows, allWindows: allWindows, tradingDays: allDays, allDaysCount: allDays.length, stableStart: stableStart };
 }
 
+// ---- P0.2 T1 Residual: normalizeBenchmarkFields ----
+
+/**
+ * Enforce strict null semantics for all benchmark/excess fields when benchmark is unavailable.
+ * Rules:
+ *   - benchmarkStatus !== "available" → benchmarkSource, benchmarkNetReturn, benchmarkGrossReturn,
+ *     benchmarkTradeCount, benchmarkUnavailableCount, netExcessReturn are all null.
+ *   - NEVER convert null to 0 (no `|| 0` fallback on these fields).
+ *   - benchmarkUnavailableCount MAY retain its value (it's the reason benchmark is unavailable).
+ *   - portfolioNetExcess mirrors netExcessReturn.
+ */
+function normalizeBenchmarkFields(portfolio) {
+  if (!portfolio) return portfolio;
+
+  var isAvailable = portfolio.benchmarkStatus === 'available';
+
+  if (!isAvailable) {
+    portfolio.benchmarkSource         = null;
+    portfolio.benchmarkNetReturn      = null;
+    portfolio.benchmarkGrossReturn    = null;
+    portfolio.benchmarkTradeCount     = null;
+    // benchmarkUnavailableCount: keep the count (it's WHY benchmark is unavailable)
+    // but never let it be 0 when unavailable — a 0 means "fully available"
+    if (portfolio.benchmarkUnavailableCount === 0 && portfolio.benchmarkStatus !== 'available') {
+      portfolio.benchmarkUnavailableCount = null;
+    }
+    portfolio.netExcessReturn         = null;
+    // Also null out the legacy field so UI can't accidentally read it
+    portfolio.benchmarkReturn         = null;
+  }
+
+  // portfolioNetExcess: alias for netExcessReturn
+  portfolio.portfolioNetExcess = portfolio.netExcessReturn;
+
+  return portfolio;
+}
+
 // ---- Single Window Evaluation (P0-3: Portfolio-level comparison) ----
 
 function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
@@ -220,15 +257,15 @@ function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
         mp.netExcessReturn      = mp.netExcessReturn;  // strategyNet - benchmarkNet; null when benchmark unavailable
         // P0.2 CONDITIONAL T1: benchmarkStatus=available ONLY when benchmarkTradeCount>0 AND benchmarkUnavailableCount is defined
         mp.benchmarkStatus      = (mp.benchmarkTradeCount > 0 && mp.benchmarkUnavailableCount != null) ? 'available' : 'unavailable';
-        mp.benchmarkSource      = 'sh_index_same_path';
+        mp.benchmarkSource      = mp.benchmarkStatus === 'available' ? 'sh_index_same_path' : null;
         mp.benchmarkTradeCount  = mp.benchmarkTradeCount != null ? mp.benchmarkTradeCount : null;
         mp.benchmarkUnavailableCount = mp.benchmarkUnavailableCount != null ? mp.benchmarkUnavailableCount : null;
         mp.topPoolSize          = 50;                   // TOP_N per cohort
         mp.numSleeves           = 3;
         mp.maxPositionsPerSleeve= 17;
         mp.maxConcurrentPositions = 150;
-        // P0.1: Pull turnover and cost from simulator output
-        // These come from the modelResult inside comparison (raw simulator output)
+        // P0.2 T1 residual: normalize — null out all benchmark/excess when unavailable
+        normalizeBenchmarkFields(mp);
       }
       // Also capture simulator-level metrics if available via internal result
       result.models[mk] = comparison;
@@ -316,14 +353,27 @@ function runRollingOOS(options) {
 
     summary[mk + 'Summary'] = {
       validWindows: validWindows.length,
-      // P0.1: Strategy returns
-      avgStrategyNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.strategyNetReturn || p.netReturn || 0); }, 0) / portfolios.length * 100) / 100,
-      avgStrategyGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.strategyGrossReturn || p.grossReturn || 0); }, 0) / portfolios.length * 100) / 100,
-      // P0.1: Benchmark returns (same-path)
-      avgBenchmarkNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.benchmarkNetReturn || p.benchmarkReturn || 0); }, 0) / portfolios.length * 100) / 100,
-      avgBenchmarkGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.benchmarkGrossReturn || p.benchmarkReturn || 0); }, 0) / portfolios.length * 100) / 100,
-      // P0.1: Net excess (strategyNet - benchmarkNet)
-      avgNetExcess: Math.round(portfolios.reduce(function (s, p) { return s + (p.netExcessReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      // P0.1: Strategy returns (always valid — strategy always has returns)
+      avgStrategyNetReturn: portfolios.reduce(function (s, p) { return s + (p.strategyNetReturn || p.netReturn || 0); }, 0) / portfolios.length,
+      avgStrategyGrossReturn: portfolios.reduce(function (s, p) { return s + (p.strategyGrossReturn || p.grossReturn || 0); }, 0) / portfolios.length,
+      // P0.1: Benchmark returns — ONLY from available windows, never || 0
+      avgBenchmarkNetReturn: (function () {
+        var avail = portfolios.filter(function (p) { return p.benchmarkStatus === 'available' && p.benchmarkNetReturn != null; });
+        if (avail.length === 0) return null;
+        return Math.round(avail.reduce(function (s, p) { return s + p.benchmarkNetReturn; }, 0) / avail.length * 100) / 100;
+      })(),
+      avgBenchmarkGrossReturn: (function () {
+        var avail = portfolios.filter(function (p) { return p.benchmarkStatus === 'available' && p.benchmarkGrossReturn != null; });
+        if (avail.length === 0) return null;
+        return Math.round(avail.reduce(function (s, p) { return s + p.benchmarkGrossReturn; }, 0) / avail.length * 100) / 100;
+      })(),
+      // P0.2 T1 residual: avgNetExcess ONLY from benchmarkStatus=available windows. NO || 0 fallback.
+      avgNetExcess: (function () {
+        var avail = portfolios.filter(function (p) { return p.benchmarkStatus === 'available' && p.netExcessReturn != null; });
+        if (avail.length === 0) return null;
+        return Math.round(avail.reduce(function (s, p) { return s + p.netExcessReturn; }, 0) / avail.length * 100) / 100;
+      })(),
+      benchmarkAvailableWindows: portfolios.filter(function (p) { return p.benchmarkStatus === 'available'; }).length,
       // Legacy compat (kept for older consumers)
       avgNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.netReturn || 0); }, 0) / portfolios.length * 100) / 100,
       avgGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.grossReturn || 0); }, 0) / portfolios.length * 100) / 100,
@@ -337,9 +387,16 @@ function runRollingOOS(options) {
     };
 
     if (comparisons.length > 0) {
+      // P0.2 T1 residual: deltas only from significant or meaningful windows — but NEVER convert null to 0
+      var compWithDelta = comparisons.filter(function (c) { return c.netReturnDelta != null; });
+      var compWithExcessDelta = comparisons.filter(function (c) { return c.netExcessDelta != null; });
       summary[mk + 'Summary'].vsRandom = {
-        avgNetReturnDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.netReturnDelta || 0); }, 0) / comparisons.length * 100) / 100,
-        avgNetExcessDelta: Math.round(comparisons.reduce(function (s, c) { return s + (c.netExcessDelta || 0); }, 0) / comparisons.length * 100) / 100,
+        avgNetReturnDelta: compWithDelta.length > 0
+          ? Math.round(compWithDelta.reduce(function (s, c) { return s + c.netReturnDelta; }, 0) / compWithDelta.length * 100) / 100
+          : null,
+        avgNetExcessDelta: compWithExcessDelta.length > 0
+          ? Math.round(compWithExcessDelta.reduce(function (s, c) { return s + c.netExcessDelta; }, 0) / compWithExcessDelta.length * 100) / 100
+          : null,
         significantWindows: comparisons.filter(function (c) { return c.significant; }).length,
         _note: 'P0.2: significance via full time-series comparison with Laplace smoothing, NOT daily p-value averaging',
       };

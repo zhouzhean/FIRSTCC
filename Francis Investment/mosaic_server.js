@@ -1363,6 +1363,16 @@ function buildResearchLabData() {
           // P0.1: Explicit strategy/benchmark decomposition — UI must never conflate net with excess
           // P0.2 CONDITIONAL T1: benchmarkStatus=available ONLY when benchmarkTradeCount>0 AND benchmarkUnavailableCount is defined AND benchmark NAV recalculable
           var benchStatusWf = latest.portfolio ? (latest.portfolio.benchmarkTradeCount > 0 && latest.portfolio.benchmarkUnavailableCount != null ? 'available' : 'unavailable') : 'unavailable';
+          // P0.2 T1 residual: normalizeBenchmarkFields — when unavailable, ALL benchmark return and excess fields MUST be null
+          // DO NOT use `|| 0` or `|| null` that could mask a true 0
+          var _wfBmNetReturn   = benchStatusWf === 'available' ? (latest.portfolio ? latest.portfolio.benchmarkReturn : null) : null;
+          var _wfBmGrossReturn = benchStatusWf === 'available' ? (latest.portfolio ? latest.portfolio.benchmarkReturn : null) : null;
+          var _wfBmSource      = benchStatusWf === 'available' ? 'sh_index_same_path' : null;
+          var _wfBmTradeCount  = latest.portfolio && latest.portfolio.benchmarkTradeCount != null ? latest.portfolio.benchmarkTradeCount : null;
+          var _wfBmUnavailCnt  = latest.portfolio && latest.portfolio.benchmarkUnavailableCount != null ? latest.portfolio.benchmarkUnavailableCount : null;
+          var _wfNetExcess     = benchStatusWf === 'available' ? (latest.portfolio ? latest.portfolio.netExcessReturn : null) : null;
+          var _wfPortNetExcess = _wfNetExcess; // mirror
+
           data.latestWindow = {
             testStart: latest.window ? latest.window.testStart : null,
             testEnd: latest.window ? latest.window.testEnd : null,
@@ -1375,26 +1385,24 @@ function buildResearchLabData() {
             testMSE: latest.metrics ? latest.metrics.testMSE : null,
             avgRankIC: latest.metrics ? latest.metrics.avgRankIC : null,
             // P0.1: Strategy returns
-            strategyNetReturn: latest.portfolio ? (latest.portfolio.strategyNetReturn || latest.portfolio.netReturn) : null,
-            strategyGrossReturn: latest.portfolio ? (latest.portfolio.strategyGrossReturn || latest.portfolio.grossReturn) : null,
-            // P0.1: Benchmark returns (same-path)
-            benchmarkNetReturn: latest.portfolio ? latest.portfolio.benchmarkReturn : null,
-            benchmarkGrossReturn: latest.portfolio ? latest.portfolio.benchmarkReturn : null,
-            // P0.2-1: Benchmark acceptance — null when unavailable, not 0
+            strategyNetReturn: latest.portfolio ? (latest.portfolio.strategyNetReturn != null ? latest.portfolio.strategyNetReturn : latest.portfolio.netReturn) : null,
+            strategyGrossReturn: latest.portfolio ? (latest.portfolio.strategyGrossReturn != null ? latest.portfolio.strategyGrossReturn : latest.portfolio.grossReturn) : null,
+            // P0.1: Benchmark returns (same-path) — null when benchmark unavailable, never 0
+            benchmarkNetReturn: _wfBmNetReturn,
+            benchmarkGrossReturn: _wfBmGrossReturn,
+            // P0.2 T1 residual: ALL benchmark/excess fields null when unavailable
             benchmarkStatus: benchStatusWf,
-            benchmarkSource: benchStatusWf === 'available' ? 'sh_index_same_path' : null,
-            benchmarkTradeCount: latest.portfolio ? (latest.portfolio.benchmarkTradeCount || null) : null,
-            benchmarkUnavailableCount: latest.portfolio ? (latest.portfolio.benchmarkUnavailableCount || null) : null,
-            // P0.1: Excess (strategyNet - benchmarkNet) — compute ONLY when benchmark available
-            netExcessReturn: benchStatusWf === 'available'
-              ? (latest.portfolio ? latest.portfolio.netExcessReturn : null)
-              : null,
+            benchmarkSource: _wfBmSource,
+            benchmarkTradeCount: _wfBmTradeCount,
+            benchmarkUnavailableCount: _wfBmUnavailCnt,
+            // P0.1: Excess (strategyNet - benchmarkNet) — null when benchmark unavailable
+            netExcessReturn: _wfNetExcess,
             netExcessStatus: benchStatusWf === 'available' ? 'comparable' : 'benchmark_unavailable',
             directionAccuracy: latest.metrics ? latest.metrics.directionAccuracy : null,
             // P0.1: Legacy compat fields (keep for older UI consumers)
             portfolioNetReturn: latest.portfolio ? latest.portfolio.netReturn : null,
             portfolioGrossReturn: latest.portfolio ? latest.portfolio.grossReturn : null,
-            portfolioNetExcess: latest.portfolio ? latest.portfolio.netExcessReturn : null,
+            portfolioNetExcess: _wfPortNetExcess,
           };
           data.p1Model = {
             type: tf.model || 'ridge_regression',
@@ -1449,32 +1457,46 @@ function buildResearchLabData() {
             // OOS evaluates composite/technicalOnly/momentum; composite has the strongest signal
             var bestModel = latestOOS.models && (latestOOS.models.composite || latestOOS.models.technicalOnly || latestOOS.models.momentum);
             if (bestModel && bestModel.modelPortfolio) {
-              // CONDITIONAL T1: benchmarkStatus=available ONLY when benchmarkTradeCount>0 AND benchmarkUnavailableCount is defined
-              var benchStatusOOS = bestModel.modelPortfolio.benchmarkStatus || (bestModel.modelPortfolio.benchmarkTradeCount > 0 && bestModel.modelPortfolio.benchmarkUnavailableCount != null ? 'available' : 'unavailable');
+              var bp = bestModel.modelPortfolio;
+              // P0.2 T1 residual: benchmarkStatus — normalize all exhaust fields
+              var benchStatusOOS = bp.benchmarkStatus;
+              // If benchmarkStatus wasn't pre-computed, derive from trade counts
+              if (!benchStatusOOS) {
+                benchStatusOOS = (bp.benchmarkTradeCount > 0 && bp.benchmarkUnavailableCount != null) ? 'available' : 'unavailable';
+              }
+              // When unavailable, ALL benchmark return and excess fields MUST be null — no `|| 0` fallback
+              var _oosBmNetReturn   = benchStatusOOS === 'available' ? (bp.benchmarkNetReturn != null ? bp.benchmarkNetReturn : bp.benchmarkReturn) : null;
+              var _oosBmGrossReturn = benchStatusOOS === 'available' ? (bp.benchmarkGrossReturn != null ? bp.benchmarkGrossReturn : bp.benchmarkReturn) : null;
+              var _oosBmSource      = benchStatusOOS === 'available' ? (bp.benchmarkSource || 'sh_index_same_path') : null;
+              var _oosBmTradeCount  = bp.benchmarkTradeCount != null ? bp.benchmarkTradeCount : null;
+              var _oosBmUnavailCnt  = bp.benchmarkUnavailableCount != null ? bp.benchmarkUnavailableCount : null;
+              var _oosNetExcess     = benchStatusOOS === 'available' ? (bp.netExcessReturn != null ? bp.netExcessReturn : null) : null;
+              var _oosPortNetExcess = _oosNetExcess;
+
               data.latestWindow = {
                 testStart: latestOOS.windowStart || (latestOOS.window && latestOOS.window.testStart),
                 testEnd: latestOOS.windowEnd || (latestOOS.window && latestOOS.window.testEnd),
                 // P0.1: Explicit strategy/benchmark decomposition
-                strategyNetReturn: bestModel.modelPortfolio.strategyNetReturn || bestModel.modelPortfolio.netReturn,
-                strategyGrossReturn: bestModel.modelPortfolio.strategyGrossReturn || bestModel.modelPortfolio.grossReturn,
-                benchmarkNetReturn: bestModel.modelPortfolio.benchmarkNetReturn || bestModel.modelPortfolio.benchmarkReturn,
-                benchmarkGrossReturn: bestModel.modelPortfolio.benchmarkGrossReturn || bestModel.modelPortfolio.benchmarkReturn,
-                // P0.2-1: Benchmark acceptance
+                strategyNetReturn: bp.strategyNetReturn != null ? bp.strategyNetReturn : bp.netReturn,
+                strategyGrossReturn: bp.strategyGrossReturn != null ? bp.strategyGrossReturn : bp.grossReturn,
+                // P0.2 T1 residual: benchmark fields null when unavailable
+                benchmarkNetReturn: _oosBmNetReturn,
+                benchmarkGrossReturn: _oosBmGrossReturn,
                 benchmarkStatus: benchStatusOOS,
-                benchmarkSource: bestModel.modelPortfolio.benchmarkSource || (benchStatusOOS === 'available' ? 'sh_index_same_path' : null),
-                benchmarkTradeCount: bestModel.modelPortfolio.benchmarkTradeCount || null,
-                benchmarkUnavailableCount: bestModel.modelPortfolio.benchmarkUnavailableCount || null,
-                netExcessReturn: benchStatusOOS === 'available' ? bestModel.modelPortfolio.netExcessReturn : null,
+                benchmarkSource: _oosBmSource,
+                benchmarkTradeCount: _oosBmTradeCount,
+                benchmarkUnavailableCount: _oosBmUnavailCnt,
+                netExcessReturn: _oosNetExcess,
                 netExcessStatus: benchStatusOOS === 'available' ? 'comparable' : 'benchmark_unavailable',
-                topPoolSize: bestModel.modelPortfolio.topPoolSize || 50,
-                numSleeves: bestModel.modelPortfolio.numSleeves || 3,
-                executedPositionsPerSleeve: bestModel.modelPortfolio.maxPositionsPerSleeve || 17,
-                totalTurnover: bestModel.modelPortfolio.totalTurnover,
-                roundTripCostPct: bestModel.modelPortfolio.roundTripCostPct,
+                topPoolSize: bp.topPoolSize || 50,
+                numSleeves: bp.numSleeves || 3,
+                executedPositionsPerSleeve: bp.maxPositionsPerSleeve || 17,
+                totalTurnover: bp.totalTurnover,
+                roundTripCostPct: bp.roundTripCostPct,
                 // Legacy compat
-                portfolioNetReturn: bestModel.modelPortfolio.netReturn,
-                portfolioGrossReturn: bestModel.modelPortfolio.grossReturn,
-                portfolioNetExcess: bestModel.modelPortfolio.netExcessReturn,
+                portfolioNetReturn: bp.netReturn,
+                portfolioGrossReturn: bp.grossReturn,
+                portfolioNetExcess: _oosPortNetExcess,
                 source: 'oos_evaluation',
               };
             }

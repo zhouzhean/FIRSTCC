@@ -415,43 +415,50 @@ function compareFullTimeSeries(modelName, snapshotsByDate, prev20MapByDate, klin
     ? Math.round((modelResult.netExcessReturn - mcDist.meanNetExcess) * 100) / 100
     : null;
 
+  // P0.2 T1 residual: compute benchmarkStatus first, then normalize all exhaust fields
+  var rawBenchmarkStatus = (modelResult.benchmarkTradeCount > 0 && modelResult.benchmarkUnavailableCount != null) ? 'available' : 'unavailable';
+
+  var modelPortfolio = {
+    // P0.1: Explicit strategy/benchmark decomposition — UI must NOT conflate net with excess
+    strategyNetReturn: modelResult.netReturn,
+    strategyGrossReturn: modelResult.grossReturn,
+    // Benchmark fields — set conditionally; will be nulled below if unavailable
+    benchmarkNetReturn: rawBenchmarkStatus === 'available' ? modelResult.benchmarkReturn : null,
+    benchmarkGrossReturn: rawBenchmarkStatus === 'available' ? modelResult.benchmarkReturn : null,
+    netExcessReturn: rawBenchmarkStatus === 'available' ? modelResult.netExcessReturn : null,
+    // P0.2-1: Benchmark acceptance fields
+    benchmarkStatus: rawBenchmarkStatus,
+    benchmarkSource: rawBenchmarkStatus === 'available' ? 'sh_index_same_path' : null,
+    benchmarkTradeCount: modelResult.benchmarkTradeCount != null ? modelResult.benchmarkTradeCount : null,
+    benchmarkUnavailableCount: modelResult.benchmarkUnavailableCount != null ? modelResult.benchmarkUnavailableCount : null,
+    // Legacy compat fields (kept for older consumers)
+    netReturn: modelResult.netReturn,
+    grossReturn: modelResult.grossReturn,
+    benchmarkReturn: rawBenchmarkStatus === 'available' ? modelResult.benchmarkReturn : null,
+    // Per-window operational details
+    maxDrawdownBps: modelResult.maxDrawdown,
+    sharpeRatio: modelResult.sharpeRatio,
+    coverageRate: modelResult.coverageRate,
+    executedTrades: modelResult.executedTrades,
+    totalSignals: modelResult.totalSignals,
+    totalTurnover: modelResult.totalTurnover,
+    roundTripCostPct: modelResult.roundTripCostPct,
+    topPoolSize: modelResult.topNPerCohort || 50,
+    numSleeves: modelResult.numSleeves || 3,
+    maxPositionsPerSleeve: modelResult.maxPositionsPerSleeve || 17,
+    maxConcurrentPositions: modelResult.maxConcurrentPositions || 150,
+    holdDays: modelResult.holdDays || 3,
+    firstDate: modelResult.firstDate,
+    lastDate: modelResult.lastDate,
+    // P0.2 T1 residual: explicit null for excess when unavailable
+    portfolioNetExcess: rawBenchmarkStatus === 'available' ? modelResult.netExcessReturn : null,
+  };
+
   return {
     model: modelName,
     independentTradingDays: dates.length,
     monteCarloSamples: mcDist.samples,
-    modelPortfolio: {
-      // P0.1: Explicit strategy/benchmark decomposition — UI must NOT conflate net with excess
-      strategyNetReturn: modelResult.netReturn,
-      strategyGrossReturn: modelResult.grossReturn,
-      benchmarkNetReturn: modelResult.benchmarkReturn,      // benchmark has no cost
-      benchmarkGrossReturn: modelResult.benchmarkReturn,    // benchmark has no cost
-      netExcessReturn: modelResult.netExcessReturn,         // strategyNet - benchmarkNet; null when benchmark unavailable
-      // P0.2-1: Benchmark acceptance fields
-      // CONDITIONAL T1: benchmarkStatus=available ONLY when benchmarkTradeCount>0 AND benchmarkUnavailableCount is defined AND benchmark NAV recalculable
-      benchmarkStatus: (modelResult.benchmarkTradeCount > 0 && modelResult.benchmarkUnavailableCount != null) ? 'available' : 'unavailable',
-      benchmarkSource: 'sh_index_same_path',
-      benchmarkTradeCount: modelResult.benchmarkTradeCount != null ? modelResult.benchmarkTradeCount : null,
-      benchmarkUnavailableCount: modelResult.benchmarkUnavailableCount != null ? modelResult.benchmarkUnavailableCount : null,
-      // Legacy compat fields (kept for older consumers)
-      netReturn: modelResult.netReturn,
-      grossReturn: modelResult.grossReturn,
-      benchmarkReturn: modelResult.benchmarkReturn,
-      // Per-window operational details
-      maxDrawdownBps: modelResult.maxDrawdown,
-      sharpeRatio: modelResult.sharpeRatio,
-      coverageRate: modelResult.coverageRate,
-      executedTrades: modelResult.executedTrades,
-      totalSignals: modelResult.totalSignals,
-      totalTurnover: modelResult.totalTurnover,
-      roundTripCostPct: modelResult.roundTripCostPct,
-      topPoolSize: modelResult.topNPerCohort || 50,
-      numSleeves: modelResult.numSleeves || 3,
-      maxPositionsPerSleeve: modelResult.maxPositionsPerSleeve || 17,
-      maxConcurrentPositions: modelResult.maxConcurrentPositions || 150,
-      holdDays: modelResult.holdDays || 3,
-      firstDate: modelResult.firstDate,
-      lastDate: modelResult.lastDate,
-    },
+    modelPortfolio: modelPortfolio,
     randomMonteCarlo: {
       method: 'deterministic_random_portfolio_monte_carlo',
       meanNetReturn: mcDist.meanGrossReturn,

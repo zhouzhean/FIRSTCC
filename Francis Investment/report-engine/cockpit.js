@@ -1057,7 +1057,12 @@ function renderResearchLab(researchLab) {
     html += '<span style="font-size:9px;">DirAcc=' + esc(String(lw.directionAccuracy)) + '%</span>';
     html += '<span style="font-size:9px;' + ((lw.portfolioNetReturn || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Net=' + esc(String(lw.portfolioNetReturn)) + '%</span>';
     html += '<span style="font-size:9px;' + ((lw.portfolioGrossReturn || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Gross=' + esc(String(lw.portfolioGrossReturn)) + '%</span>';
-    html += '<span style="font-size:9px;' + ((lw.portfolioNetExcess || 0) > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Excess=' + esc(String(lw.portfolioNetExcess)) + '%</span>';
+    // P0.2 T1 residual: only show Excess when benchmarkStatus=available
+    if (lw.benchmarkStatus === 'available' && lw.portfolioNetExcess != null) {
+      html += '<span style="font-size:9px;' + (lw.portfolioNetExcess > 0 ? 'color:#16a34a;' : 'color:#dc2626;') + '">Excess=' + esc(String(lw.portfolioNetExcess)) + '%</span>';
+    } else {
+      html += '<span style="font-size:9px;color:#94a3b8;">Excess=N.A.</span>';
+    }
     html += '</div></div>';
   }
 
