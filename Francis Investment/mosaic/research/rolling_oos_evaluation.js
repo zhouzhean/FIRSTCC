@@ -128,10 +128,27 @@ function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
 
   var snapshotsByDate = {};
   var prev20MapByDate = {};
+  // P0.2: Track per-date tradable/exclusion stats
+  var totalStocksAcrossWindow = 0;
+  var totalTradableAcrossWindow = 0;
+  var totalExcludedAcrossWindow = 0;
+  var exclusionReasonsAcrossWindow = {};
   testDates.forEach(function (testDate) {
     var snapRes = loadSnapshotsForDate(testDate);
     if (Object.keys(snapRes.map).length >= 10) {
       snapshotsByDate[testDate] = snapRes;
+      totalStocksAcrossWindow += snapRes.list.length;
+      // P0.2: Count tradable vs excluded
+      for (var si = 0; si < snapRes.list.length; si++) {
+        var s = snapRes.list[si];
+        if (s.forwardStatus === 'settled') {
+          totalTradableAcrossWindow++;
+        } else {
+          totalExcludedAcrossWindow++;
+          var reason = s.unavailableReason || 'unknown';
+          exclusionReasonsAcrossWindow[reason] = (exclusionReasonsAcrossWindow[reason] || 0) + 1;
+        }
+      }
     }
     var prev20Date = CALENDAR.getTradingDay(testDate, -20);
     if (prev20Date) {
@@ -146,6 +163,19 @@ function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
     result.error = 'no_valid_dates_in_window';
     return result;
   }
+
+  // P0.2: Attach coverage stats to window result
+  result.coverageStats = {
+    totalStocksAcrossWindow: totalStocksAcrossWindow,
+    tradableCount: totalTradableAcrossWindow,
+    excludedCount: totalExcludedAcrossWindow,
+    tradableRate: totalStocksAcrossWindow > 0
+      ? Math.round(totalTradableAcrossWindow / totalStocksAcrossWindow * 10000) / 100
+      : 0,
+    exclusionReasons: exclusionReasonsAcrossWindow,
+    testDatesWithSnapshots: Object.keys(snapshotsByDate).length,
+    testDatesTotal: testDates.length,
+  };
 
   // Collect per-date details (diagnostic only, no p-values)
   var dates = Object.keys(snapshotsByDate).sort();
@@ -179,6 +209,28 @@ function evaluateWindow(windowDef, klineIdx, bootstrapSamples) {
       var comparison = BASELINES.compareFullTimeSeries(
         mk, snapshotsByDate, prev20MapByDate, klineIdx, bootstrapSamples
       );
+      // P0.1: Enrich modelPortfolio with explicit per-field naming and simulator metadata
+      if (comparison && comparison.modelPortfolio) {
+        var mp = comparison.modelPortfolio;
+        // P0.1: Map to explicit strategy/benchmark names so UI never conflates net with excess
+        mp.strategyNetReturn    = mp.netReturn;
+        mp.strategyGrossReturn  = mp.grossReturn;
+        mp.benchmarkNetReturn   = mp.benchmarkReturn;  // benchmark has no cost, so net=gross
+        mp.benchmarkGrossReturn = mp.benchmarkReturn;
+        mp.netExcessReturn      = mp.netExcessReturn;  // strategyNet - benchmarkNet; null when benchmark unavailable
+        // P0.2 CONDITIONAL T1: benchmarkStatus=available ONLY when benchmarkTradeCount>0 AND benchmarkUnavailableCount is defined
+        mp.benchmarkStatus      = (mp.benchmarkTradeCount > 0 && mp.benchmarkUnavailableCount != null) ? 'available' : 'unavailable';
+        mp.benchmarkSource      = 'sh_index_same_path';
+        mp.benchmarkTradeCount  = mp.benchmarkTradeCount != null ? mp.benchmarkTradeCount : null;
+        mp.benchmarkUnavailableCount = mp.benchmarkUnavailableCount != null ? mp.benchmarkUnavailableCount : null;
+        mp.topPoolSize          = 50;                   // TOP_N per cohort
+        mp.numSleeves           = 3;
+        mp.maxPositionsPerSleeve= 17;
+        mp.maxConcurrentPositions = 150;
+        // P0.1: Pull turnover and cost from simulator output
+        // These come from the modelResult inside comparison (raw simulator output)
+      }
+      // Also capture simulator-level metrics if available via internal result
       result.models[mk] = comparison;
     } catch (e) {
       result.models[mk] = { error: e.message };
@@ -264,15 +316,24 @@ function runRollingOOS(options) {
 
     summary[mk + 'Summary'] = {
       validWindows: validWindows.length,
+      // P0.1: Strategy returns
+      avgStrategyNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.strategyNetReturn || p.netReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      avgStrategyGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.strategyGrossReturn || p.grossReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      // P0.1: Benchmark returns (same-path)
+      avgBenchmarkNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.benchmarkNetReturn || p.benchmarkReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      avgBenchmarkGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.benchmarkGrossReturn || p.benchmarkReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      // P0.1: Net excess (strategyNet - benchmarkNet)
+      avgNetExcess: Math.round(portfolios.reduce(function (s, p) { return s + (p.netExcessReturn || 0); }, 0) / portfolios.length * 100) / 100,
+      // Legacy compat (kept for older consumers)
       avgNetReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.netReturn || 0); }, 0) / portfolios.length * 100) / 100,
       avgGrossReturn: Math.round(portfolios.reduce(function (s, p) { return s + (p.grossReturn || 0); }, 0) / portfolios.length * 100) / 100,
-      avgNetExcess: Math.round(portfolios.reduce(function (s, p) { return s + (p.netExcessReturn || 0); }, 0) / portfolios.length * 100) / 100,
       avgMaxDrawdownBps: Math.round(portfolios.reduce(function (s, p) { return s + (p.maxDrawdownBps || 0); }, 0) / portfolios.length * 100) / 100,
       avgSharpe: portfolios.filter(function (p) { return p.sharpeRatio != null; }).length > 0
         ? Math.round(portfolios.reduce(function (s, p) { return s + (p.sharpeRatio || 0); }, 0) / portfolios.length * 100) / 100
         : null,
       avgCoverage: Math.round(portfolios.reduce(function (s, p) { return s + (p.coverageRate || 0); }, 0) / portfolios.length * 100) / 100,
       totalExecutedTrades: portfolios.reduce(function (s, p) { return s + (p.executedTrades || 0); }, 0),
+      avgTotalTurnover: Math.round(portfolios.reduce(function (s, p) { return s + (p.totalTurnover || 0); }, 0) / portfolios.length * 100) / 100,
     };
 
     if (comparisons.length > 0) {

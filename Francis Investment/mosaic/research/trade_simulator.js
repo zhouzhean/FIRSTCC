@@ -302,6 +302,9 @@ function simulatePortfolio(dailySignals, options) {
   var unavailableReasons = {};
   var totalTurnover = 0;
   var totalGrossTurnover = 0;
+  // P0.2 CONDITIONAL T1: Benchmark sleeve trade tracking — same-path benchmark availability
+  var bmExecutedTrades = 0;
+  var bmUnavailableSignals = 0;
   var allTrades = [];
 
   // NAV series — gross NAV (no costs) and net NAV (costs deducted)
@@ -413,28 +416,29 @@ function simulatePortfolio(dailySignals, options) {
     });
 
     // ---- Phase 2b: Execute benchmark sleeve pending orders (same dates!) ----
+    // P0.2 CONDITIONAL T1: Track benchmark trade counts for availability gate
     bmSleeves.forEach(function (bm, bmIdx) {
       bm.pendingOrders.forEach(function (bmOrder) {
         // Same T+1 open → T+4 close on SH index
         var bmEntryBar = getIndexNextBar('sh000001', bmOrder.signalDate);
-        if (!bmEntryBar) return;
+        if (!bmEntryBar) { bmUnavailableSignals++; return; }
         var bmEntryPrice = bmEntryBar.open || bmEntryBar.close;
         var bmEntryDate = bmEntryBar.date || bmEntryBar.tradeDate;
-        if (!bmEntryPrice || bmEntryPrice <= 0) return;
+        if (!bmEntryPrice || bmEntryPrice <= 0) { bmUnavailableSignals++; return; }
 
         var bmExitDate = CALENDAR.getTradingDay(bmEntryDate, holdDays);
-        if (!bmExitDate) return;
+        if (!bmExitDate) { bmUnavailableSignals++; return; }
         var bmExitBar = getIndexBar('sh000001', bmExitDate);
-        if (!bmExitBar) return;
+        if (!bmExitBar) { bmUnavailableSignals++; return; }
         var bmExitPrice = bmExitBar.close || bmExitBar.price;
-        if (!bmExitPrice || bmExitPrice <= 0) return;
+        if (!bmExitPrice || bmExitPrice <= 0) { bmUnavailableSignals++; return; }
 
         var bmPerPosition = bm.cash / Math.max(1, maxPositionsPerSleeve);
         var bmShares = Math.floor(bmPerPosition / bmEntryPrice);
-        if (bmShares <= 0) return;
+        if (bmShares <= 0) { bmUnavailableSignals++; return; }
 
         var bmCost = bmShares * bmEntryPrice;
-        if (bmCost > bm.cash) return;
+        if (bmCost > bm.cash) { bmUnavailableSignals++; return; }
         bm.cash -= bmCost;
 
         bm.positions.push({
@@ -446,6 +450,7 @@ function simulatePortfolio(dailySignals, options) {
           shares: bmShares,
           signalDate: bmOrder.signalDate,
         });
+        bmExecutedTrades++;
       });
       bm.pendingOrders = [];
     });
@@ -602,6 +607,9 @@ function simulatePortfolio(dailySignals, options) {
     executedTrades: executedTrades,
     unavailableSignals: unavailableSignals,
     unavailableReasons: unavailableReasons,
+    // P0.2 CONDITIONAL T1: Benchmark sleeve trade counts for availability gate
+    benchmarkTradeCount: bmExecutedTrades,
+    benchmarkUnavailableCount: bmUnavailableSignals,
     avgDailyTurnover: avgDailyTurnover,
     totalTurnover: totalTurnover,
     trades: allTrades,
