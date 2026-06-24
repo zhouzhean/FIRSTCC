@@ -575,7 +575,13 @@ function runCandidateEvaluation(options) {
   var hypothesis = REG.getHypothesis(hypothesisId);
   if (!hypothesis) return { error: 'unknown_hypothesis', hypothesisId: hypothesisId };
 
-  console.log('=== P1 Candidate Runner: ' + hypothesisId + ' (' + hypothesis.name + ') ===');
+  // P1.3: smokeOnly flag — skip all state changes
+  var isSmoke = !!opts.smokeOnly;
+  // P1.3: windowsStart offset for correct windowIndex calculation
+  var windowsStart = opts.windowsStart != null ? opts.windowsStart : 0;
+
+  console.log('=== P1 Candidate Runner: ' + hypothesisId + ' (' + hypothesis.name + ')' +
+    (isSmoke ? ' [SMOKE ONLY]' : '') + ' ===');
   console.log('Features: ' + hypothesis.features.join(', '));
   console.log('Interaction: ' + (hypothesis.interaction || 'none'));
   console.log();
@@ -617,58 +623,68 @@ function runCandidateEvaluation(options) {
   console.log('Windows: ' + windows.length + ' total');
   console.log();
 
-  // P1.2: findOrCreateCandidate — stable versionId from composite hash, injectable registry
-  var regResult = findOrCreateCandidate(hypothesis, strategyHash, featureSchemaHash,
-    snapshotHash, windowPlanHash, executionHash, { windows: windows, registry: REG });
-
-  if (regResult.error) {
-    console.error('Failed to register candidate: ' + regResult.error);
-    return regResult;
-  }
-  var versionId = regResult.versionId;
-  if (regResult.alreadyExists) {
-    console.log('Resuming: ' + versionId + ' (same strategy+data+execution = same candidate)');
-  } else {
-    console.log('Registered new: ' + versionId);
-  }
-  console.log();
-
-  // Set evaluation windows in registry (first 4 = research, last 2 = lock)
-  REG.setEvaluationWindows(windows.map(function (w) {
-    return {
-      trainStart: w.trainDates[0],
-      trainEnd: w.trainDates[w.trainDates.length - 1],
-      testStart: w.testDates[0],
-      testEnd: w.testDates[w.testDates.length - 1],
-    };
-  }));
-
-  // P1.2: Checkpoint/resume — union of registry evaluatedWindows + progress file
-  var progress = _loadProgress();
-  var progKey = hypothesisId + '_' + versionId;
+  // P1.3: In smokeOnly mode, skip registry entirely — generate versionId locally
+  var regResult, versionId, candidate, promotedToShadow;
   var completedInProgress = {};
 
-  // Source 1: Registry (candidate.evaluatedWindows)
-  var regCandidate = REG.getCandidates({ hypothesisId: hypothesisId }).filter(function (c) {
-    return c.versionId === versionId;
-  })[0];
-  if (regCandidate && regCandidate.evaluatedWindows) {
-    regCandidate.evaluatedWindows.forEach(function (wi) {
-      completedInProgress[wi] = true;
-    });
-  }
-
-  // Source 2: Progress file (union — catches progress-only evaluations)
-  if (progress && progress[progKey] && progress[progKey].completedWindows) {
-    progress[progKey].completedWindows.forEach(function (wi) {
-      completedInProgress[wi] = true;
-    });
-  }
-
-  var completedCount = Object.keys(completedInProgress).length;
-  if (completedCount > 0) {
-    console.log('Resuming: ' + completedCount + ' windows already complete (registry + progress union)');
+  if (isSmoke) {
+    // Smoke mode: versionId = smoke_H1_<timestamp_8char> — not persisted
+    versionId = 'smoke_H1_' + Date.now().toString(36).slice(-8);
+    console.log('Smoke versionId: ' + versionId + ' (ephemeral, not persisted)');
     console.log();
+  } else {
+    // P1.2: findOrCreateCandidate — stable versionId from composite hash, injectable registry
+    regResult = findOrCreateCandidate(hypothesis, strategyHash, featureSchemaHash,
+      snapshotHash, windowPlanHash, executionHash, { windows: windows, registry: REG });
+
+    if (regResult.error) {
+      console.error('Failed to register candidate: ' + regResult.error);
+      return regResult;
+    }
+    versionId = regResult.versionId;
+    if (regResult.alreadyExists) {
+      console.log('Resuming: ' + versionId + ' (same strategy+data+execution = same candidate)');
+    } else {
+      console.log('Registered new: ' + versionId);
+    }
+    console.log();
+
+    // Set evaluation windows in registry (first 4 = research, last 2 = lock)
+    REG.setEvaluationWindows(windows.map(function (w) {
+      return {
+        trainStart: w.trainDates[0],
+        trainEnd: w.trainDates[w.trainDates.length - 1],
+        testStart: w.testDates[0],
+        testEnd: w.testDates[w.testDates.length - 1],
+      };
+    }));
+
+    // P1.2: Checkpoint/resume — union of registry evaluatedWindows + progress file
+    var progress = _loadProgress();
+    var progKey = hypothesisId + '_' + versionId;
+
+    // Source 1: Registry (candidate.evaluatedWindows)
+    candidate = REG.getCandidates({ hypothesisId: hypothesisId }).filter(function (c) {
+      return c.versionId === versionId;
+    })[0];
+    if (candidate && candidate.evaluatedWindows) {
+      candidate.evaluatedWindows.forEach(function (wi) {
+        completedInProgress[wi] = true;
+      });
+    }
+
+    // Source 2: Progress file (union — catches progress-only evaluations)
+    if (progress && progress[progKey] && progress[progKey].completedWindows) {
+      progress[progKey].completedWindows.forEach(function (wi) {
+        completedInProgress[wi] = true;
+      });
+    }
+
+    var completedCount = Object.keys(completedInProgress).length;
+    if (completedCount > 0) {
+      console.log('Resuming: ' + completedCount + ' windows already complete (registry + progress union)');
+      console.log();
+    }
   }
 
   var klineIdx = opts.klineIdx;
@@ -682,6 +698,8 @@ function runCandidateEvaluation(options) {
   }
 
   // ---- Phase 1: Research windows (0-3) ----
+  // P1.3: When window subset is used (windowsStart > 0 or limited windowsEnd),
+  // only evaluate research windows that fall within the selected subset.
   var researchIndices = REG.getResearchWindowIndices();
   var results = [];
   var allResearchComplete = true;
@@ -689,13 +707,19 @@ function runCandidateEvaluation(options) {
   for (var ri = 0; ri < researchIndices.length; ri++) {
     var wi = researchIndices[ri];
     if (wi >= windows.length) break;
-    if (completedInProgress[wi]) {
+    // P1.3: Check if this window index falls within selected range
+    // wi is the index within the SELECTED windows array;
+    // the actual research window index = windowsStart + wi
+    // But for completedInProgress, we use the absolute index
+    var absWi = windowsStart + wi;
+
+    if (completedInProgress[absWi]) {
       console.log('Window ' + (wi + 1) + '/' + windows.length + ' (research): SKIPPED (already complete)');
       continue;
     }
 
     console.log('Window ' + (wi + 1) + '/' + windows.length + ' (research):');
-    var result = evaluateHypothesisWindow(windows[wi], wi, klineIdx, hypothesis, {
+    var result = evaluateHypothesisWindow(windows[wi], absWi, klineIdx, hypothesis, {
       monteCarloSamples: opts.monteCarloSamples || 100,
       costAssumptions: costAssumptions,
     });
@@ -733,7 +757,7 @@ function runCandidateEvaluation(options) {
       snapshotHash: snapshotHash,
       windowPlanHash: windowPlanHash,
       executionHash: executionHash,
-      windowId: 'window_' + String(wi + 1).padStart(3, '0'),
+      windowId: 'window_' + String(absWi + 1).padStart(3, '0'),
       costAssumptions: costAssumptions,
       benchmarkStatus: benchmarkStatus,
       windowDates: {
@@ -746,128 +770,141 @@ function runCandidateEvaluation(options) {
       },
     };
 
-    var recResult = REG.recordEvaluation(versionId, wi, evalRecord);
+    // P1.3: Skip registry + progress writes in smokeOnly mode
+    if (isSmoke) {
+      console.log('  [Smoke] Data recorded to result only (no registry/progress write)');
+    } else {
+      var recResult = REG.recordEvaluation(versionId, absWi, evalRecord);
+      console.log('  Recorded: ' + (recResult.recorded ? 'yes' : recResult.error || 'no'));
+    }
     console.log('  Test MSE: ' + result.metrics.testMSE + ' | Dir Acc: ' + result.metrics.directionAccuracy + '%');
     console.log('  Rank IC: ' + result.metrics.avgRankIC + ' | Net: ' + (result.portfolio ? result.portfolio.netReturn + '%' : 'N/A'));
     console.log('  Benchmark: ' + benchmarkStatus);
-    console.log('  Recorded: ' + (recResult.recorded ? 'yes' : recResult.error || 'no'));
 
-    // Checkpoint after each window
-    if (!progress) progress = {};
-    if (!progress[progKey]) progress[progKey] = { hypothesisId: hypothesisId, versionId: versionId, completedWindows: [] };
-    if (progress[progKey].completedWindows.indexOf(wi) < 0) {
-      progress[progKey].completedWindows.push(wi);
+    // Checkpoint after each window (skip in smoke mode)
+    if (!isSmoke) {
+      if (!progress) progress = {};
+      if (!progress[progKey]) progress[progKey] = { hypothesisId: hypothesisId, versionId: versionId, completedWindows: [] };
+      if (progress[progKey].completedWindows.indexOf(absWi) < 0) {
+        progress[progKey].completedWindows.push(absWi);
+      }
+      _saveProgress(progress);
     }
-    _saveProgress(progress);
 
     // Hint GC between windows
     if (typeof global !== 'undefined' && global.gc) { global.gc(); }
     console.log();
   }
 
-  // After all research windows: check promotion status
-  var candidate = REG.getCandidates({}).filter(function (c) {
-    return c.versionId === versionId;
-  })[0];
-
-  var promotedToShadow = candidate && candidate.status === 'SHADOW_CANDIDATE';
-
-  if (!promotedToShadow) {
-    console.log('[CandidateRunner] Research phase complete — candidate is RESEARCH_ONLY');
-    console.log('[CandidateRunner] Lock windows (4-5) require SHADOW_CANDIDATE — skipping');
-    console.log('[CandidateRunner] Reason: promotion gates not passed or auto-promotion pending');
-  }
-
-  // ---- Phase 2: Lock windows (4-5) — ONLY if SHADOW_CANDIDATE ----
-  if (promotedToShadow) {
+  // P1.3: In smokeOnly mode, skip promotion check and lock windows entirely
+  if (isSmoke) {
+    console.log('[Smoke] Skipping promotion check + lock windows (smokeOnly mode)');
     console.log();
-    console.log('=== Phase 2: Lock Confirmation Windows ===');
-    console.log('Status: SHADOW_CANDIDATE — lock windows permitted');
-    console.log();
+  } else {
+    // After all research windows: check promotion status
+    candidate = REG.getCandidates({}).filter(function (c) {
+      return c.versionId === versionId;
+    })[0];
 
-    var lockIndices = REG.getLockWindowIndices();
+    promotedToShadow = candidate && candidate.status === 'SHADOW_CANDIDATE';
 
-    for (var li = 0; li < lockIndices.length; li++) {
-      var lwi = lockIndices[li];
-      if (lwi >= windows.length) break;
-      if (completedInProgress[lwi]) {
-        console.log('Window ' + (lwi + 1) + '/' + windows.length + ' (lock): SKIPPED (already complete)');
-        continue;
-      }
-
-      console.log('Window ' + (lwi + 1) + '/' + windows.length + ' (lock):');
-      var lresult = evaluateHypothesisWindow(windows[lwi], lwi, klineIdx, hypothesis, {
-        monteCarloSamples: opts.monteCarloSamples || 100,
-        costAssumptions: costAssumptions,
-      });
-
-      if (lresult.error) {
-        console.log('  ERROR: ' + lresult.error);
-        continue;
-      }
-
-      results.push(lresult);
-
-      var lBenchmarkStatus = 'unavailable';
-      if (lresult.portfolio && lresult.portfolio.benchmarkTradeCount > 0) {
-        lBenchmarkStatus = 'available';
-      }
-
-      var lEvalRecord = {
-        rankIC: lresult.metrics.avgRankIC,
-        netReturn: lresult.portfolio ? lresult.portfolio.netReturn : null,
-        grossReturn: lresult.portfolio ? lresult.portfolio.grossReturn : null,
-        benchmarkReturn: lresult.portfolio ? lresult.portfolio.benchmarkReturn : null,
-        netExcessReturn: lresult.portfolio ? lresult.portfolio.netExcessReturn : null,
-        // P1.2: Lock windows use vsRandom empirical delta CI (same as research windows)
-        deltaCI: lresult.vsRandom && lresult.vsRandom.pairedDelta_ci95_lower != null
-          ? [lresult.vsRandom.pairedDelta_ci95_lower, lresult.vsRandom.pairedDelta_ci95_upper] : null,
-        directionAccuracy: lresult.metrics.directionAccuracy,
-        candidateVersionId: versionId,
-        hypothesisId: hypothesisId,
-        strategyHash: strategyHash,
-        featureSchemaHash: featureSchemaHash,
-        snapshotHash: snapshotHash,
-        windowPlanHash: windowPlanHash,
-        executionHash: executionHash,
-        windowId: 'window_' + String(lwi + 1).padStart(3, '0'),
-        costAssumptions: costAssumptions,
-        benchmarkStatus: lBenchmarkStatus,
-        windowDates: {
-          trainStart: lresult.window.trainStart,
-          trainEnd: lresult.window.trainEnd,
-          validateStart: lresult.window.validateStart,
-          validateEnd: lresult.window.validateEnd,
-          testStart: lresult.window.testStart,
-          testEnd: lresult.window.testEnd,
-        },
-      };
-
-      REG.recordEvaluation(versionId, lwi, lEvalRecord);
-      console.log('  Test MSE: ' + lresult.metrics.testMSE + ' | Dir Acc: ' + lresult.metrics.directionAccuracy + '%');
-      console.log('  Rank IC: ' + lresult.metrics.avgRankIC + ' | Net: ' + (lresult.portfolio ? lresult.portfolio.netReturn + '%' : 'N/A'));
-      console.log('  Benchmark: ' + lBenchmarkStatus);
-
-      if (!progress[progKey]) progress[progKey] = { hypothesisId: hypothesisId, versionId: versionId, completedWindows: [] };
-      if (progress[progKey].completedWindows.indexOf(lwi) < 0) {
-        progress[progKey].completedWindows.push(lwi);
-      }
-      _saveProgress(progress);
-
-      if (typeof global !== 'undefined' && global.gc) { global.gc(); }
-      console.log();
+    if (!promotedToShadow) {
+      console.log('[CandidateRunner] Research phase complete — candidate is RESEARCH_ONLY');
+      console.log('[CandidateRunner] Lock windows (4-5) require SHADOW_CANDIDATE — skipping');
+      console.log('[CandidateRunner] Reason: promotion gates not passed or auto-promotion pending');
     }
 
-    // Generate final verdict
-    var verdict = REG.getFinalVerdict(versionId);
-    console.log('=== Final Verdict ===');
-    console.log('Verdict: ' + (verdict.verdict || 'pending'));
-    console.log('Recommendation: ' + (verdict.recommendation || 'N/A'));
-    if (verdict.lockConfirmation) {
-      console.log('Lock Confirmed: ' + verdict.lockConfirmation.confirmed);
-      console.log('Lock Avg Rank IC: ' + verdict.lockConfirmation.lockAvgRankIC);
-      console.log('Lock Avg Net Return: ' + verdict.lockConfirmation.lockAvgNetReturn);
-      console.log('Lock Positive Windows: ' + verdict.lockConfirmation.lockPositiveWindows + '/' + verdict.lockConfirmation.lockTotalWindows);
+    // ---- Phase 2: Lock windows (4-5) — ONLY if SHADOW_CANDIDATE ----
+    if (promotedToShadow) {
+      console.log();
+      console.log('=== Phase 2: Lock Confirmation Windows ===');
+      console.log('Status: SHADOW_CANDIDATE — lock windows permitted');
+      console.log();
+
+      var lockIndices = REG.getLockWindowIndices();
+
+      for (var li = 0; li < lockIndices.length; li++) {
+        var lwi = lockIndices[li];
+        if (lwi >= windows.length) break;
+        if (completedInProgress[lwi]) {
+          console.log('Window ' + (lwi + 1) + '/' + windows.length + ' (lock): SKIPPED (already complete)');
+          continue;
+        }
+
+        console.log('Window ' + (lwi + 1) + '/' + windows.length + ' (lock):');
+        var lresult = evaluateHypothesisWindow(windows[lwi], lwi, klineIdx, hypothesis, {
+          monteCarloSamples: opts.monteCarloSamples || 100,
+          costAssumptions: costAssumptions,
+        });
+
+        if (lresult.error) {
+          console.log('  ERROR: ' + lresult.error);
+          continue;
+        }
+
+        results.push(lresult);
+
+        var lBenchmarkStatus = 'unavailable';
+        if (lresult.portfolio && lresult.portfolio.benchmarkTradeCount > 0) {
+          lBenchmarkStatus = 'available';
+        }
+
+        var lEvalRecord = {
+          rankIC: lresult.metrics.avgRankIC,
+          netReturn: lresult.portfolio ? lresult.portfolio.netReturn : null,
+          grossReturn: lresult.portfolio ? lresult.portfolio.grossReturn : null,
+          benchmarkReturn: lresult.portfolio ? lresult.portfolio.benchmarkReturn : null,
+          netExcessReturn: lresult.portfolio ? lresult.portfolio.netExcessReturn : null,
+          // P1.2: Lock windows use vsRandom empirical delta CI (same as research windows)
+          deltaCI: lresult.vsRandom && lresult.vsRandom.pairedDelta_ci95_lower != null
+            ? [lresult.vsRandom.pairedDelta_ci95_lower, lresult.vsRandom.pairedDelta_ci95_upper] : null,
+          directionAccuracy: lresult.metrics.directionAccuracy,
+          candidateVersionId: versionId,
+          hypothesisId: hypothesisId,
+          strategyHash: strategyHash,
+          featureSchemaHash: featureSchemaHash,
+          snapshotHash: snapshotHash,
+          windowPlanHash: windowPlanHash,
+          executionHash: executionHash,
+          windowId: 'window_' + String(lwi + 1).padStart(3, '0'),
+          costAssumptions: costAssumptions,
+          benchmarkStatus: lBenchmarkStatus,
+          windowDates: {
+            trainStart: lresult.window.trainStart,
+            trainEnd: lresult.window.trainEnd,
+            validateStart: lresult.window.validateStart,
+            validateEnd: lresult.window.validateEnd,
+            testStart: lresult.window.testStart,
+            testEnd: lresult.window.testEnd,
+          },
+        };
+
+        REG.recordEvaluation(versionId, lwi, lEvalRecord);
+        console.log('  Test MSE: ' + lresult.metrics.testMSE + ' | Dir Acc: ' + lresult.metrics.directionAccuracy + '%');
+        console.log('  Rank IC: ' + lresult.metrics.avgRankIC + ' | Net: ' + (lresult.portfolio ? lresult.portfolio.netReturn + '%' : 'N/A'));
+        console.log('  Benchmark: ' + lBenchmarkStatus);
+
+        if (!progress[progKey]) progress[progKey] = { hypothesisId: hypothesisId, versionId: versionId, completedWindows: [] };
+        if (progress[progKey].completedWindows.indexOf(lwi) < 0) {
+          progress[progKey].completedWindows.push(lwi);
+        }
+        _saveProgress(progress);
+
+        if (typeof global !== 'undefined' && global.gc) { global.gc(); }
+        console.log();
+      }
+
+      // Generate final verdict
+      var verdict = REG.getFinalVerdict(versionId);
+      console.log('=== Final Verdict ===');
+      console.log('Verdict: ' + (verdict.verdict || 'pending'));
+      console.log('Recommendation: ' + (verdict.recommendation || 'N/A'));
+      if (verdict.lockConfirmation) {
+        console.log('Lock Confirmed: ' + verdict.lockConfirmation.confirmed);
+        console.log('Lock Avg Rank IC: ' + verdict.lockConfirmation.lockAvgRankIC);
+        console.log('Lock Avg Net Return: ' + verdict.lockConfirmation.lockAvgNetReturn);
+        console.log('Lock Positive Windows: ' + verdict.lockConfirmation.lockPositiveWindows + '/' + verdict.lockConfirmation.lockTotalWindows);
+      }
     }
   }
 
@@ -875,25 +912,26 @@ function runCandidateEvaluation(options) {
   if (ownKlineIdx) klineIdx = null;
   if (typeof global !== 'undefined' && global.gc) { global.gc(); }
 
-  // Clean up progress for this completed run
-  if (progress && progress[progKey]) {
+  // Clean up progress for this completed run (skip in smoke mode)
+  if (!isSmoke && progress && progress[progKey]) {
     delete progress[progKey];
     _saveProgress(progress);
   }
 
-  var status = candidate ? candidate.status : 'RESEARCH_ONLY';
+  var status = (isSmoke ? 'SMOKE_ONLY' : (candidate ? candidate.status : 'RESEARCH_ONLY'));
   return {
     hypothesisId: hypothesisId,
     versionId: versionId,
     strategyHash: strategyHash,
     featureSchemaHash: featureSchemaHash,
     snapshotHash: snapshotHash,
+    executionHash: executionHash,
     windowsEvaluated: results.length,
     windowsTotal: windows.length,
     status: status,
     verdict: promotedToShadow
       ? (REG.getFinalVerdict(versionId).verdict || 'pending')
-      : 'RESEARCH_ONLY — lock windows not evaluated',
+      : (isSmoke ? 'SMOKE_ONLY — window 0 evaluated, no lock/promotion' : 'RESEARCH_ONLY — lock windows not evaluated'),
     windows: results,
   };
 }
@@ -909,11 +947,28 @@ function runCandidateEvaluation(options) {
  */
 function runAllHypotheses(options) {
   var opts = options || {};
-  var hypothesisIds = opts.hypotheses || ['H1', 'H2', 'H3'];
+  var isSmoke = !!opts.smokeOnly;
 
-  console.log('=== P1 Candidate Runner: All Hypotheses ===');
-  console.log('Hypotheses: ' + hypothesisIds.join(', '));
-  console.log();
+  // P1.3: smokeOnly mode forces H1-only, single window
+  if (isSmoke) {
+    opts.hypotheses = ['H1'];
+    opts.windowsStart = 0;
+    opts.windowsEnd = 0;
+    console.log('=== P1.3 SMOKE TEST: H1 Window 0 Only ===');
+    console.log('Mode: smokeOnly — NO registry writes, NO progress writes, NO state changes');
+    console.log();
+  }
+
+  var hypothesisIds = opts.hypotheses || ['H1', 'H2', 'H3'];
+  var windowsStart = opts.windowsStart != null ? opts.windowsStart : 0;
+  var windowsEnd = opts.windowsEnd != null ? opts.windowsEnd : undefined;
+
+  if (!isSmoke) {
+    console.log('=== P1 Candidate Runner: All Hypotheses ===');
+    console.log('Hypotheses: ' + hypothesisIds.join(', '));
+    console.log('Windows: ' + windowsStart + ' → ' + (windowsEnd != null ? windowsEnd : 'end'));
+    console.log();
+  }
 
   // Load kline index once
   console.log('Loading kline index (shared across hypotheses)...');
@@ -927,8 +982,14 @@ function runAllHypotheses(options) {
     console.error('Error generating windows: ' + winResult.error);
     return [{ error: 'window_generation_failed', detail: winResult.error }];
   }
-  var windows = winResult.windows;
-  console.log('Windows: ' + windows.length);
+  var allWindows = winResult.windows;
+  console.log('Total available windows: ' + allWindows.length);
+
+  // P1.3: Apply window range — single-window for smoke, configurable subset otherwise
+  var windows = allWindows.slice(windowsStart, (windowsEnd != null ? windowsEnd + 1 : undefined));
+  if (windows.length !== allWindows.length) {
+    console.log('Selected windows: ' + windowsStart + ' → ' + (windowsEnd != null ? windowsEnd : allWindows.length - 1) + ' (' + windows.length + ' windows)');
+  }
   console.log();
 
   var allResults = [];
@@ -938,9 +999,12 @@ function runAllHypotheses(options) {
     var result = runCandidateEvaluation({
       hypothesisId: hid,
       windows: windows,
+      allWindows: allWindows,     // P1.3: pass full list for index resolution
+      windowsStart: windowsStart, // P1.3: pass offset for windowIndex calculation
       klineIdx: klineIdx,
       costAssumptions: opts.costAssumptions,
       monteCarloSamples: opts.monteCarloSamples,
+      smokeOnly: isSmoke,         // P1.3: flag for no-side-effects mode
     });
     allResults.push(result);
     console.log();
@@ -950,16 +1014,194 @@ function runAllHypotheses(options) {
   klineIdx = null;
   if (typeof global !== 'undefined' && global.gc) { global.gc(); }
 
-  // Summary
-  console.log('=== All Hypotheses Summary ===');
-  for (var ai = 0; ai < allResults.length; ai++) {
-    var ar = allResults[ai];
-    console.log(ar.hypothesisId + ': ' + ar.versionId + ' | status=' + ar.status +
-      ' | windows=' + ar.windowsEvaluated + '/' + ar.windowsTotal +
-      ' | strategyHash=' + (ar.strategyHash ? ar.strategyHash.slice(0, 12) + '...' : 'N/A'));
+  // P1.3: Write smoke summary if smokeOnly
+  if (isSmoke) {
+    _writeSmokeSummary(allResults[0], windows, opts);
+  }
+
+  if (!isSmoke) {
+    // Summary
+    console.log('=== All Hypotheses Summary ===');
+    for (var ai = 0; ai < allResults.length; ai++) {
+      var ar = allResults[ai];
+      console.log(ar.hypothesisId + ': ' + ar.versionId + ' | status=' + ar.status +
+        ' | windows=' + ar.windowsEvaluated + '/' + ar.windowsTotal +
+        ' | strategyHash=' + (ar.strategyHash ? ar.strategyHash.slice(0, 12) + '...' : 'N/A'));
+    }
   }
 
   return allResults;
+}
+
+/**
+ * P1.3: Write smoke_summary.json for smokeOnly mode.
+ * Contains snapshotHash, window dates, sample counts, executionHash,
+ * actual costs, actual trade count, benchmark status, random CI, Rank IC,
+ * coverage info, and any failure reasons.
+ */
+function _writeSmokeSummary(result, windows, opts) {
+  var summaryPath = path.join(ARTIFACTS_DIR, 'smoke_summary.json');
+  try {
+    if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
+  } catch (_) {}
+
+  var windowResult = (result && result.windows && result.windows.length > 0) ? result.windows[0] : null;
+  var smoke = {
+    mode: 'smokeOnly',
+    hypothesisId: 'H1',
+    runAt: new Date().toISOString(),
+    windowIndex: 0,
+    dataHash: null,
+    snapshotHash: result ? result.snapshotHash : null,
+    windowHash: null,
+    executionHash: null,
+    windowDates: {
+      trainStart: windows && windows[0] ? windows[0].trainDates[0] : null,
+      trainEnd: windows && windows[0] ? windows[0].trainDates[windows[0].trainDates.length - 1] : null,
+      validateStart: windows && windows[0] ? windows[0].validateDates[0] : null,
+      validateEnd: windows && windows[0] ? windows[0].validateDates[windows[0].validateDates.length - 1] : null,
+      testStart: windows && windows[0] ? windows[0].testDates[0] : null,
+      testEnd: windows && windows[0] ? windows[0].testDates[windows[0].testDates.length - 1] : null,
+    },
+    samples: {
+      train: null,
+      validate: null,
+      test: null,
+    },
+    costs: {
+      roundTripCostPct: null,
+      commissionRate: null,
+      stampTaxRate: null,
+      transferFeeRate: null,
+      slippagePct: null,
+    },
+    execution: {
+      executionHash: null,
+      executedTrades: null,
+      totalSignals: null,
+      actualRoundTripCostPct: null,
+    },
+    benchmark: {
+      status: 'unavailable',
+      tradeCount: null,
+      unavailableCount: null,
+      return: null,
+    },
+    randomControl: {
+      monteCarloSamples: null,
+      pairedDelta_ci95_lower: null,
+      pairedDelta_ci95_upper: null,
+      pairedDelta_mean: null,
+      pValue: null,
+    },
+    metrics: {
+      avgRankIC: null,
+      rankICDays: null,
+      directionAccuracy: null,
+      testMSE: null,
+    },
+    portfolio: {
+      netReturn: null,
+      grossReturn: null,
+      netExcessReturn: null,
+      sharpeRatio: null,
+      maxDrawdownBps: null,
+    },
+    coverage: {
+      totalSnapshotsAvailable: null,
+      windowsAvailable: null,
+    },
+    errors: [],
+    verdict: 'pending',
+  };
+
+  // Fill from result
+  if (windowResult) {
+    smoke.executionHash = result.executionHash || null;
+
+    if (windowResult.window) {
+      smoke.samples.train = windowResult.model ? windowResult.model.trainSamples : null;
+      smoke.samples.validate = windowResult.model ? windowResult.model.valSamples : null;
+      smoke.samples.test = windowResult.model ? windowResult.model.testSamples : null;
+    }
+
+    if (windowResult.portfolio) {
+      var p = windowResult.portfolio;
+      smoke.execution.executedTrades = p.executedTrades;
+      smoke.execution.totalSignals = p.totalSignals;
+      smoke.execution.actualRoundTripCostPct = p.roundTripCostPct;
+      smoke.portfolio.netReturn = p.netReturn;
+      smoke.portfolio.grossReturn = p.grossReturn;
+      smoke.portfolio.netExcessReturn = p.netExcessReturn;
+      smoke.portfolio.sharpeRatio = p.sharpeRatio;
+      smoke.portfolio.maxDrawdownBps = p.maxDrawdownBps;
+    }
+
+    if (windowResult.vsBenchmark) {
+      smoke.benchmark.status = windowResult.vsBenchmark.status || (windowResult.vsBenchmark.benchmarkTradeCount > 0 ? 'available' : 'unavailable');
+      smoke.benchmark.tradeCount = windowResult.vsBenchmark.benchmarkTradeCount;
+      smoke.benchmark.return = windowResult.vsBenchmark.benchmarkReturn;
+    }
+
+    if (windowResult.vsRandom && !windowResult.vsRandom.error) {
+      smoke.randomControl.monteCarloSamples = windowResult.vsRandom.monteCarloSamples;
+      smoke.randomControl.pairedDelta_ci95_lower = windowResult.vsRandom.pairedDelta_ci95_lower;
+      smoke.randomControl.pairedDelta_ci95_upper = windowResult.vsRandom.pairedDelta_ci95_upper;
+      smoke.randomControl.pairedDelta_mean = windowResult.vsRandom.pairedDelta_mean;
+      smoke.randomControl.pValue = windowResult.vsRandom.pValue;
+    }
+
+    if (windowResult.metrics) {
+      smoke.metrics.avgRankIC = windowResult.metrics.avgRankIC;
+      smoke.metrics.rankICDays = windowResult.metrics.rankICDays;
+      smoke.metrics.directionAccuracy = windowResult.metrics.directionAccuracy;
+      smoke.metrics.testMSE = windowResult.metrics.testMSE;
+    }
+
+    if (opts && opts.costAssumptions) {
+      smoke.costs.roundTripCostPct = opts.costAssumptions.roundTripCostPct;
+      smoke.costs.commissionRate = opts.costAssumptions.commissionRate;
+      smoke.costs.stampTaxRate = opts.costAssumptions.stampTaxRate;
+      smoke.costs.transferFeeRate = opts.costAssumptions.transferFeeRate;
+      smoke.costs.slippagePct = opts.costAssumptions.slippagePct;
+    }
+  }
+
+  // Errors
+  if (result && result.error) {
+    smoke.errors.push('runner_error: ' + result.error);
+  }
+  if (windowResult && windowResult.error) {
+    smoke.errors.push('window_error: ' + windowResult.error);
+  }
+  if (windowResult && windowResult.vsRandom && windowResult.vsRandom.error) {
+    smoke.errors.push('random_control_error: ' + windowResult.vsRandom.error);
+  }
+
+  // Verdict
+  var hasSamples = smoke.samples.test > 0 || smoke.samples.train > 0;
+  var hasTrades = smoke.execution.executedTrades > 0;
+  var hasRandom = smoke.randomControl.pairedDelta_ci95_lower != null;
+  if (!hasSamples) {
+    smoke.verdict = 'failed: no samples loaded';
+  } else if (!hasTrades) {
+    smoke.verdict = 'inconclusive: zero trades executed';
+  } else if (!hasRandom) {
+    smoke.verdict = 'inconclusive: random control unavailable';
+  } else if (smoke.errors.length > 0) {
+    smoke.verdict = 'completed with warnings';
+  } else {
+    smoke.verdict = 'completed: samples ok, trades ok, random control available';
+  }
+
+  try {
+    fs.writeFileSync(summaryPath, JSON.stringify(smoke, null, 2), 'utf8');
+    console.log('Smoke summary written: ' + summaryPath);
+  } catch (e) {
+    console.error('Failed to write smoke summary: ' + e.message);
+  }
+
+  return smoke;
 }
 
 // ---- CLI ----

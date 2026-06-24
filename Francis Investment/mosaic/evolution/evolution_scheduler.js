@@ -222,6 +222,9 @@ function checkAndRun(now, dateStr) {
       tryRunTask('candidate_evaluation', dateStr, function() {
         var runner = require('../research/candidate_runner');
         return runner.runAllHypotheses({
+          hypotheses: CANDIDATE_RUNNER_CONFIG.hypotheses || ['H1', 'H2', 'H3'],
+          windowsStart: CANDIDATE_RUNNER_CONFIG.windowsStart != null ? CANDIDATE_RUNNER_CONFIG.windowsStart : 0,
+          windowsEnd: CANDIDATE_RUNNER_CONFIG.windowsEnd != null ? CANDIDATE_RUNNER_CONFIG.windowsEnd : 5,
           monteCarloSamples: CANDIDATE_RUNNER_CONFIG.monteCarloSamples || 100,
           costAssumptions: CANDIDATE_RUNNER_CONFIG.costAssumptions,
         });
@@ -349,6 +352,9 @@ function tryRunCatchup(now, dateStr) {
           var cfg;
           try { cfg = require('../config').CANDIDATE_RUNNER; } catch (_) { cfg = { enabled: true }; }
           return runner.runAllHypotheses({
+            hypotheses: cfg.hypotheses || ['H1', 'H2', 'H3'],
+            windowsStart: cfg.windowsStart != null ? cfg.windowsStart : 0,
+            windowsEnd: cfg.windowsEnd != null ? cfg.windowsEnd : 5,
             monteCarloSamples: cfg.monteCarloSamples || 100,
             costAssumptions: cfg.costAssumptions,
           });

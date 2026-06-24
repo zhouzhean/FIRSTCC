@@ -1296,6 +1296,16 @@ function buildResearchLabData() {
     warning: null,
     // P0.2: Coverage checklist
     coverageAudit: null,
+    // P1.3: H1 Smoke status
+    h1Smoke: {
+      status: 'not_run',    // not_run | running | completed | failed
+      runAt: null,
+      window: null,
+      tradeCount: null,
+      dataHash: null,
+      executionHash: null,
+      verdict: null,
+    },
   };
 
   try {
@@ -1680,6 +1690,29 @@ function buildResearchLabData() {
       }
     }
   } catch (_) {}
+
+  // P1.3: Load H1 smoke summary
+  try {
+    var smokePath = path.join(__dirname, 'report-engine', 'data', 'research', 'model_artifacts', 'smoke_summary.json');
+    if (fs.existsSync(smokePath)) {
+      var smoke = JSON.parse(fs.readFileSync(smokePath, 'utf8'));
+      data.h1Smoke = {
+        status: smoke.verdict ? (smoke.verdict.indexOf('completed') === 0 ? 'completed' : (smoke.verdict.indexOf('failed') === 0 ? 'failed' : 'completed')) : 'not_run',
+        runAt: smoke.runAt || null,
+        window: smoke.windowIndex != null ? 'Window ' + (smoke.windowIndex + 1) : null,
+        tradeCount: smoke.execution ? smoke.execution.executedTrades : null,
+        totalSignals: smoke.execution ? smoke.execution.totalSignals : null,
+        dataHash: smoke.snapshotHash ? smoke.snapshotHash.slice(0, 16) : null,
+        executionHash: smoke.executionHash ? smoke.executionHash.slice(0, 16) : null,
+        verdict: smoke.verdict || null,
+        samples: smoke.samples || null,
+        benchmarkStatus: smoke.benchmark ? smoke.benchmark.status : 'unavailable',
+        randomControlAvailable: smoke.randomControl ? (smoke.randomControl.pairedDelta_ci95_lower != null) : false,
+        rankIC: smoke.metrics ? smoke.metrics.avgRankIC : null,
+        errors: smoke.errors || [],
+      };
+    }
+  } catch (_) { /* no smoke_summary.json yet — stays not_run */ }
 
   // Determine overall status (P0.2: yellow until data rebuilt; P0.3: reject Ridge-v1)
   if (data.p0Status === 'pass' && data.p0DataRegenerated && data.validWindows > 0 && data.dataHash) {
