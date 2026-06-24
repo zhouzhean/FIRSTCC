@@ -698,9 +698,20 @@ function runCandidateEvaluation(options) {
   }
 
   // ---- Phase 1: Research windows (0-3) ----
-  // P1.3: When window subset is used (windowsStart > 0 or limited windowsEnd),
+  // P1.3: When smokeOnly, iterate all selected windows directly (no registry dependency).
+  // In normal mode, use registry's research window indices.
+  // When window subset is used (windowsStart > 0 or limited windowsEnd),
   // only evaluate research windows that fall within the selected subset.
-  var researchIndices = REG.getResearchWindowIndices();
+  var researchIndices;
+  if (isSmoke) {
+    // P1.3: Smoke mode — evaluate all selected windows directly (registry bypassed)
+    researchIndices = [];
+    for (var sri = 0; sri < windows.length; sri++) {
+      researchIndices.push(sri);
+    }
+  } else {
+    researchIndices = REG.getResearchWindowIndices();
+  }
   var results = [];
   var allResearchComplete = true;
 
