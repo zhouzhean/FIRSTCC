@@ -28,7 +28,48 @@ this into a verbose implementation diary.
 
 ## Current Verified State
 
-Last supervisory review: 2026-06-25, P1.5 cloud-health and canonical-cohort review.
+Last supervisory review: 2026-06-25, P1.6 canonical-slot root-cause review.
+
+### Current Supervisory Conclusion: P1.6
+
+P1.6 fixed a real production blocker: the 09:30 full-pipeline task had been
+recorded as `9:30`, while canonical acceptance required `09:30`. The scheduler
+now normalizes scheduled slots to `HH:MM` before calling Simfolio and before
+deciding whether to generate canonical acceptance.
+
+Cloud verification after deployment:
+
+- `/api/status` reports build/deploy commit `9c3be3c`, deploy manifest valid,
+  heartbeat alive, and event loop not blocked.
+- `/api/cockpit` exposes canonical diagnostics showing the old 2026-06-25
+  ledger contains `scheduledSlot` values `9:30`, `13:00`, and `null`, with
+  zero `09:30` canonical entries.
+- `/api/prediction-settlement` reports 309 ledger entries, 0 canonical entries,
+  0 prediction-valid entries, and 309 global blocks.
+- `/api/cohort-integrity` reports no daily research manifest for 2026-06-25.
+
+Interpretation: this is a root-cause fix, not yet a production acceptance. The
+bad 2026-06-25 ledger was generated before the fix and cannot prove P1.6
+success or failure. The next trading-day 09:30 run must naturally create the
+daily research manifest and canonical cohort.
+
+New risk exposed by the diagnostics: all existing ledger entries have
+`predictionValid=false` because `expectedReturn=null`. If the next 09:30 run
+creates the manifest but still has `predictionValid=0` or `researchEligible=0`,
+the next blocker is the expected-return wiring into the Top-50 research ledger.
+Do not start H2 until this is understood.
+
+Required next acceptance check:
+
+1. After the next trading-day 09:30 full scan, verify
+   `/api/cockpit`, `/api/prediction-settlement`, and `/api/cohort-integrity`.
+2. Accept P1.6 only if `daily_research_manifest_YYYY-MM-DD.json` exists,
+   `canonicalCohort.completed=true`, `runId` is non-empty, canonical count is
+   50 or has a precise failure reason, and the three API surfaces agree.
+3. If canonical count is 50 but `predictionValid=0`, pause H2 and fix the
+   expected-return ledger path before running any new hypothesis.
+4. If canonical count is 50 and `researchEligible>0`, run H2 smoke in one
+   window only. H2 four-window research waits for smoke output review.
 
 ### Latest Verified Milestone
 
