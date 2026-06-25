@@ -39,7 +39,7 @@
           2,
           3
         ],
-        "aggregateRankIC": -0.037425,
+        "aggregateRankIC": -0.044325,
         "windowResults": {
           "w1": {
             "rankIC": -0.0378,
@@ -50,11 +50,11 @@
             ]
           },
           "w2": {
-            "rankIC": -0.0332,
-            "netReturn": -8.47,
+            "rankIC": -0.0608,
+            "netReturn": -12.5,
             "deltaCI": [
-              -14.91,
-              -8.03
+              -13.25,
+              -5.83
             ]
           },
           "w3": {
@@ -347,7 +347,7 @@
           2,
           3
         ],
-        "aggregateRankIC": -0.037425,
+        "aggregateRankIC": -0.044325,
         "windowResults": {
           "w1": {
             "rankIC": -0.0378,
@@ -358,11 +358,11 @@
             ]
           },
           "w2": {
-            "rankIC": -0.0332,
-            "netReturn": -8.47,
+            "rankIC": -0.0608,
+            "netReturn": -12.5,
             "deltaCI": [
-              -14.91,
-              -8.03
+              -13.25,
+              -5.83
             ]
           },
           "w3": {

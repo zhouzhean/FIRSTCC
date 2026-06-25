@@ -473,6 +473,176 @@ if (promoBlocked && promoBlocked.error === 'rejected_permanent') {
 }
 
 // ────────────────────────────────────────────────────────────
+// Test Group 4b: P1.5 — windowResults Generation
+// ────────────────────────────────────────────────────────────
+
+console.log('\n--- Test Group 4b: P1.5 windowResults Generation ---');
+
+// Test 4b-1: buildWindowResultsFromEvaluations generates correct w1-w4
+var CR_P15 = require('../mosaic/research/candidate_registry').createRegistry({ dataDir: path.join(TEST_DATA_DIR, 'p15_test') });
+var regP15 = CR_P15.registerCandidate({
+  hypothesisId: 'H1', hypothesis: 'Test',
+  snapshotHash: 'hash_snap', strategyHash: 'hash_strat', featureSchemaHash: 'hash_fea',
+  predictedFeatures: ['technical'], interaction: null,
+});
+if (!regP15 || !regP15.versionId) {
+  fail('P15 test setup', 'registerCandidate failed: ' + JSON.stringify(regP15));
+} else {
+  // Record 4 windows with known values matching H1 real data
+  var winData = [
+    { wi: 0, rankIC: -0.0378, netReturn: -14.24, deltaCI: [-8.60, -2.27], dirAcc: 47.33 },
+    { wi: 1, rankIC: -0.0608, netReturn: -12.50, deltaCI: [-13.25, -5.83], dirAcc: 50.23 },
+    { wi: 2, rankIC: -0.0332, netReturn: -8.47,  deltaCI: [-14.91, -8.03], dirAcc: 52.0 },
+    { wi: 3, rankIC: -0.0455, netReturn: -4.43,  deltaCI: [-4.48, 2.06], dirAcc: 48.0 },
+  ];
+  for (var wi = 0; wi < winData.length; wi++) {
+    var wd = winData[wi];
+    CR_P15.recordEvaluation(regP15.versionId, wd.wi, {
+      rankIC: wd.rankIC, netReturn: wd.netReturn, grossReturn: 0, netExcessReturn: wd.netReturn,
+      deltaCI: wd.deltaCI, directionAccuracy: wd.dirAcc,
+      candidateVersionId: regP15.versionId, hypothesisId: 'H1',
+      strategyHash: 'hash_strat', featureSchemaHash: 'hash_fea', snapshotHash: 'hash_snap',
+      windowId: 'window_00' + (wd.wi + 1), costAssumptions: { roundTripCostPct: 0.452 },
+      benchmarkStatus: 'unavailable',
+      windowDates: { trainStart: 'a', trainEnd: 'b', validateStart: 'c', validateEnd: 'd', testStart: 'e', testEnd: 'f' },
+    });
+  }
+
+  // Test 4b-1a: buildWindowResultsFromEvaluations() generates correct w1-w4
+  var cand = CR_P15.getCandidates({}).filter(function(c) { return c.versionId === regP15.versionId; })[0];
+  var built = CR_P15.buildWindowResultsFromEvaluations(cand);
+  if (built && built.windowResults) {
+    var wr = built.windowResults;
+    if (wr.w1 && wr.w1.rankIC === -0.0378 && wr.w1.netReturn === -14.24) {
+      pass('P15: w1 correct (rankIC=-0.0378, netReturn=-14.24)');
+    } else {
+      fail('P15 w1', 'expected rankIC=-0.0378 netReturn=-14.24, got: ' + JSON.stringify(wr.w1));
+    }
+    if (wr.w2 && wr.w2.rankIC === -0.0608 && wr.w2.netReturn === -12.5) {
+      pass('P15: w2 correct (rankIC=-0.0608, netReturn=-12.5)');
+    } else {
+      fail('P15 w2', 'expected rankIC=-0.0608 netReturn=-12.5, got: ' + JSON.stringify(wr.w2));
+    }
+    if (wr.w3 && wr.w3.rankIC === -0.0332 && wr.w3.netReturn === -8.47) {
+      pass('P15: w3 correct (rankIC=-0.0332, netReturn=-8.47)');
+    } else {
+      fail('P15 w3', 'expected rankIC=-0.0332 netReturn=-8.47, got: ' + JSON.stringify(wr.w3));
+    }
+    if (wr.w4 && wr.w4.rankIC === -0.0455 && wr.w4.netReturn === -4.43) {
+      pass('P15: w4 correct (rankIC=-0.0455, netReturn=-4.43)');
+    } else {
+      fail('P15 w4', 'expected rankIC=-0.0455 netReturn=-4.43, got: ' + JSON.stringify(wr.w4));
+    }
+  } else {
+    fail('P15 buildWindowResults', 'no windowResults returned');
+  }
+
+  // Test 4b-1b: aggregateRankIC is correct
+  if (built && built.aggregateRankIC != null && Math.abs(built.aggregateRankIC - (-0.044325)) < 0.0001) {
+    pass('P15: aggregateRankIC correct (' + built.aggregateRankIC + ')');
+  } else {
+    fail('P15 aggregateRankIC', 'expected -0.044325, got: ' + (built ? built.aggregateRankIC : null));
+  }
+
+  // Test 4b-2: rejectCandidate auto-generates windowResults when evaluationResults exist but evidence is minimal
+  var minEvidence = { reason: 'test rejection' };
+  var rejResult = CR_P15.rejectCandidate(regP15.versionId, minEvidence);
+  if (rejResult && rejResult.rejected) {
+    var rejCand = CR_P15.getCandidates({}).filter(function(c) { return c.versionId === regP15.versionId; })[0];
+    var rejEv = rejCand && rejCand.rejectionEvidence;
+    if (rejEv && rejEv.windowResults && rejEv.windowResults.w1 && rejEv.windowResults.w2) {
+      if (rejEv.windowResults.w2.rankIC === -0.0608 && rejEv.windowResults.w1.rankIC === -0.0378) {
+        pass('P15: rejectCandidate auto-generated windowResults from evaluationResults');
+      } else {
+        fail('P15 rejectCandidate auto-gen', 'wrong values: ' + JSON.stringify(rejEv.windowResults));
+      }
+    } else {
+      fail('P15 rejectCandidate auto-gen', 'windowResults missing from rejectionEvidence');
+    }
+    if (rejEv && rejEv.aggregateRankIC != null && Math.abs(rejEv.aggregateRankIC - (-0.044325)) < 0.0001) {
+      pass('P15: rejectCandidate auto-generated aggregateRankIC');
+    } else {
+      fail('P15 rejectCandidate auto-gen aggIC', 'got: ' + (rejEv ? rejEv.aggregateRankIC : null));
+    }
+  } else {
+    fail('P15 rejectCandidate on test', 'rejection failed: ' + JSON.stringify(rejResult));
+  }
+
+  // Test 4b-3: rejectCandidate preserves caller-provided windowResults if present
+  // Re-use H3 hypothesisId since the test registry only has H1/H2/H3
+  var regP15b = CR_P15.registerCandidate({
+    hypothesisId: 'H3', hypothesis: 'Test with explicit evidence',
+    snapshotHash: 'hash_snap2', strategyHash: 'hash_strat2', featureSchemaHash: 'hash_fea2',
+    predictedFeatures: ['technical'], interaction: null,
+  });
+  if (regP15b && regP15b.versionId) {
+    for (var wj = 0; wj < winData.length; wj++) {
+      var ed = winData[wj];
+      CR_P15.recordEvaluation(regP15b.versionId, ed.wi, {
+        rankIC: ed.rankIC, netReturn: ed.netReturn, grossReturn: 0, netExcessReturn: ed.netReturn,
+        deltaCI: ed.deltaCI, directionAccuracy: ed.dirAcc,
+        candidateVersionId: regP15b.versionId, hypothesisId: 'H1b',
+        strategyHash: 'hash_strat', featureSchemaHash: 'hash_fea', snapshotHash: 'hash_snap',
+        windowId: 'window_00' + (ed.wi + 1), costAssumptions: { roundTripCostPct: 0.452 },
+        benchmarkStatus: 'unavailable',
+        windowDates: { trainStart: 'a', trainEnd: 'b', validateStart: 'c', validateEnd: 'd', testStart: 'e', testEnd: 'f' },
+      });
+    }
+    var explicitEv = {
+      reason: 'manual rejection',
+      aggregateRankIC: -0.05,
+      windowResults: { w1: { rankIC: 0.01, netReturn: 1.0, deltaCI: [0, 2] } },
+    };
+    var rejResult2 = CR_P15.rejectCandidate(regP15b.versionId, explicitEv);
+    var rejCand2 = CR_P15.getCandidates({}).filter(function(c) { return c.versionId === regP15b.versionId; })[0];
+    var rejEv2 = rejCand2 && rejCand2.rejectionEvidence;
+    if (rejEv2 && rejEv2.windowResults && rejEv2.windowResults.w1 && rejEv2.windowResults.w1.rankIC === 0.01) {
+      pass('P15: rejectCandidate preserved explicit windowResults');
+    } else {
+      fail('P15 rejectCandidate explicit', 'explicit windowResults were overwritten: ' + JSON.stringify(rejEv2 ? rejEv2.windowResults : null));
+    }
+  } else {
+    fail('P15 explicit evidence setup', 'registerCandidate failed: ' + JSON.stringify(regP15b));
+  }
+
+  // Test 4b-4: rejectCandidate handles candidates with no evaluationResults gracefully
+  var regP15c = CR_P15.registerCandidate({
+    hypothesisId: 'H2', hypothesis: 'No eval results',
+    snapshotHash: 'hash_snap3', strategyHash: 'hash_strat3', featureSchemaHash: 'hash_fea3',
+    predictedFeatures: ['technical'], interaction: null,
+  });
+  if (regP15c && regP15c.versionId) {
+    var rejResult3 = CR_P15.rejectCandidate(regP15c.versionId, { reason: 'no data' });
+    var rejCand3 = CR_P15.getCandidates({}).filter(function(c) { return c.versionId === regP15c.versionId; })[0];
+    if (rejResult3 && rejResult3.rejected && rejCand3 && rejCand3.rejectionEvidence) {
+      // Should have empty windowResults since no evaluationResults
+      pass('P15: rejectCandidate without evaluationResults does not crash');
+    } else {
+      fail('P15 no-eval crash', 'rejectCandidate failed: ' + JSON.stringify(rejResult3));
+    }
+  } else {
+    fail('P15 no-eval setup', 'registerCandidate failed: ' + JSON.stringify(regP15c));
+  }
+
+  // Cleanup P15 test dir
+  try {
+    var p15Dir = path.join(TEST_DATA_DIR, 'p15_test');
+    if (fs.existsSync(p15Dir)) {
+      var rimrafP15 = function(dir) {
+        if (!fs.existsSync(dir)) return;
+        fs.readdirSync(dir).forEach(function(item) {
+          var itemPath = path.join(dir, item);
+          if (fs.statSync(itemPath).isDirectory()) rimrafP15(itemPath);
+          else fs.unlinkSync(itemPath);
+        });
+        fs.rmdirSync(dir);
+      };
+      rimrafP15(p15Dir);
+    }
+  } catch (_) {}
+}
+
+// ────────────────────────────────────────────────────────────
 // Test Group 5: Lock Windows
 // ────────────────────────────────────────────────────────────
 

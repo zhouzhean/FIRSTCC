@@ -1,23 +1,19 @@
 {
-  "commit": "9b261571e7c974f98cf532fbf98a1690fc4713bd",
-  "version": "v3.4.9.7",
-  "deployedAt": "2026-06-24T14:10:00.000Z",
+  "commit": "9ce77322aff07105aa7fa9b7e2bf8018f419b514",
+  "version": "v3.4.9.8",
+  "deployedAt": "2026-06-25T14:54:45.902Z",
   "branch": "master",
   "files": {
-    "mosaic_server.js": "0a8d69c3d818d678",
-    "mosaic/research/baseline_models.js": "9daa05639460131a",
-    "mosaic/research/rolling_oos_evaluation.js": "e7452f0977e3a1d6",
-    "report-engine/cockpit.js": "6fcad385fe013695",
-    "test/test_benchmark_null_semantics.js": "816be5b88b37f6fd",
-    "mosaic/config.js": "bf3606ba022f205d",
-    "mosaic/pipeline.js": "2d38c13984818d7e",
-    "mosaic/scheduler.js": "fc8489a31397e241",
-    "mosaic/decision_kernel.js": "2f17dc9b98be06bb",
-    "mosaic/simfolio.js": "e968f64c5b47369f",
-    "mosaic/factors/composite.js": "f55bfd365bc7f67b",
-    "mosaic/factors/hidden_signals.js": "71506a0eaea9c0de",
-    "mosaic/collectors/market_data.js": "7479a60ddf9131e1",
-    "mosaic/predict/expected_return.js": "58c263e95df3cfdd",
-    "mosaic/research/trade_simulator.js": "5b6e0cc7225245f2"
+    "mosaic_server.js": "1869078ecfd7277e",
+    "mosaic/research/candidate_runner.js": "1b423551e8112563",
+    "mosaic/evolution/evolution_scheduler.js": "89452e2c5ab6d510",
+    "mosaic/research/baseline_models.js": "ffcdfe0bca511eb1",
+    "mosaic/research/candidate_registry.js": "746cec57c7dc8963",
+    "mosaic/research/cohort_stats.js": "a721f8df64de4c03",
+    "mosaic/research/linear_model.js": "b2d3b068bf2cd4f2",
+    "mosaic/research/trade_simulator.js": "a88ed4448584c8e1",
+    "mosaic/research/true_walk_forward.js": "f7252070819f56e3",
+    "mosaic/config.js": "93d231cdfecefe58",
+    "mosaic/scheduler.js": "0890336efe6f4e82"
   }
 }

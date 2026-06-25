@@ -24,6 +24,11 @@ let scheduler = null;
 // Server start time (for uptime display)
 let serverStartTime = null;
 
+// P1.5: Observability — heartbeat + currentTask for health/status endpoints
+let currentTask = null;         // { taskId, progress, startedAt }
+let lastHeartbeat = null;       // timestamp (ms) updated every 1s
+let eventLoopBlockedMs = 0;     // max gap between heartbeats (detects event loop blockage)
+
 // SSE clients for Think Tank
 const sseClients = new Set();
 
@@ -403,6 +408,7 @@ function apiStatus() {
   var pStatus = pipeline ? pipeline.getStatus() : null;
   var sStatus = scheduler ? scheduler.getStatus() : null;
   var cfg = require('./mosaic/config');
+  var hbAge = lastHeartbeat ? (Date.now() - lastHeartbeat) : null;
   return {
     date: dStr,
     weekday: getWeekdayCN(today),
@@ -418,6 +424,14 @@ function apiStatus() {
     deployManifestValid: (cfg.deployManifestValid || false),
     deployFileHashCount: (cfg.deployFileHashCount || 0),
     identityStatus: (cfg.identityStatus || 'manifest_missing'),  // matched | mismatch | git_only | manifest_only | manifest_missing
+    // P1.5: Observability fields
+    currentTask: currentTask ? {
+      taskId: currentTask.taskId,
+      progress: currentTask.progress,
+      startedAt: currentTask.startedAt,
+    } : null,
+    lastHeartbeat: lastHeartbeat ? new Date(lastHeartbeat).toISOString() : null,
+    eventLoopBlocked: hbAge !== null ? hbAge > 5000 : false,
     pipeline: pStatus,
     scheduler: sStatus,
   };
@@ -1730,6 +1744,118 @@ function buildResearchLabData() {
     }
   } catch (_) { /* no smoke_summary.json yet — stays not_run */ }
 
+  // P1.5: Load H1 rejection evidence from candidate_registry.json
+  try {
+    var regPath = path.join(__dirname, 'report-engine', 'data', 'research', 'candidate_registry.json');
+    if (fs.existsSync(regPath)) {
+      var reg = JSON.parse(fs.readFileSync(regPath, 'utf8'));
+      if (reg.candidates && reg.candidates.length > 0) {
+        for (var ci = 0; ci < reg.candidates.length; ci++) {
+          var c = reg.candidates[ci];
+          if (c.hypothesisId === 'H1' && c.rejectionEvidence) {
+            data.h1Rejection = {
+              reason: c.rejectionEvidence.reason || 'Rejected based on formal 4-window study',
+              aggregateRankIC: c.rejectionEvidence.aggregateRankIC,
+              windowResults: c.rejectionEvidence.windowResults || null,
+              mcSamples: c.rejectionEvidence.mcSamples,
+              rejectedAt: c.rejectedAt,
+            };
+            // Overwrite the TWFS-based verdict with authoritative registry verdict
+            data.modelVerdict = 'REJECTED_RESEARCH';
+            data.modelVerdictReason = c.rejectionEvidence.reason || data.modelVerdictReason;
+            break;
+          }
+        }
+      }
+    }
+  } catch (_) { /* candidate_registry.json not available */ }
+
+  // P1.5: Load canonical cohort status for today
+  try {
+    var todayStr = new Date().toISOString().slice(0, 10);
+    var manifestPath = path.join(__dirname, 'report-engine', 'data', 'daily_research_manifest_' + todayStr + '.json');
+    if (fs.existsSync(manifestPath)) {
+      var man = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      data.canonicalCohort = {
+        date: todayStr,
+        completed: man.status === 'completed',
+        runId: man.canonicalRunId || null,
+        manifestStatus: man.status || null,
+        writtenCount: man.writtenCount != null ? man.writtenCount : null,
+        expectedCount: man.expectedCount != null ? man.expectedCount : null,
+        researchEligible: man.researchEligible != null ? man.researchEligible : null,
+        executionEligible: man.executionEligible != null ? man.executionEligible : null,
+        blockReason: man.status !== 'completed' ? ('manifest status=' + man.status + ', written=' + man.writtenCount + '/' + man.expectedCount) : null,
+        codeVersion: man.codeVersion || null,
+      };
+    } else {
+      // P1.6: Build detailed diagnostic when manifest is missing
+      var cohortDiag = {
+        date: todayStr,
+        completed: false,
+        runId: null,
+        ledgerTotal: null,
+        researchEligible: null,
+        executionEligible: null,
+        blockReason: 'manifest not yet generated',
+      };
+      // Check if scheduler ran 09:30 at all
+      try {
+        if (scheduler) {
+          var sOps = scheduler.getStatus().scheduledOps || [];
+          var had0930 = sOps.some(function(op) { return op.indexOf('_9:30') !== -1 || op.indexOf('_09:30') !== -1; });
+          var hadFull = sOps.some(function(op) { return op.indexOf('full_pipeline') !== -1; });
+          cohortDiag.schedulerRun0930 = had0930;
+          cohortDiag.schedulerHadFullPipeline = hadFull;
+          cohortDiag.schedulerOps = sOps.filter(function(op) { return op.indexOf('pipeline') !== -1; });
+        }
+      } catch (_) {}
+      // Check ledger for entries + their scheduledSlot values
+      try {
+        var plPath = path.join(__dirname, 'report-engine', 'data', 'simfolio', 'prediction_ledger_' + todayStr + '.jsonl');
+        if (fs.existsSync(plPath)) {
+          var plLines = fs.readFileSync(plPath, 'utf8').trim().split('\n').filter(Boolean);
+          cohortDiag.ledgerEntryCount = plLines.length;
+          // Sample scheduledSlot distribution
+          var slotDist = {};
+          var canonicalCount = 0;
+          var predValidCount = 0;
+          for (var pli = 0; pli < plLines.length; pli++) {
+            try {
+              var ple = JSON.parse(plLines[pli]);
+              var sl = ple.scheduledSlot || 'null';
+              slotDist[sl] = (slotDist[sl] || 0) + 1;
+              if (ple.canonical) canonicalCount++;
+              if (ple.predictionValid) predValidCount++;
+            } catch (_) {}
+          }
+          cohortDiag.scheduledSlotDistribution = slotDist;
+          cohortDiag.canonicalEntryCount = canonicalCount;
+          cohortDiag.predictionValidCount = predValidCount;
+          // If entries exist but none are canonical, explain why
+          if (plLines.length > 0 && canonicalCount === 0) {
+            var reasons = [];
+            if (!had0930) reasons.push('09:30 slot not found in scheduledOps');
+            var slotKeys = Object.keys(slotDist);
+            if (slotKeys.length === 1 && slotKeys[0] === '9:30') {
+              reasons.push('scheduledSlot="9:30" (missing leading zero) — canonical gate requires "09:30"');
+            } else if (slotKeys.length > 0) {
+              reasons.push('scheduledSlot values: ' + slotKeys.join(', ') + ' — none match "09:30"');
+            }
+            if (!predValidCount) reasons.push('all entries have predictionValid=false (expectedReturn=null — prediction engine not wired)');
+            if (reasons.length > 0) cohortDiag.diagnosis = reasons;
+          }
+        } else {
+          cohortDiag.ledgerEntryCount = 0;
+          cohortDiag.diagnosis = ['prediction ledger not found — pipeline may not have completed successfully'];
+        }
+      } catch (_) {}
+      data.canonicalCohort = cohortDiag;
+    }
+  } catch (_) {
+    data.canonicalCohort = { completed: false, error: 'cannot read manifest' };
+  }
+
   // Determine overall status (P0.2: yellow until data rebuilt; P0.3: reject Ridge-v1)
   if (data.p0Status === 'pass' && data.p0DataRegenerated && data.validWindows > 0 && data.dataHash) {
     data.status = 'operational';
@@ -1796,6 +1922,27 @@ const server = http.createServer(async function(req, res) {
 
   // ---- API routes ----
   if (pathname === '/api/status') return jsonResponse(res, apiStatus());
+
+  // P1.5: Lightweight health endpoint — no file I/O, responds <10ms
+  if (pathname === '/api/health') {
+    var uptimeSec = serverStartTime ? Math.floor((Date.now() - new Date(serverStartTime).getTime()) / 1000) : 0;
+    var hbAge = lastHeartbeat ? (Date.now() - lastHeartbeat) : null;
+    return jsonResponse(res, {
+      status: 'ok',
+      uptime: uptimeSec,
+      currentTask: currentTask ? {
+        taskId: currentTask.taskId,
+        progress: currentTask.progress,
+        startedAt: currentTask.startedAt,
+        elapsedMs: currentTask.startedAt ? (Date.now() - new Date(currentTask.startedAt).getTime()) : null,
+      } : null,
+      lastHeartbeat: lastHeartbeat ? new Date(lastHeartbeat).toISOString() : null,
+      heartbeatAgeMs: hbAge,
+      eventLoopBlocked: hbAge !== null ? hbAge > 5000 : false,
+      eventLoopMaxGapMs: eventLoopBlockedMs,
+      version: (require('./mosaic/config').version || 'v3.4.5'),
+    });
+  }
   if (pathname === '/api/reports-index') return jsonResponse(res, apiReportsIndex());
   if (pathname === '/api/recommendation-history') return jsonResponse(res, apiRecommendationHistory());
 
@@ -3882,6 +4029,16 @@ const server = http.createServer(async function(req, res) {
 server.listen(PORT, '0.0.0.0', function() {
   serverStartTime = new Date().toISOString();
 
+  // P1.5: Heartbeat — updates every 1 second to detect event loop blockage
+  setInterval(function() {
+    var now = Date.now();
+    if (lastHeartbeat) {
+      var gap = now - lastHeartbeat;
+      if (gap > eventLoopBlockedMs) eventLoopBlockedMs = gap;
+    }
+    lastHeartbeat = now;
+  }, 1000);
+
   // v3.4.9.3: Mark existing ledger entries with hash-only featureSnapshot as invalid_schema_v3492
   // These entries are retained for audit but excluded from verification/promotion
   try {
@@ -3892,6 +4049,29 @@ server.listen(PORT, '0.0.0.0', function() {
   // 启动全自动调度器
   scheduler = new Scheduler();
   scheduler.start();
+
+  // P1.5: Wire evolution_scheduler task observer for observability
+  // Reports current long-running task to /api/health and /api/status
+  try {
+    var evolutionScheduler = require('./mosaic/evolution/evolution_scheduler');
+    evolutionScheduler.setTaskObserver({
+      onTaskStart: function(taskId, progress) {
+        currentTask = {
+          taskId: taskId,
+          progress: progress || { processed: 0, total: 1, message: '开始...' },
+          startedAt: new Date().toISOString(),
+        };
+      },
+      onTaskEnd: function() {
+        currentTask = null;
+      },
+      onTaskProgress: function(progress) {
+        if (currentTask) currentTask.progress = progress;
+      },
+    });
+  } catch (_) {
+    console.log('[Mosaic] evolution_scheduler task observer not available');
+  }
 
   // Inject SSE broadcast into scheduler (used by weekend analyzer too)
   scheduler.setSSEBroadcast((data) => {

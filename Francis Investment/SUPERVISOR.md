@@ -28,7 +28,7 @@ this into a verbose implementation diary.
 
 ## Current Verified State
 
-Last supervisory review: 2026-06-22, v3.4.9.4.2 source and cloud review.
+Last supervisory review: 2026-06-25, P1.5 cloud-health and canonical-cohort review.
 
 ### Latest Verified Milestone
 
@@ -491,22 +491,178 @@ Test 12 verifies smoke isolation (only smoke_summary.json changes).
 
 Tests: 46 integration + 26 registry = 72 total, all passing. Cloud deployed.
 
+### P1.5 ✅ COMPLETED (2026-06-25)
+
+**P1.5-A — H1 windowResults bug fix**:
+- Added `buildWindowResultsFromEvaluations()` in `candidate_registry.js` that programmatically
+  generates `windowResults` from authoritative `evaluationResults`. No more hand-crafted summaries.
+- `rejectCandidate()` auto-generates `windowResults` and `aggregateRankIC` when caller doesn't
+  provide them. Caller-provided `windowResults` are preserved if explicitly set.
+- Fixed `candidate_registry.json` data: W2 corrected from duplicated W3 values (rankIC=-0.0332)
+  to true W2 values (rankIC=-0.0608, netReturn=-12.5, deltaCI=[-13.25, -5.83]).
+- `aggregateRankIC` corrected from -0.037425 (W3 counted twice) to -0.044325 (true average).
+- 4 new tests covering generation, auto-reject, explicit evidence preservation, no-crash on empty.
+
+**P1.5-B — Cloud observability**:
+- New `GET /api/health` endpoint: zero file I/O, responds in <10ms. Returns status, uptime,
+  currentTask, lastHeartbeat, heartbeatAgeMs, eventLoopBlocked, eventLoopMaxGapMs, version.
+- 1-second heartbeat `setInterval` detects event loop blockage (max gap tracked).
+- `evolution_scheduler.setTaskObserver()` wires task lifecycle into `currentTask` global.
+- `/api/status` now includes `currentTask`, `lastHeartbeat`, `eventLoopBlocked`.
+- Cloud verified: `/api/health` responds quickly; heartbeat shows normal (<1s age).
+
+**P1.5-C — Release identity unified**:
+- `mosaic/config.js` version: `v3.4.9.7` → `v3.4.9.8`.
+- `deploy_manifest.json`: commit → `9ce7732`, version → `v3.4.9.8`, file hashes regenerated.
+- Cloud confirms: `version=v3.4.9.8`, `deployCommit=9ce7732`, `identityStatus=manifest_verified_no_git`,
+  `deployManifestValid=true`, `deployFileHashCount=11`.
+
+**P1.5-D — Cockpit canonical cohort visibility**:
+- H1 REJECTED_RESEARCH banner in Research Lab panel with per-window Rank IC values and aggregate.
+- Canonical Cohort status section showing date, status, runId, record counts, eligible split, block reason.
+- Backend reads `candidate_registry.json` for authoritative H1 rejection evidence, and
+  `daily_research_manifest_YYYY-MM-DD.json` for canonical cohort status.
+
+**Tests**: 143 total all passing (35 reg + 46 int + 18 canonical + 11 cohort + 17 benchmark + 16 model reg).
+**Cloud deployed**: All endpoints verified responsive.
+
+### Supervisor Verification: P1.5 Cloud + 09:30 Canonical (2026-06-25 22:42 CST)
+
+Verified fixed:
+
+- Cloud observability is restored. `/api/health` responds quickly and reports
+  `eventLoopBlocked=false`, sub-second heartbeat age, and version `v3.4.9.8`.
+- Release identity is internally coherent on cloud: `/api/status` reports
+  `version=v3.4.9.8`, `buildCommit=deployCommit=9ce7732`, and
+  `deployManifestValid=true` with `identityStatus=manifest_verified_no_git`.
+  However, local P1.5 source files are still dirty, so this is not yet a clean
+  Git-reproducible release until the P1.5 changes are committed and the manifest
+  points to that commit.
+- H1 rejection evidence is corrected and visible through Cockpit data:
+  `modelVerdict=REJECTED_RESEARCH`, aggregate Rank IC `-0.044325`, and W2 is
+  correctly `rankIC=-0.0608`, net return `-12.50%`, delta CI
+  `[-13.25%, -5.83%]`.
+- Focused local verification passed: `test_candidate_registry.js` 35/35,
+  `test_cohort_api_consistency.js` 11/11, plus `node --check` for
+  `candidate_registry.js` and `mosaic_server.js`.
+
+Still blocking:
+
+- The 2026-06-25 09:30 canonical cohort is missing. `/api/cockpit` reports
+  `canonicalCohort.completed=false`, `runId=null`, and `blockReason="manifest
+  not yet generated"`. `/api/prediction-settlement` reports
+  `canonicalCohortCount=0`, `intradayCount=309`, `researchEligible=0`,
+  `executionEligible=0`, and `globalBlocked=309`; `/api/cohort-integrity`
+  agrees with `canonicalCohortCount=0`.
+- P1.5 is deployed but not cleanly committed locally. Treat the cloud manifest
+  as a deployed-file manifest, not yet as proof that Git can reproduce the exact
+  source state.
+- Therefore the historical H1 research loop is proven enough to reject H1, but
+  the live 09:30 production data loop is not yet accepted for today.
+
+Next instruction: do not start H2 until the missing canonical manifest is
+explained and fixed. Inspect scheduler events/logs for
+`full_pipeline_2026-06-25_9:30`, verify whether Simfolio received
+`scanType="full"` and `scheduledSlot="09:30"`, and determine why 309 intraday
+records were written without a canonical daily manifest. After a corrected next
+trading-day canonical cohort exists, then run H2 smoke, followed by H2 windows
+0--3 locally with 1000 MC and deploy results only.
+
+**Next per supervisor instruction**: Do NOT start H2. Verify 09:30 canonical cohort when it runs,
+then enter H2 smoke single-window → H2 windows 0-3 with 1000 MC (run locally, deploy results only).
+
+### Daily Supervisor Review: 2026-06-25 10:00 CST
+
+Verified local state:
+
+- Latest local HEAD is `6b387f7` (`P1.4: evolution_scheduler catch-up gate +
+  window plan fix + H1 Smoke UI`). The key P1.4 source changes are present:
+  catch-up candidate evaluation now respects `CANDIDATE_RUNNER.enabled`,
+  candidate evaluation writes the full six-window plan instead of the selected
+  slice, and Cockpit has an H1 Smoke Evidence render path.
+- `CANDIDATE_RUNNER.enabled` remains `false`, which is still the correct
+  fail-closed state until the next formal research run is intentionally started.
+- Workspace is not clean: `report-engine/data/deploy_manifest.json` is modified
+  and research output folders are untracked generated data. Do not revert them
+  automatically, but do not treat them as a verified release artifact either.
+- Release identity is inconsistent locally: `CLAUDE.md` says v3.4.9.8,
+  `mosaic/config.js` still reports v3.4.9.7, the dirty deployment manifest
+  points to `ce58c2d`, and local HEAD is `6b387f7`. This must be cleaned before
+  any formal research result is considered reproducible.
+
+Verified cloud state:
+
+- `http://8.153.101.112:8765` accepts TCP connections, but `/api/status`,
+  `/api/cockpit`, `/api/think-tank/decision-status`, `/`, and `/cockpit.html`
+  returned no HTTP bytes before timeout. This means cloud runtime state, decision
+  gate, data validity, strategy health, prediction evidence, model state, and UI
+  accountability could not be verified today.
+- Because the review ran around 10:00 CST, the most likely operational risk is a
+  long synchronous market/research task blocking the Node HTTP event loop after
+  the 09:30/10:00 schedule. This is a production-operability issue, not alpha
+  evidence.
+
+Current supervisory conclusion:
+
+- Do not advance to the formal H1 four-window study while the cloud API is
+  unresponsive or release identity is inconsistent.
+- The next required action is an operational hardening pass: keep health/status
+  endpoints responsive during scans, expose current task/progress/last heartbeat,
+  and make long research/pipeline work non-blocking or offloaded. After that,
+  restore a single authoritative version/commit/manifest identity and rerun the
+  three API checks.
+
+### Latest Review: P1.4 H1 Formal Research Result (2026-06-25)
+
+Local evidence now shows H1 has been formally falsified, not merely smoke-tested.
+The production candidate registry records `candidate_H1_09964c063314e667` as
+`REJECTED_RESEARCH`, with research windows 0--3 evaluated under 1000 Monte Carlo
+samples, fixed data/strategy/execution hashes, and preserved H1 artefacts.
+
+H1 results:
+
+- Aggregate Rank IC: -0.037425.
+- Window 1: Rank IC -0.0378, net return -14.24%, delta CI [-8.60%, -2.27%].
+- Window 2: Rank IC -0.0608, net return -12.50%, delta CI [-13.25%, -5.83%].
+- Window 3: Rank IC -0.0332, net return -8.47%, delta CI [-14.91%, -8.03%].
+- Window 4: Rank IC -0.0455, net return -4.43%, delta CI [-4.48%, 2.06%].
+
+Supervisory conclusion: H1 Momentum + Volatility is rejected. Do not tune,
+rerun, relabel, or reinterpret H1. It should remain as negative research
+evidence and a regression fixture for the research factory.
+
+Open verification risks:
+
+- Cloud APIs still time out with no HTTP bytes, so cloud runtime state and UI
+  visibility of the H1 rejection are not independently verified.
+- Release identity remains inconsistent locally: `mosaic/config.js` reports
+  v3.4.9.7, `CLAUDE.md` reports v3.4.9.8, `deploy_manifest.json` points to
+  `ce58c2d`, and local HEAD is now `9ce7732`.
+- The H1 rejection summary is internally inconsistent: detailed
+  `evaluationResults` show Window 2 as Rank IC -0.0608, net return -12.50%,
+  delta CI [-13.25%, -5.83%], while `rejectionEvidence.windowResults.w2` and
+  the terminal summary show the Window 3-style values. The H1 rejection still
+  stands, but the summary generator must be repaired before H2.
+- `CANDIDATE_RUNNER.enabled` remains false, which is correct, but the default
+  configured MC count is 100 while the accepted formal H1 study used 1000. The
+  research-run MC count must be explicit per run and visible in the UI/registry.
+
 ### Next controlled action
 
-After the three P1.4 lifecycle/UI fixes deploy and pass, run H1 exactly once
-over research windows 0--3 with the frozen data, execution configuration, and
-hypothesis. Do not alter H1 features, weights, thresholds, or costs. The run
-must record all four windows and then make one evidence-backed decision:
-
-- Failure of the pre-registered gates: write `REJECTED_RESEARCH` with all four
-  window metrics and preserve artefacts. Do not retry or tune H1.
-- Pass: it may become `SHADOW_CANDIDATE` only; first build matched historical
-  benchmark data, then run the two untouched lock windows. It still has no
-  trading permission.
-
-Only after this decision should FI start H2. H3 follows H2. This keeps the
-research factory falsifiable instead of creating an ever-growing pile of
-untested factors.
+1. **Restore cloud observability and release identity before more research.**
+   `/api/status`, `/api/cockpit`, and `/api/think-tank/decision-status` must
+   respond quickly during scans/research tasks, expose current task/progress and
+   last heartbeat, and report one authoritative version/commit/manifest. A
+   system that cannot answer its health endpoint is not autonomous.
+2. **Verify the 09:30 canonical production cohort.** Confirm today's
+   `daily_research_manifest_YYYY-MM-DD.json`, canonical run ID, Top-50 ledger
+   count, research/execution eligibility split, and exact no-buy/block reason.
+   This validates the live data loop independently from historical H1 research.
+3. **Then start H2 as the next falsifiable research hypothesis.** Run H2 first
+   as one smoke window, then if the pipeline and UI remain healthy, run windows
+   0--3 with the same frozen execution config and 1000 MC. H3 waits until H2 is
+   either rejected or promoted to shadow-review status. No H1 tuning and no live
+   trading permission changes.
 
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 

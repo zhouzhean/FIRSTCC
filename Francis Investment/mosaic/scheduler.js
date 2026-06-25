@@ -532,16 +532,18 @@ class Scheduler extends EventEmitter {
 
     // Full Pipeline
     for (const time of SC.fullPipelineTimes) {
-      const opKey = 'full_pipeline_' + dateStr + '_' + time.hour + ':' + time.minute;
+      var slotHour = String(time.hour).padStart(2, '0');
+      var slotMinute = String(time.minute).padStart(2, '0');
+      const opKey = 'full_pipeline_' + dateStr + '_' + slotHour + ':' + slotMinute;
       if (!this._scheduledOps.has(opKey) && h === time.hour && m >= time.minute && m < time.minute + 5) {
         this._scheduledOps.add(opKey);
-        this._runFullPipeline('scheduled_' + time.hour + ':' + String(time.minute).padStart(2, '0'));
+        this._runFullPipeline('scheduled_' + slotHour + ':' + slotMinute);
       }
     }
 
     // Mid-Day Scan
     for (const time of SC.midDayScanTimes) {
-      const opKey = 'mid_scan_' + dateStr + '_' + time.hour + ':' + time.minute;
+      const opKey = 'mid_scan_' + dateStr + '_' + String(time.hour).padStart(2, '0') + ':' + String(time.minute).padStart(2, '0');
       if (!this._scheduledOps.has(opKey) && h === time.hour && m >= time.minute && m < time.minute + 5) {
         this._scheduledOps.add(opKey);
         this._runMidDayScan();
@@ -661,6 +663,11 @@ class Scheduler extends EventEmitter {
         var runId = this._sessionId + '_' + 'full' + '_' + this._scanCounter;
         // v3.4.9.4.1 P0-2: Extract scheduled slot from reason (e.g. 'scheduled_09:30' → '09:30')
         var scheduledSlot = (reason && reason.indexOf('scheduled_') === 0) ? reason.slice('scheduled_'.length) : 'unknown';
+        // P1.6: Defensive normalization — ensure HH:MM format (pad hour with leading zero)
+        if (scheduledSlot !== 'unknown' && scheduledSlot.indexOf(':') !== -1) {
+          var _parts = scheduledSlot.split(':');
+          scheduledSlot = String(_parts[0]).padStart(2, '0') + ':' + String(_parts[1] || '00').padStart(2, '0');
+        }
 
         const pf = simfolio.loadPortfolio();
         const crossMarket = require('./analysis/cross_market');

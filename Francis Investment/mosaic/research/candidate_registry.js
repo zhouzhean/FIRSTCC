@@ -274,6 +274,37 @@ function createRegistry(options) {
       return { promoted: true, versionId: versionId, status: 'SHADOW_CANDIDATE', avgRankIC: avgIC, positiveReturnWindows: positiveReturnWindows };
     },
 
+    // P1.5: Programmatic windowResults generation (factory scope)
+    buildWindowResultsFromEvaluations: function (candidate) {
+      var windowResults = {};
+      var rankICs = [];
+      if (candidate.evaluationResults && candidate.evaluationResults.length > 0) {
+        var sorted = candidate.evaluationResults.slice().sort(function(a, b) {
+          return (a.windowIndex || 0) - (b.windowIndex || 0);
+        });
+        for (var i = 0; i < sorted.length; i++) {
+          var ev = sorted[i];
+          var wi = ev.windowIndex;
+          if (wi >= 0 && wi <= 3) {
+            var label = 'w' + (wi + 1);
+            windowResults[label] = {
+              rankIC: ev.rankIC,
+              netReturn: ev.netReturn,
+              deltaCI: ev.deltaCI ? ev.deltaCI.slice() : null,
+            };
+            if (ev.rankIC != null) rankICs.push(ev.rankIC);
+          }
+        }
+      }
+      var aggregateRankIC = null;
+      if (rankICs.length > 0) {
+        var sum = 0;
+        for (var j = 0; j < rankICs.length; j++) { sum += rankICs[j]; }
+        aggregateRankIC = sum / rankICs.length;
+      }
+      return { windowResults: windowResults, aggregateRankIC: aggregateRankIC };
+    },
+
     rejectCandidate: function (versionId, evidence) {
       var candidate = null;
       for (var i = 0; i < registryState.candidates.length; i++) {
@@ -283,10 +314,21 @@ function createRegistry(options) {
       if (candidate.status === 'REJECTED_RESEARCH') {
         return { rejected: true, versionId: versionId, status: 'REJECTED_RESEARCH', alreadyRejected: true };
       }
+      // P1.5: Auto-generate windowResults from evaluationResults if evidence doesn't provide them
+      evidence = evidence || {};
+      if (candidate.evaluationResults && candidate.evaluationResults.length > 0) {
+        if (!evidence.windowResults || Object.keys(evidence.windowResults).length === 0) {
+          var generated = buildWindowResultsFromEvaluations(candidate);
+          evidence.windowResults = generated.windowResults;
+          if (generated.aggregateRankIC != null) {
+            evidence.aggregateRankIC = generated.aggregateRankIC;
+          }
+        }
+      }
       var previousStatus = candidate.status;
       candidate.status = 'REJECTED_RESEARCH';
       candidate.rejectedAt = new Date().toISOString();
-      candidate.rejectionEvidence = evidence || {};
+      candidate.rejectionEvidence = evidence;
       try {
         var MODEL_REGISTRY = require('../evolution/model_registry');
         MODEL_REGISTRY.rejectModel(versionId, evidence);
@@ -716,8 +758,55 @@ function promoteToShadowCandidate(versionId) {
 }
 
 /**
+ * P1.5: Build windowResults from evaluationResults programmatically.
+ * This ensures rejection summaries are always derived from authoritative
+ * evaluation data, never hand-crafted or copy-pasted.
+ *
+ * @param {object} candidate
+ * @returns {object} { windowResults: {w1,w2,w3,w4}, aggregateRankIC }
+ */
+function buildWindowResultsFromEvaluations(candidate) {
+  var windowResults = {};
+  var rankICs = [];
+
+  if (candidate.evaluationResults && candidate.evaluationResults.length > 0) {
+    // Sort by windowIndex ascending
+    var sorted = candidate.evaluationResults.slice().sort(function(a, b) {
+      return (a.windowIndex || 0) - (b.windowIndex || 0);
+    });
+
+    for (var i = 0; i < sorted.length; i++) {
+      var ev = sorted[i];
+      var wi = ev.windowIndex;
+      // Only include research windows 0-3 in the summary
+      if (wi >= 0 && wi <= 3) {
+        var label = 'w' + (wi + 1); // windowIndex 0 → w1, 1 → w2, etc.
+        windowResults[label] = {
+          rankIC: ev.rankIC,
+          netReturn: ev.netReturn,
+          deltaCI: ev.deltaCI ? ev.deltaCI.slice() : null,
+        };
+        if (ev.rankIC != null) rankICs.push(ev.rankIC);
+      }
+    }
+  }
+
+  var aggregateRankIC = null;
+  if (rankICs.length > 0) {
+    var sum = 0;
+    for (var j = 0; j < rankICs.length; j++) { sum += rankICs[j]; }
+    aggregateRankIC = sum / rankICs.length;
+  }
+
+  return { windowResults: windowResults, aggregateRankIC: aggregateRankIC };
+}
+
+/**
  * Formally reject a candidate with research evidence.
  * Idempotent — repeating the call on an already-rejected candidate is a no-op.
+ *
+ * P1.5: Auto-generates windowResults from evaluationResults when evidence
+ * does not provide them, preventing copy-paste errors in rejection summaries.
  *
  * @param {string} versionId
  * @param {object} evidence — { reason, windowsChecked, avgRankIC, allRankICs, pairedDeltaCI }
@@ -740,11 +829,23 @@ function rejectCandidate(versionId, evidence) {
       alreadyRejected: true };
   }
 
+  // P1.5: Auto-generate windowResults from evaluationResults if evidence doesn't provide them
+  evidence = evidence || {};
+  if (candidate.evaluationResults && candidate.evaluationResults.length > 0) {
+    if (!evidence.windowResults || Object.keys(evidence.windowResults).length === 0) {
+      var generated = buildWindowResultsFromEvaluations(candidate);
+      evidence.windowResults = generated.windowResults;
+      if (generated.aggregateRankIC != null) {
+        evidence.aggregateRankIC = generated.aggregateRankIC;
+      }
+    }
+  }
+
   // Save previousStatus BEFORE mutation (line 354 sets to REJECTED_RESEARCH)
   var previousStatus = candidate.status;
   candidate.status = 'REJECTED_RESEARCH';
   candidate.rejectedAt = new Date().toISOString();
-  candidate.rejectionEvidence = evidence || {};
+  candidate.rejectionEvidence = evidence;
 
   // Also register in model_registry for cross-module blocking
   try {

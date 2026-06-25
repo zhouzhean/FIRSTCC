@@ -38,6 +38,13 @@ var _state = {
   runningProgress: null, // { processed, total, message } v2.7.0
 };
 
+// P1.5: Task observer for observability (wired by mosaic_server.js)
+var _taskObserver = null;
+
+function setTaskObserver(observer) {
+  _taskObserver = observer || null;
+}
+
 // Load persisted history
 (function loadPersistedHistory() {
   if (!HISTORY_FILE || !fs) return;
@@ -587,6 +594,11 @@ function tryRunTask(taskId, dateStr, runFn) {
   _state.runningTask = taskId;
   _state.runningProgress = { processed: 0, total: 1, message: '开始...' };
 
+  // P1.5: Notify task observer for observability
+  if (_taskObserver && typeof _taskObserver.onTaskStart === 'function') {
+    try { _taskObserver.onTaskStart(taskId, _state.runningProgress); } catch (_) {}
+  }
+
   console.log('[EvolutionScheduler] 开始: ' + taskId + ' (' + dateStr + ')');
 
   // v3.3.0: Timeout + retry wrapper
@@ -736,6 +748,11 @@ function recordTaskResult(taskId, dateStr, result, error) {
   _state.running = false;
   _state.runningTask = null;
   _state.runningProgress = null;
+
+  // P1.5: Notify task observer on completion
+  if (_taskObserver && typeof _taskObserver.onTaskEnd === 'function') {
+    try { _taskObserver.onTaskEnd(); } catch (_) {}
+  }
 }
 
 // ==================== [v2.7.0]: Manual trigger ====================
@@ -812,4 +829,5 @@ module.exports = {
   checkAndRun,
   getStatus,
   runAllNow,
+  setTaskObserver,  // P1.5: observability hook
 };

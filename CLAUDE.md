@@ -16,7 +16,7 @@ Static web project — no build tools, no package manager, no tests. HTML/CSS/JS
 - **Local debug**: `node mosaic_server.js` → `http://localhost:8765`
 - **Desktop shortcut**: `open.vbs` → opens cloud URL in Chrome `--app` mode
 - **Stop server**: `taskkill /F /IM node.exe` (local) or `systemctl stop mosaic` (cloud)
-- **Version**: v3.4.9.7 — Research Validity Repair (P0-P1) + Research Output Interpretability (P0.2)
+- **Version**: v3.4.9.8 — P1.4 Candidate Runner Lifecycle + H1 Smoke UI + H1 REJECTED_RESEARCH
 
 ## Git
 

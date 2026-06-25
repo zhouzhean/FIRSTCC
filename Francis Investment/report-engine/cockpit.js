@@ -1000,6 +1000,30 @@ function renderResearchLab(researchLab) {
   }
   html += '</div>';
 
+  // P1.5: H1 rejection verdict banner — prominent, always visible when rejected
+  if (researchLab.modelVerdict === 'REJECTED_RESEARCH' || researchLab.h1Rejection) {
+    var rejInfo = researchLab.h1Rejection || {};
+    html += '<div style="padding:8px 12px;margin-bottom:10px;background:#fee2e2;border-radius:4px;border-left:3px solid #dc2626;">';
+    html += '<span style="font-weight:700;color:#dc2626;font-size:13px;"> H1 REJECTED_RESEARCH</span>';
+    html += '<div style="font-size:10px;color:#dc2626;margin-top:4px;">';
+    html += esc(researchLab.modelVerdictReason || rejInfo.reason || 'No stable alpha signal detected across 4 research windows.');
+    // Show key metrics from rejection
+    if (rejInfo.windowResults) {
+      var wr = rejInfo.windowResults;
+      var keys = Object.keys(wr).sort();
+      html += '<div style="margin-top:3px;font-size:9px;color:#991b1b;">';
+      for (var ki = 0; ki < keys.length; ki++) {
+        var w = wr[keys[ki]];
+        html += keys[ki] + ': IC=' + esc(String(Math.round((w.rankIC || 0) * 10000) / 10000)) + ' ';
+      }
+      if (rejInfo.aggregateRankIC != null) {
+        html += ' avg=' + esc(String(Math.round(rejInfo.aggregateRankIC * 10000) / 10000));
+      }
+      html += '</div>';
+    }
+    html += '</div></div>';
+  }
+
   // Universe info
   html += '<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;">';
   html += '<div style="flex:1;min-width:80px;text-align:center;padding:6px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
@@ -1214,6 +1238,44 @@ function renderResearchLab(researchLab) {
 
       html += '</div>';  // close h1Smoke section
     }
+  }
+
+  // P1.5: Canonical cohort status
+  if (researchLab.canonicalCohort) {
+    var cc = researchLab.canonicalCohort;
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px;">';
+    html += '<div style="font-size:10px;font-weight:600;"> Canonical Cohort</div>';
+    var ccStatus = cc.completed ? '#16a34a' : cc.error ? '#dc2626' : '#a16207';
+    var ccBg = cc.completed ? '#f0fdf4' : cc.error ? '#fee2e2' : '#fefce8';
+    html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+    html += '<span style="font-size:9px;background:' + ccBg + ';color:' + ccStatus + ';padding:1px 4px;border-radius:3px;">' +
+      esc(cc.completed ? 'completed' : cc.error ? 'error' : 'pending') + '</span>';
+    if (cc.date) html += '<span style="font-size:9px;color:#64748b;">' + esc(cc.date) + '</span>';
+    if (cc.runId) html += '<span style="font-size:9px;color:#64748b;font-family:monospace;">' + esc(cc.runId.slice(0, 16)) + '</span>';
+    // P1.6: Show manifest writtenCount if available
+    if (cc.writtenCount != null) html += '<span style="font-size:9px;color:#64748b;">Written: ' + cc.writtenCount + '/' + (cc.expectedCount || '?') + '</span>';
+    html += '</div>';
+    html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+    html += '<span style="font-size:9px;color:#64748b;">Records: ' + (cc.ledgerTotal != null ? cc.ledgerTotal : (cc.ledgerEntryCount != null ? cc.ledgerEntryCount : '?')) + '</span>';
+    html += '<span style="font-size:9px;color:#16a34a;">Research: ' + (cc.researchEligible != null ? cc.researchEligible : '?') + '</span>';
+    html += '<span style="font-size:9px;color:#2563eb;">Exec: ' + (cc.executionEligible != null ? cc.executionEligible : '?') + '</span>';
+    // P1.6: Show canonical/predictionValid counts
+    if (cc.canonicalEntryCount != null) html += '<span style="font-size:9px;color:#16a34a;">Canonical: ' + cc.canonicalEntryCount + '</span>';
+    if (cc.predictionValidCount != null) html += '<span style="font-size:9px;color:#2563eb;">PredValid: ' + cc.predictionValidCount + '</span>';
+    if (cc.scheduledSlotDistribution) {
+      var slots = Object.keys(cc.scheduledSlotDistribution).map(function(k) { return k + ':' + cc.scheduledSlotDistribution[k]; }).join(', ');
+      html += '<span style="font-size:9px;color:#64748b;">Slots: ' + esc(slots) + '</span>';
+    }
+    if (cc.blockReason) {
+      html += '<span style="font-size:9px;color:#dc2626;">Block: ' + esc(cc.blockReason) + '</span>';
+    }
+    // P1.6: Show diagnosis array when present
+    if (cc.diagnosis && cc.diagnosis.length > 0) {
+      for (var di = 0; di < cc.diagnosis.length; di++) {
+        html += '<div style="font-size:9px;color:#dc2626;background:#fee2e2;padding:2px 4px;border-radius:3px;width:100%;">' + esc(cc.diagnosis[di]) + '</div>';
+      }
+    }
+    html += '</div></div>';
   }
 
   // Legacy composite note
