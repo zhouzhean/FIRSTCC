@@ -649,15 +649,23 @@ function runCandidateEvaluation(options) {
     }
     console.log();
 
-    // Set evaluation windows in registry (first 4 = research, last 2 = lock)
-    REG.setEvaluationWindows(windows.map(function (w) {
-      return {
-        trainStart: w.trainDates[0],
-        trainEnd: w.trainDates[w.trainDates.length - 1],
-        testStart: w.testDates[0],
-        testEnd: w.testDates[w.testDates.length - 1],
-      };
-    }));
+    // P1.4-B: Always write full 6-window plan (allWindows) to registry, not the sliced subset.
+    // windowsStart/windowsEnd only control which absolute windowIndex values execute this run.
+    // Check if windows already set (resume scenario) — don't overwrite existing plan.
+    var existingWinCount = REG.getStatus().evaluationWindows.total;
+    if (existingWinCount === 0) {
+      var fullWins = opts.allWindows || windows;
+      REG.setEvaluationWindows(fullWins.map(function (w) {
+        return {
+          trainStart: w.trainDates[0],
+          trainEnd: w.trainDates[w.trainDates.length - 1],
+          testStart: w.testDates[0],
+          testEnd: w.testDates[w.testDates.length - 1],
+        };
+      }));
+    } else {
+      console.log('[CandidateRegistry] Windows already set (' + existingWinCount + ' total), preserving existing plan');
+    }
 
     // P1.2: Checkpoint/resume — union of registry evaluatedWindows + progress file
     var progress = _loadProgress();

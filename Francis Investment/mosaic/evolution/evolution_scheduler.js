@@ -347,18 +347,22 @@ function tryRunCatchup(now, dateStr) {
         });
         break;
       case 'candidate_evaluation':
-        tryRunTask(taskId, dateStr, function() {
-          var runner = require('../research/candidate_runner');
-          var cfg;
-          try { cfg = require('../config').CANDIDATE_RUNNER; } catch (_) { cfg = { enabled: true }; }
-          return runner.runAllHypotheses({
-            hypotheses: cfg.hypotheses || ['H1', 'H2', 'H3'],
-            windowsStart: cfg.windowsStart != null ? cfg.windowsStart : 0,
-            windowsEnd: cfg.windowsEnd != null ? cfg.windowsEnd : 5,
-            monteCarloSamples: cfg.monteCarloSamples || 100,
-            costAssumptions: cfg.costAssumptions,
+        // P1.4-A: Must respect CANDIDATE_RUNNER.enabled, same as normal path.
+        // Default fail-closed ({enabled: false}) — matches normal path line 216.
+        var crCfgCatchup;
+        try { crCfgCatchup = require('../config').CANDIDATE_RUNNER; } catch (_) { crCfgCatchup = { enabled: false }; }
+        if (crCfgCatchup.enabled) {
+          tryRunTask(taskId, dateStr, function() {
+            var runner = require('../research/candidate_runner');
+            return runner.runAllHypotheses({
+              hypotheses: crCfgCatchup.hypotheses || ['H1', 'H2', 'H3'],
+              windowsStart: crCfgCatchup.windowsStart != null ? crCfgCatchup.windowsStart : 0,
+              windowsEnd: crCfgCatchup.windowsEnd != null ? crCfgCatchup.windowsEnd : 5,
+              monteCarloSamples: crCfgCatchup.monteCarloSamples || 100,
+              costAssumptions: crCfgCatchup.costAssumptions,
+            });
           });
-        });
+        }
         break;
     }
   }

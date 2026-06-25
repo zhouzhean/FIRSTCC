@@ -1302,9 +1302,20 @@ function buildResearchLabData() {
       runAt: null,
       window: null,
       tradeCount: null,
+      totalSignals: null,
       dataHash: null,
       executionHash: null,
       verdict: null,
+      samples: null,
+      benchmarkStatus: 'unavailable',
+      randomControlAvailable: false,
+      rankIC: null,
+      errors: [],
+      // P1.4-C: Additional fields for H1 Smoke Evidence UI
+      netReturn: null,
+      deltaCiLower: null,
+      deltaCiUpper: null,
+      directionAccuracy: null,
     },
   };
 
@@ -1710,6 +1721,11 @@ function buildResearchLabData() {
         randomControlAvailable: smoke.randomControl ? (smoke.randomControl.pairedDelta_ci95_lower != null) : false,
         rankIC: smoke.metrics ? smoke.metrics.avgRankIC : null,
         errors: smoke.errors || [],
+        // P1.4-C: Additional fields for H1 Smoke Evidence UI
+        netReturn: smoke.portfolio ? smoke.portfolio.netReturn : null,
+        deltaCiLower: smoke.randomControl ? smoke.randomControl.pairedDelta_ci95_lower : null,
+        deltaCiUpper: smoke.randomControl ? smoke.randomControl.pairedDelta_ci95_upper : null,
+        directionAccuracy: smoke.metrics ? smoke.metrics.directionAccuracy : null,
       };
     }
   } catch (_) { /* no smoke_summary.json yet — stays not_run */ }

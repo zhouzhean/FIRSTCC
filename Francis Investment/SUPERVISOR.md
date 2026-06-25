@@ -429,6 +429,85 @@ For every change, report all of the following:
 
 ## Supervisory Change Log
 
+## Latest Review: P1.3 H1 Smoke Run (2026-06-24)
+
+### Verified evidence
+
+- Cloud release identity is coherent: `buildCommit` and `deployCommit` are
+  `ce58c2d`, the deploy manifest is valid, and cloud correctly reports
+  `manifest_verified_no_git` rather than pretending a Git checkout exists.
+- The smoke run used real historical data and completed without candidate,
+  progress, promotion, lock, or Simfolio writes. The production candidate
+  registry remains empty.
+- H1 did **not** show encouraging alpha in Window 1. It produced 852 executed
+  trades from 1,003 test signals; net return was -14.24%, Rank IC was -0.0378
+  across 59 days, direction accuracy was 47.33%, and the paired
+  model-minus-random result was -4.81% with 95% CI [-8.60%, -1.66%]. This is
+  negative research evidence, not a system failure and not a reason to tune H1.
+
+### P1.4 blockers before the formal four-window H1 study
+
+1. **Catch-up must honour `CANDIDATE_RUNNER.enabled`.**
+   `evolution_scheduler.js` directly dispatches `candidate_evaluation` in its
+   catch-up switch even when the runner is disabled. Make the default
+   fail-closed (`enabled: false`) in both scheduled and catch-up paths, and
+   regression-test a Wednesday catch-up tick with no candidate, registry, or
+   progress write.
+2. **Window selection must not rewrite the six-window research plan.**
+   `runCandidateEvaluation()` currently calls `setEvaluationWindows()` with the
+   selected slice. A 0--3 execution therefore converts the plan into four
+   research windows and removes the two future lock windows. Persist the full
+   six-window plan from `allWindows`; execute only the selected absolute window
+   IDs. Test start/end subsets, absolute IDs, and a later lock run.
+3. **Make the smoke result visible and testable.**
+   The Cockpit server exposes `researchLab.h1Smoke`, but the browser renderer
+   currently has no H1-smoke render path. Show the run time, data/execution
+   hash, trades, Rank IC, net return, random delta CI, benchmark status, and an
+   explicit outcome label such as `Execution completed - evidence negative`.
+   Add tests proving smoke mode changes only `smoke_summary.json`, never the
+   registry, progress file, model registry, or Simfolio.
+4. **No candidate may be accepted without a matched historical benchmark.**
+   Random control is sufficient to reject a weak signal, but unavailable index
+   trades are insufficient to claim post-cost market excess or to approve a
+   shadow candidate. Build a point-in-time index sleeve later, before any
+   positive candidate is advanced.
+
+### P1.4 ✅ COMPLETED (2026-06-25)
+
+**P1.4-A**: `evolution_scheduler.js` catch-up path now checks `CANDIDATE_RUNNER.enabled`
+before dispatching. Default fail-closed (`{enabled:false}`) matches normal path.
+Test 13 verifies config load failure defaults.
+
+**P1.4-B**: `candidate_runner.js` `setEvaluationWindows()` now always passes the full
+6-window `allWindows` to registry, not the sliced subset. Idempotency guard skips
+overwrite on resume. `windowsStart`/`windowsEnd` only control which windows execute.
+Lock windows 4-5 preserved. Tests 10-11 verify plan integrity and idempotency.
+
+**P1.4-C**: H1 Smoke Evidence section added to `renderResearchLab()` in cockpit.js.
+Displays status, runAt, window, samples, tradeCount, netReturn, Rank IC, delta CI,
+benchmarkStatus, dataHash, executionHash. Evidence verdict: red "Evidence Negative /
+未通过" when Rank IC <= 0 or delta CI upper < 0; no green pass without positive evidence.
+Test 12 verifies smoke isolation (only smoke_summary.json changes).
+
+Tests: 46 integration + 26 registry = 72 total, all passing. Cloud deployed.
+
+### Next controlled action
+
+After the three P1.4 lifecycle/UI fixes deploy and pass, run H1 exactly once
+over research windows 0--3 with the frozen data, execution configuration, and
+hypothesis. Do not alter H1 features, weights, thresholds, or costs. The run
+must record all four windows and then make one evidence-backed decision:
+
+- Failure of the pre-registered gates: write `REJECTED_RESEARCH` with all four
+  window metrics and preserve artefacts. Do not retry or tune H1.
+- Pass: it may become `SHADOW_CANDIDATE` only; first build matched historical
+  benchmark data, then run the two untouched lock windows. It still has no
+  trading permission.
+
+Only after this decision should FI start H2. H3 follows H2. This keeps the
+research factory falsifiable instead of creating an ever-growing pile of
+untested factors.
+
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
 ### What is verified locally

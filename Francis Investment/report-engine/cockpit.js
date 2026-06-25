@@ -1101,6 +1101,121 @@ function renderResearchLab(researchLab) {
     html += '</div></div>';
   }
 
+  // P1.4-C: H1 Smoke Evidence section
+  if (researchLab.h1Smoke) {
+    var hs = researchLab.h1Smoke;
+    var hasData = hs.status === 'completed' || hs.status === 'failed' ||
+                  (hs.rankIC != null || hs.tradeCount != null);
+    if (hasData) {
+      html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px;">';
+      html += '<div style="font-size:10px;font-weight:600;">H1 Smoke Evidence</div>';
+
+      // Status badge + run time + window
+      var smokeBg = hs.status === 'completed' ? '#f0fdf4' : hs.status === 'failed' ? '#fee2e2' : '#fefce8';
+      var smokeColor = hs.status === 'completed' ? '#16a34a' : hs.status === 'failed' ? '#dc2626' : '#a16207';
+      html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:baseline;">';
+      html += '<span style="font-size:9px;background:' + smokeBg + ';color:' + smokeColor +
+        ';padding:1px 4px;border-radius:3px;font-weight:600;">' + esc(hs.status) + '</span>';
+      if (hs.runAt) {
+        html += '<span style="font-size:9px;color:#64748b;">' + esc(hs.runAt.slice(0, 16).replace('T', ' ')) + '</span>';
+      }
+      if (hs.window) {
+        html += '<span style="font-size:9px;color:#64748b;">' + esc(hs.window) + '</span>';
+      }
+      html += '</div>';
+
+      // Key metrics row
+      html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+
+      // Samples
+      if (hs.samples) {
+        html += '<span style="font-size:9px;color:#64748b;">Samples: ' +
+          esc(String(hs.samples.train != null ? hs.samples.train : '?')) + '/' +
+          esc(String(hs.samples.validate != null ? hs.samples.validate : '?')) + '/' +
+          esc(String(hs.samples.test != null ? hs.samples.test : '?')) + '</span>';
+      }
+
+      // Trade count
+      if (hs.tradeCount != null) {
+        html += '<span style="font-size:9px;color:#64748b;">Trades: ' + esc(String(hs.tradeCount)) +
+          '/' + esc(String(hs.totalSignals || '?')) + '</span>';
+      }
+
+      // Net Return
+      if (hs.netReturn != null) {
+        var nr = hs.netReturn;
+        html += '<span style="font-size:9px;' + (nr > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Net: ' + esc(String(Math.round(nr * 10000) / 100)) + '%</span>';
+      }
+
+      // Rank IC
+      if (hs.rankIC != null) {
+        html += '<span style="font-size:9px;' + (hs.rankIC > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Rank IC: ' + esc(String(Math.round(hs.rankIC * 10000) / 10000)) + '</span>';
+      }
+
+      // Delta CI
+      if (hs.randomControlAvailable) {
+        html += '<span style="font-size:9px;color:#64748b;">Δ CI: [' +
+          esc(String(Math.round((hs.deltaCiLower != null ? hs.deltaCiLower : 0) * 10000) / 100)) + ', ' +
+          esc(String(Math.round((hs.deltaCiUpper != null ? hs.deltaCiUpper : 0) * 10000) / 100)) + ']%</span>';
+      }
+
+      // Benchmark status
+      if (hs.benchmarkStatus) {
+        var bmColor = hs.benchmarkStatus === 'available' ? '#16a34a' : '#94a3b8';
+        html += '<span style="font-size:9px;color:' + bmColor + ';">BM: ' +
+          esc(hs.benchmarkStatus) + '</span>';
+      }
+
+      html += '</div>';
+
+      // Hashes
+      if (hs.dataHash || hs.executionHash) {
+        html += '<div style="margin-top:4px;font-size:8px;color:#94a3b8;font-family:monospace;">';
+        if (hs.dataHash) {
+          html += 'data: ' + esc(hs.dataHash) + ' ';
+        }
+        if (hs.executionHash) {
+          html += 'exec: ' + esc(hs.executionHash);
+        }
+        html += '</div>';
+      }
+
+      // Evidence verdict — only green pass if BOTH Rank IC > 0 AND delta CI upper >= 0
+      var evidenceVerdict = null;
+      var evidenceBg = '#f0fdf4';
+      var evidenceColor = '#16a34a';
+      if (hs.status === 'completed') {
+        var rankICOk = (hs.rankIC != null && hs.rankIC > 0);
+        var deltaCIOk = (hs.randomControlAvailable && hs.deltaCiUpper != null && hs.deltaCiUpper >= 0);
+        if (!rankICOk || !deltaCIOk) {
+          evidenceVerdict = 'Evidence Negative / 未通过';
+          evidenceBg = '#fee2e2';
+          evidenceColor = '#dc2626';
+        } else if (hs.benchmarkStatus !== 'available') {
+          evidenceVerdict = 'Completed — benchmark unavailable, insufficient for promotion';
+          evidenceBg = '#fefce8';
+          evidenceColor = '#a16207';
+        } else {
+          evidenceVerdict = 'Evidence Positive — all gates passed';
+        }
+      } else if (hs.errors && hs.errors.length > 0) {
+        evidenceVerdict = 'Execution errors: ' + hs.errors.join('; ');
+        evidenceBg = '#fee2e2';
+        evidenceColor = '#dc2626';
+      }
+
+      if (evidenceVerdict) {
+        html += '<div style="margin-top:4px;padding:4px 8px;background:' + evidenceBg +
+          ';border-radius:3px;font-size:9px;font-weight:600;color:' + evidenceColor + ';">' +
+          esc(evidenceVerdict) + '</div>';
+      }
+
+      html += '</div>';  // close h1Smoke section
+    }
+  }
+
   // Legacy composite note
   html += '<div style="border-top:1px solid #e2e8f0;padding-top:4px;margin-top:6px;font-size:9px;color:#94a3b8;">';
   html += 'Legacy composite: quarantined as historical control only — not used for scoring or promotion.';
