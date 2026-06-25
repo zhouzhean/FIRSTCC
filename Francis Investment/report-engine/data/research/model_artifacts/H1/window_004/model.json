@@ -1,0 +1,21 @@
+{
+  "intercept": 0.2516,
+  "weights": [
+    -0.055,
+    0.2271,
+    0.1522
+  ],
+  "featureNames": [
+    "technical",
+    "volatility20d",
+    "technical_/_(1_+_volatility20d)"
+  ],
+  "lambda": 10,
+  "nFeatures": 3,
+  "trainedAt": "2026-06-25T02:14:24.873Z",
+  "trainSamples": 618041,
+  "valSamples": 29565,
+  "testSamples": 1003,
+  "hypothesisId": "H1",
+  "interaction": "technical / (1 + volatility20d)"
+}

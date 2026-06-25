@@ -1,5 +1,243 @@
 {
-  "candidates": [],
+  "candidates": [
+    {
+      "versionId": "candidate_H1_09964c063314e667",
+      "hypothesisId": "H1",
+      "hypothesis": "Momentum + Volatility",
+      "status": "REJECTED_RESEARCH",
+      "registeredAt": "2026-06-25T02:10:59.228Z",
+      "model": {},
+      "metrics": {},
+      "window": {
+        "trainStart": "2023-10-30",
+        "trainEnd": "2024-11-08",
+        "testStart": "2024-12-09",
+        "testEnd": "2025-03-10"
+      },
+      "artifactsPath": "C:\\Users\\anzhe\\FIRSTCC\\Francis Investment\\report-engine\\data\\research\\model_artifacts\\H1",
+      "strategyHash": "416d170ba97fbebc63454dd234f4972556947cdc0e4e1deab9fc7ce5e42b052d",
+      "featureSchemaHash": "a7ff8bb77ff3b9cc712b4e117a30a8b6b30442fe7aef2ae347a39db2ea70a8e3",
+      "snapshotHash": "b155957cc0e7adc3f24bad9916c10c989c64ee1b5943171bfbe452e5bfb9330b",
+      "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+      "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+      "evaluatedWindows": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "lastEvaluated": "2026-06-25T02:14:24.874Z",
+      "evaluationNotes": null,
+      "shadowSince": null,
+      "forwardSamples": 0,
+      "rejectedAt": "2026-06-25T02:16:35.084Z",
+      "rejectionEvidence": {
+        "reason": "All 4 research windows: avg Rank IC negative, 3/4 delta CI fully below zero. H1 Momentum+Volatility shows no alpha vs random control.",
+        "windows": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "aggregateRankIC": -0.037425,
+        "windowResults": {
+          "w1": {
+            "rankIC": -0.0378,
+            "netReturn": -14.24,
+            "deltaCI": [
+              -8.6,
+              -2.27
+            ]
+          },
+          "w2": {
+            "rankIC": -0.0332,
+            "netReturn": -8.47,
+            "deltaCI": [
+              -14.91,
+              -8.03
+            ]
+          },
+          "w3": {
+            "rankIC": -0.0332,
+            "netReturn": -8.47,
+            "deltaCI": [
+              -14.91,
+              -8.03
+            ]
+          },
+          "w4": {
+            "rankIC": -0.0455,
+            "netReturn": -4.43,
+            "deltaCI": [
+              -4.48,
+              2.06
+            ]
+          }
+        },
+        "mcSamples": 1000,
+        "dataHash": "b155957cc0e7adc3",
+        "strategyHash": "416d170ba97fbebc"
+      },
+      "evaluationResults": [
+        {
+          "windowIndex": 0,
+          "windowRole": "research",
+          "rankIC": -0.0378,
+          "netReturn": -14.24,
+          "grossReturn": -9.86,
+          "benchmarkReturn": 0,
+          "netExcessReturn": -14.24,
+          "deltaCI": [
+            -8.600000000000001,
+            -2.2699999999999996
+          ],
+          "directionAccuracy": 47.33,
+          "candidateVersionId": "candidate_H1_09964c063314e667",
+          "hypothesisId": "H1",
+          "strategyHash": "416d170ba97fbebc63454dd234f4972556947cdc0e4e1deab9fc7ce5e42b052d",
+          "featureSchemaHash": "a7ff8bb77ff3b9cc712b4e117a30a8b6b30442fe7aef2ae347a39db2ea70a8e3",
+          "snapshotHash": "b155957cc0e7adc3f24bad9916c10c989c64ee1b5943171bfbe452e5bfb9330b",
+          "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+          "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+          "windowId": "window_001",
+          "costAssumptions": {
+            "roundTripCostPct": 0.452,
+            "commissionRate": 0.00025,
+            "stampTaxRate": 0.001,
+            "transferFeeRate": 0.00001,
+            "slippagePct": 0.0015
+          },
+          "benchmarkStatus": "unavailable",
+          "windowDates": {
+            "trainStart": "2023-10-30",
+            "trainEnd": "2024-11-08",
+            "validateStart": "2024-11-11",
+            "validateEnd": "2024-12-06",
+            "testStart": "2024-12-09",
+            "testEnd": "2025-03-10"
+          },
+          "evaluatedAt": "2026-06-25T02:11:47.093Z"
+        },
+        {
+          "windowIndex": 1,
+          "windowRole": "research",
+          "rankIC": -0.0608,
+          "netReturn": -12.5,
+          "grossReturn": -8.03,
+          "benchmarkReturn": 0,
+          "netExcessReturn": -12.5,
+          "deltaCI": [
+            -13.25,
+            -5.83
+          ],
+          "directionAccuracy": 50.23,
+          "candidateVersionId": "candidate_H1_09964c063314e667",
+          "hypothesisId": "H1",
+          "strategyHash": "416d170ba97fbebc63454dd234f4972556947cdc0e4e1deab9fc7ce5e42b052d",
+          "featureSchemaHash": "a7ff8bb77ff3b9cc712b4e117a30a8b6b30442fe7aef2ae347a39db2ea70a8e3",
+          "snapshotHash": "b155957cc0e7adc3f24bad9916c10c989c64ee1b5943171bfbe452e5bfb9330b",
+          "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+          "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+          "windowId": "window_002",
+          "costAssumptions": {
+            "roundTripCostPct": 0.452,
+            "commissionRate": 0.00025,
+            "stampTaxRate": 0.001,
+            "transferFeeRate": 0.00001,
+            "slippagePct": 0.0015
+          },
+          "benchmarkStatus": "unavailable",
+          "windowDates": {
+            "trainStart": "2023-10-30",
+            "trainEnd": "2025-02-10",
+            "validateStart": "2025-02-11",
+            "validateEnd": "2025-03-10",
+            "testStart": "2025-03-11",
+            "testEnd": "2025-06-06"
+          },
+          "evaluatedAt": "2026-06-25T02:12:36.645Z"
+        },
+        {
+          "windowIndex": 2,
+          "windowRole": "research",
+          "rankIC": -0.0332,
+          "netReturn": -8.47,
+          "grossReturn": -3.41,
+          "benchmarkReturn": 0,
+          "netExcessReturn": -8.47,
+          "deltaCI": [
+            -14.91,
+            -8.030000000000001
+          ],
+          "directionAccuracy": 45.58,
+          "candidateVersionId": "candidate_H1_09964c063314e667",
+          "hypothesisId": "H1",
+          "strategyHash": "416d170ba97fbebc63454dd234f4972556947cdc0e4e1deab9fc7ce5e42b052d",
+          "featureSchemaHash": "a7ff8bb77ff3b9cc712b4e117a30a8b6b30442fe7aef2ae347a39db2ea70a8e3",
+          "snapshotHash": "b155957cc0e7adc3f24bad9916c10c989c64ee1b5943171bfbe452e5bfb9330b",
+          "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+          "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+          "windowId": "window_003",
+          "costAssumptions": {
+            "roundTripCostPct": 0.452,
+            "commissionRate": 0.00025,
+            "stampTaxRate": 0.001,
+            "transferFeeRate": 0.00001,
+            "slippagePct": 0.0015
+          },
+          "benchmarkStatus": "unavailable",
+          "windowDates": {
+            "trainStart": "2023-10-30",
+            "trainEnd": "2025-05-08",
+            "validateStart": "2025-05-09",
+            "validateEnd": "2025-06-06",
+            "testStart": "2025-06-09",
+            "testEnd": "2025-08-29"
+          },
+          "evaluatedAt": "2026-06-25T02:13:30.753Z"
+        },
+        {
+          "windowIndex": 3,
+          "windowRole": "research",
+          "rankIC": -0.0455,
+          "netReturn": -4.43,
+          "grossReturn": 0.73,
+          "benchmarkReturn": 0,
+          "netExcessReturn": -4.43,
+          "deltaCI": [
+            -4.4799999999999995,
+            2.0600000000000005
+          ],
+          "directionAccuracy": 48.75,
+          "candidateVersionId": "candidate_H1_09964c063314e667",
+          "hypothesisId": "H1",
+          "strategyHash": "416d170ba97fbebc63454dd234f4972556947cdc0e4e1deab9fc7ce5e42b052d",
+          "featureSchemaHash": "a7ff8bb77ff3b9cc712b4e117a30a8b6b30442fe7aef2ae347a39db2ea70a8e3",
+          "snapshotHash": "b155957cc0e7adc3f24bad9916c10c989c64ee1b5943171bfbe452e5bfb9330b",
+          "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+          "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+          "windowId": "window_004",
+          "costAssumptions": {
+            "roundTripCostPct": 0.452,
+            "commissionRate": 0.00025,
+            "stampTaxRate": 0.001,
+            "transferFeeRate": 0.00001,
+            "slippagePct": 0.0015
+          },
+          "benchmarkStatus": "unavailable",
+          "windowDates": {
+            "trainStart": "2023-10-30",
+            "trainEnd": "2025-08-01",
+            "validateStart": "2025-08-04",
+            "validateEnd": "2025-08-29",
+            "testStart": "2025-09-01",
+            "testEnd": "2025-12-01"
+          },
+          "evaluatedAt": "2026-06-25T02:14:24.874Z"
+        }
+      ]
+    }
+  ],
   "hypotheses": [
     {
       "id": "H1",
@@ -37,8 +275,119 @@
       "rationale": "When many signals agree (high signalCount), the composite score should be more reliable. The interaction term captures this amplification effect. Weak interaction = signal diversity doesn't improve reliability."
     }
   ],
-  "evaluationWindows": [],
-  "transitions": [],
-  "lastEvaluationDate": null,
-  "updatedAt": "2026-06-24T15:00:00.000Z"
+  "evaluationWindows": [
+    {
+      "index": 0,
+      "windowId": "window_001",
+      "role": "research",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2024-11-08",
+      "testStart": "2024-12-09",
+      "testEnd": "2025-03-10"
+    },
+    {
+      "index": 1,
+      "windowId": "window_002",
+      "role": "research",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2025-02-10",
+      "testStart": "2025-03-11",
+      "testEnd": "2025-06-06"
+    },
+    {
+      "index": 2,
+      "windowId": "window_003",
+      "role": "research",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2025-05-08",
+      "testStart": "2025-06-09",
+      "testEnd": "2025-08-29"
+    },
+    {
+      "index": 3,
+      "windowId": "window_004",
+      "role": "research",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2025-08-01",
+      "testStart": "2025-09-01",
+      "testEnd": "2025-12-01"
+    },
+    {
+      "index": 4,
+      "windowId": "window_005",
+      "role": "lock",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2025-11-03",
+      "testStart": "2025-12-02",
+      "testEnd": "2026-02-24"
+    },
+    {
+      "index": 5,
+      "windowId": "window_006",
+      "role": "lock",
+      "trainStart": "2023-10-30",
+      "trainEnd": "2026-01-27",
+      "testStart": "2026-02-25",
+      "testEnd": "2026-05-22"
+    }
+  ],
+  "transitions": [
+    {
+      "from": "RESEARCH_ONLY",
+      "to": "REJECTED_RESEARCH",
+      "hypothesisId": "H1",
+      "versionId": "candidate_H1_09964c063314e667",
+      "reason": "All 4 research windows: avg Rank IC negative, 3/4 delta CI fully below zero. H1 Momentum+Volatility shows no alpha vs random control.",
+      "date": "2026-06-25",
+      "evidence": {
+        "reason": "All 4 research windows: avg Rank IC negative, 3/4 delta CI fully below zero. H1 Momentum+Volatility shows no alpha vs random control.",
+        "windows": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "aggregateRankIC": -0.037425,
+        "windowResults": {
+          "w1": {
+            "rankIC": -0.0378,
+            "netReturn": -14.24,
+            "deltaCI": [
+              -8.6,
+              -2.27
+            ]
+          },
+          "w2": {
+            "rankIC": -0.0332,
+            "netReturn": -8.47,
+            "deltaCI": [
+              -14.91,
+              -8.03
+            ]
+          },
+          "w3": {
+            "rankIC": -0.0332,
+            "netReturn": -8.47,
+            "deltaCI": [
+              -14.91,
+              -8.03
+            ]
+          },
+          "w4": {
+            "rankIC": -0.0455,
+            "netReturn": -4.43,
+            "deltaCI": [
+              -4.48,
+              2.06
+            ]
+          }
+        },
+        "mcSamples": 1000,
+        "dataHash": "b155957cc0e7adc3",
+        "strategyHash": "416d170ba97fbebc"
+      }
+    }
+  ],
+  "lastEvaluationDate": "2026-06-25",
+  "updatedAt": "2026-06-25T02:16:35.087Z"
 }

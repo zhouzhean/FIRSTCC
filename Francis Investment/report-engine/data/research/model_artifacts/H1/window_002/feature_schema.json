@@ -1,0 +1,18 @@
+{
+  "features": [
+    {
+      "name": "technical",
+      "source": "dimensions",
+      "type": "numeric"
+    },
+    {
+      "name": "volatility20d",
+      "source": "topLevel",
+      "type": "numeric"
+    }
+  ],
+  "hypothesisId": "H1",
+  "interaction": "technical / (1 + volatility20d)",
+  "standardizer": "fit_on_train_only",
+  "intercept": "unregularized"
+}
