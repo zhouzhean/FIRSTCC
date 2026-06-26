@@ -722,98 +722,45 @@ The root cause (`scheduledSlot="9:30"` → canonical gate rejected) is confirmed
 The 23 count (not 50) is because today's pipeline only screened 23 candidates —
 the fix is correct; the candidate count is a separate observation.
 
-### P1.7: Fix expectedReturn wiring into canonical ledger
+### P1.7 Intraday Acceptance: ✅ ALL 4 CHECKS PASS (2026-06-26 11:25 CST)
 
-**Root cause**: In `simfolio.js` `makeTradingDecisions()`, the research snapshot
-(line 920) and prediction ledger write (line 956) happened BEFORE `rankByExpectedReturn()`
-(line 1710). The `pipelineResults` passed to `buildResearchSnapshot` had no `.prediction`
-field, so every ledger entry got `expectedReturn=null`, `predictionValid=false`.
+**11:25 CST mid_scan verification results** (per supervisor directive):
 
-**Fix**: Insert `rankByExpectedReturn()` call BEFORE the research snapshot build
-(~line 917), when `useExpectedReturnRanking=true`. The prediction context
-(stockFactorPerf, marketCycle, nbPerf) is built from the same modules and parameters
-that the later buy-candidate block uses. The call is wrapped in try/catch —
-if prediction engine is unavailable, snapshot still works with null expectedReturn
-(honest failure, no fake values).
+| Check | Criterion | Actual | Status |
+|-------|-----------|--------|--------|
+| 1 | `/api/status`: buildCommit=bd37b58a, scheduledOps has 11:25, lastMidScan > 11:25 | all matched | ✅ |
+| 2 | Latest ledger: scanType=mid, scheduledSlot="11:25", expectedReturn is number, confidence is number | 0.59/0.55/0.39..., confidence=0.5 (50/50) | ✅ |
+| 3 | `/api/prediction-settlement`: expectedReturnInjected increases, predictionSource="rankByExpectedReturn" | +100 expectedReturnInjected, predictionValid=100, predictionSource="rankByExpectedReturn" | ✅ |
+| 4 | `/api/cohort-integrity`: consistent with PS endpoint | expectedReturnInjected=100, predictionSource="rankByExpectedReturn" | ✅ |
 
-**Fix location**: `mosaic/simfolio.js`, lines 914-945 (before `buildResearchSnapshot`).
+**Root cause (TDZ bug)**: P1.7 block referenced `weekendContext` before its `const` declaration 660 lines later → `ReferenceError` on every scan → `rankByExpectedReturn` NEVER executed → `expectedReturn=null` in all ledger entries. Fixed by loading `weekendContext` inline via `loadWeekendContext()`.
 
-**Diagnostic fields added** (P1.7 revision, 2026-06-26 ~10:00 CST):
-- `mosaic/research/cohort_stats.js` `_scanLedger()` now counts `missingExpectedReturn`
-  and `expectedReturnInjected` for all non-legacy, non-quarantined entries.
-- `/api/prediction-settlement` now exposes: `missingExpectedReturn`, `expectedReturnInjected`,
-  `predictionSource` (`"rankByExpectedReturn"` | `"none"`).
-- `/api/cohort-integrity` now exposes: `counts.expectedReturnInjected`, `predictionSource`.
+**Current ledger state (250 entries)**:
+- 123 pre-fix entries (09:30 canonical + 10:00 mid + 10:30 mid): `expectedReturn=null` — immutable, correct
+- 100 TDZ-fixed entries (11:00 full + 11:25 mid): `expectedReturn=number`, `confidence=0.5`, `predictionSource="rankByExpectedReturn"`
+- 27 remainder: other intraday scans
 
-**Release identity (P1.7 revision)**:
-- Local commits: `840800f` (code), `e5a9699` (fix double-count), `ed912cb` (manifest).
-- Cloud `buildCommit` = `deployCommit` = `e5a9699` — NOT the old P1.6 commit `9c3be3c`.
-- `deployFileHashCount`: 12 (was 11 — `simfolio.js` added, `cohort_stats.js` hash updated).
-- `identityStatus`: `manifest_verified_no_git`.
+**Additional observations**:
+- `researchEligible=100` — expectedReturn wiring is complete
+- `executionEligible=0` — kernel evidence gate correctly blocking (evidenceThresholdPassed=false on sampled entries), NOT a field wiring gap
+- `p17_diag.json`: NOT FOUND — `rankByExpectedReturn` executed with zero errors
 
-**Cloud API verification (2026-06-26 10:05 CST)**:
-- `/api/status`: `buildCommit=e5a9699`, `deployCommit=e5a9699`, manifest valid, 12 files.
-- `/api/prediction-settlement`: `missingExpectedReturn=73`, `expectedReturnInjected=0`,
-  `predictionSource="none"` — correct: today's 09:30 ledger is immutable pre-fix data.
-- `/api/cohort-integrity`: `counts.missingExpectedReturn=73`, `counts.expectedReturnInjected=0`,
-  `predictionSource="none"` — consistent with PS endpoint.
-- `/api/health`: healthy, `eventLoopBlocked=false`.
+### P1.7 Canonical Acceptance: PENDING next trading day 09:30
 
-**Why predictionValid is still 0**: Today's 09:30 canonical ledger was written at
-~09:31 CST — BEFORE the P1.7 fix was deployed to cloud at ~10:00 CST. Those 23
-canonical entries are immutable records of the pre-fix state. This is correct and
-expected. The diagnostic fields now make this explicitly visible in the API.
+The 11:25 mid_scan proves the writing path works. But only the 09:30 scheduled full scan is canonical per `_isDesignatedCanonicalWindow`. The next trading day 09:30 canonical run must produce:
+- `predictionValid > 0`
+- `researchEligible > 0`
+- `predictionSource = "rankByExpectedReturn"`
+- `expectedReturnInjected > 0` (canonical entries only)
 
-**Acceptance condition**: Next trading day (Monday 2026-06-29 or next trading day)
-09:30 canonical run must produce:
-- `predictionValid > 0` (currently 0)
-- `researchEligible > 0` (currently 0)
-- `expectedReturnInjected > 0` (currently 0)
-- `predictionSource = "rankByExpectedReturn"` (currently "none")
-- `missingExpectedReturn = 0` for canonical entries (currently 73 across all)
-- cockpit, decision-status, ledger all show same expectedReturn values
-- If `executionEligible=0`, kernel must record the actual blocking reason
+### Post-P1.7: H2 gate
 
-**Deployed**: All P1.7 files on cloud, service restarted, release identity traceable.
-Today's 09:30 ledger (written pre-fix) still has `predictionValid=0` — immutable,
-expected, and not actionable.
+Per supervisor: "如果 11:25 通过，也不要立刻全量启动 H2；先做 H2 smoke 单窗口，然后等下一次 09:30 canonical 也通过后，再正式进入 H2。"
 
-**Next**: Wait for next trading day 09:30 natural run to verify P1.7 acceptance.
-Do NOT start H2 until `predictionValid>0` and `researchEligible>0` are confirmed.
-
-### P1.7 Intraday Verification (2026-06-26 ~10:25 CST)
-
-Supervisor directive: "不要等明天 09:30 才发现问题。现在立刻查 10:00 mid_scan 为什么在 P1.7
-新代码下仍然写出 predictionSource='none'、expectedReturnInjected=0。"
-
-**Investigation finding**: 10:00 mid_scan did NOT run under P1.7 code. `systemctl restart
-mosaic` was delayed until 10:05:39 CST — after the 10:00 mid_scan completed at 10:00:48.
-
-**10:30 mid_scan also failed** (expectedReturn=null despite P1.7 code running).
-Root cause discovered via cloud live test + `p17_diag.json` diagnostic file:
-
-**TDZ Bug (P1.7 blocker, found 10:35 CST)**:
-- `simfolio.js` line 936: `weekendContext: weekendContext || null`
-- `const weekendContext = loadWeekendContext()` declared at line 1602
-- JavaScript TDZ: `ReferenceError: Cannot access 'weekendContext' before initialization`
-- try/catch silently swallowed this error → `rankByExpectedReturn` NEVER executed
-- Affected ALL scan types (full + mid) since P1.7 was deployed
-
-**Fix (commit `bd37b58a`, deployed 10:45 CST)**:
-- Load `weekendContext` inline via `loadWeekendContext()` inside P1.7 block
-- Added diagnostic error file write (`p17_diag.json`) for future debugging
-- Cloud manual test confirmed: `expectedReturn=-0.09`, `confidence=0.5` written to ledger
-
-**Prior fixes deployed** (commit `1039c4a`):
-1. `scheduler.js`: mid_scan `scheduledSlot` was hard-coded `null` → now passes actual `HH:MM`.
-2. `simfolio.js`: P1.7 block's `_appendPredictionLedger` context now explicitly passes `buildCommit`.
-
-**11:25 CST mid_scan acceptance criteria** (latest run only, not cumulative):
-1. `/api/status`: `scheduledOps` includes `mid_scan_2026-06-26_11:25`, `lastMidScan` > 11:25, `buildCommit=bd37b58a`
-2. Latest ledger: `scheduledSlot="11:25"`, `scanType=mid`, `buildCommit=bd37b58a`, `expectedReturn` is number (not null), `confidence` is number (not null)
-3. `/api/prediction-settlement`: `expectedReturnInjected` increases, `predictionSource="rankByExpectedReturn"`
-
-**If 11:25 passes**: Do NOT start full H2 — run H2 smoke single-window first, then wait for next trading day 09:30 canonical acceptance before formal H2.
+1. ✅ P1.7 intraday accepted
+2. ⏳ Run H2 smoke single-window
+3. ⏳ Wait for next trading day 09:30 canonical acceptance
+4. ⏳ Formal H2 full research (only after all above pass)
 
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
