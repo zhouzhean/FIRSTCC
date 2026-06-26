@@ -781,6 +781,32 @@ expected, and not actionable.
 **Next**: Wait for next trading day 09:30 natural run to verify P1.7 acceptance.
 Do NOT start H2 until `predictionValid>0` and `researchEligible>0` are confirmed.
 
+### P1.7 Intraday Verification (2026-06-26 ~10:25 CST)
+
+Supervisor directive: "不要等明天 09:30 才发现问题。现在立刻查 10:00 mid_scan 为什么在 P1.7
+新代码下仍然写出 predictionSource='none'、expectedReturnInjected=0。"
+
+**Investigation finding**: 10:00 mid_scan did NOT run under P1.7 code. `systemctl restart
+mosaic` was delayed until 10:05:39 CST — after the 10:00 mid_scan completed at 10:00:48.
+Both 09:30 full scan and 10:00 mid_scan ran on P1.6 code (`buildCommit=9c3be3c`).
+
+**Additional fixes deployed** (commit `1039c4a`):
+1. `scheduler.js`: mid_scan `scheduledSlot` was hard-coded `null` → now passes actual
+   `HH:MM` (e.g. "10:30") so ledger entries are traceable to their scan window.
+2. `simfolio.js`: P1.7 block's `_appendPredictionLedger` context was missing
+   `buildCommit` field → now explicitly passed.
+
+**10:30 mid_scan**: Will be the first scan under P1.7 code (buildCommit=`1039c4a`).
+If successful, intraday ledger entries should show:
+- `expectedReturnInjected > 0` (at least some entries with non-null expectedReturn)
+- `predictionSource = "rankByExpectedReturn"`
+- `scheduledSlot = "10:30"` (not null)
+- `buildCommit = "1039c4a..."` (not the old P1.6 commit)
+
+**Revised acceptance**: If 10:30 (or subsequent intraday) mid_scan produces
+`expectedReturnInjected>0`, P1.7 wiring is verified for intraday path. Then
+wait for next trading day 09:30 canonical run to close full acceptance.
+
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
 ### What is verified locally
