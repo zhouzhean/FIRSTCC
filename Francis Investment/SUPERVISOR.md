@@ -788,24 +788,32 @@ Supervisor directive: "不要等明天 09:30 才发现问题。现在立刻查 1
 
 **Investigation finding**: 10:00 mid_scan did NOT run under P1.7 code. `systemctl restart
 mosaic` was delayed until 10:05:39 CST — after the 10:00 mid_scan completed at 10:00:48.
-Both 09:30 full scan and 10:00 mid_scan ran on P1.6 code (`buildCommit=9c3be3c`).
 
-**Additional fixes deployed** (commit `1039c4a`):
-1. `scheduler.js`: mid_scan `scheduledSlot` was hard-coded `null` → now passes actual
-   `HH:MM` (e.g. "10:30") so ledger entries are traceable to their scan window.
-2. `simfolio.js`: P1.7 block's `_appendPredictionLedger` context was missing
-   `buildCommit` field → now explicitly passed.
+**10:30 mid_scan also failed** (expectedReturn=null despite P1.7 code running).
+Root cause discovered via cloud live test + `p17_diag.json` diagnostic file:
 
-**10:30 mid_scan**: Will be the first scan under P1.7 code (buildCommit=`1039c4a`).
-If successful, intraday ledger entries should show:
-- `expectedReturnInjected > 0` (at least some entries with non-null expectedReturn)
-- `predictionSource = "rankByExpectedReturn"`
-- `scheduledSlot = "10:30"` (not null)
-- `buildCommit = "1039c4a..."` (not the old P1.6 commit)
+**TDZ Bug (P1.7 blocker, found 10:35 CST)**:
+- `simfolio.js` line 936: `weekendContext: weekendContext || null`
+- `const weekendContext = loadWeekendContext()` declared at line 1602
+- JavaScript TDZ: `ReferenceError: Cannot access 'weekendContext' before initialization`
+- try/catch silently swallowed this error → `rankByExpectedReturn` NEVER executed
+- Affected ALL scan types (full + mid) since P1.7 was deployed
 
-**Revised acceptance**: If 10:30 (or subsequent intraday) mid_scan produces
-`expectedReturnInjected>0`, P1.7 wiring is verified for intraday path. Then
-wait for next trading day 09:30 canonical run to close full acceptance.
+**Fix (commit `bd37b58a`, deployed 10:45 CST)**:
+- Load `weekendContext` inline via `loadWeekendContext()` inside P1.7 block
+- Added diagnostic error file write (`p17_diag.json`) for future debugging
+- Cloud manual test confirmed: `expectedReturn=-0.09`, `confidence=0.5` written to ledger
+
+**Prior fixes deployed** (commit `1039c4a`):
+1. `scheduler.js`: mid_scan `scheduledSlot` was hard-coded `null` → now passes actual `HH:MM`.
+2. `simfolio.js`: P1.7 block's `_appendPredictionLedger` context now explicitly passes `buildCommit`.
+
+**11:25 CST mid_scan acceptance criteria** (latest run only, not cumulative):
+1. `/api/status`: `scheduledOps` includes `mid_scan_2026-06-26_11:25`, `lastMidScan` > 11:25, `buildCommit=bd37b58a`
+2. Latest ledger: `scheduledSlot="11:25"`, `scanType=mid`, `buildCommit=bd37b58a`, `expectedReturn` is number (not null), `confidence` is number (not null)
+3. `/api/prediction-settlement`: `expectedReturnInjected` increases, `predictionSource="rankByExpectedReturn"`
+
+**If 11:25 passes**: Do NOT start full H2 — run H2 smoke single-window first, then wait for next trading day 09:30 canonical acceptance before formal H2.
 
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
