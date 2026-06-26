@@ -1,20 +1,20 @@
 {
-  "commit": "bd37b58aeee2ef7e7f2882b3a195766627d6b23f",
-  "version": "v3.4.9.8",
-  "deployedAt": "2026-06-26T02:37:43.954Z",
+  "commit": "30c2185",
+  "version": "v3.4.9.9",
+  "deployedAt": "2026-06-26T09:13:28.471Z",
   "branch": "master",
   "files": {
-    "mosaic_server.js": "1869078ecfd7277e",
-    "mosaic/research/candidate_runner.js": "1b423551e8112563",
-    "mosaic/evolution/evolution_scheduler.js": "89452e2c5ab6d510",
-    "mosaic/research/baseline_models.js": "ffcdfe0bca511eb1",
-    "mosaic/research/candidate_registry.js": "746cec57c7dc8963",
-    "mosaic/research/cohort_stats.js": "0c00bf5dd1228599",
-    "mosaic/research/linear_model.js": "b2d3b068bf2cd4f2",
-    "mosaic/research/trade_simulator.js": "a88ed4448584c8e1",
-    "mosaic/research/true_walk_forward.js": "f7252070819f56e3",
-    "mosaic/config.js": "93d231cdfecefe58",
-    "mosaic/scheduler.js": "e6605bb1c18710f2",
-    "mosaic/simfolio.js": "87352fb7354bb6b4"
+    "mosaic_server.js": "ca2e513820a63a62",
+    "mosaic/research/candidate_runner.js": "e115057c8010aa75",
+    "mosaic/evolution/evolution_scheduler.js": "caebe7eadc4353c2",
+    "mosaic/research/baseline_models.js": "7deae59dca97e16c",
+    "mosaic/research/candidate_registry.js": "eba1f72334feac92",
+    "mosaic/research/cohort_stats.js": "13038fb7a96a0567",
+    "mosaic/research/linear_model.js": "4f4a330b03577cbe",
+    "mosaic/research/trade_simulator.js": "ef00330b4d569fad",
+    "mosaic/research/true_walk_forward.js": "38d562455bf321fd",
+    "mosaic/config.js": "89183ea8b00d4f3a",
+    "mosaic/scheduler.js": "f935d4e4ca457a7f",
+    "mosaic/simfolio.js": "135c203f16f4206b"
   }
 }

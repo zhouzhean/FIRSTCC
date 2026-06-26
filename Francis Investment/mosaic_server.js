@@ -1810,7 +1810,31 @@ function buildResearchLabData() {
             // Overwrite the TWFS-based verdict with authoritative registry verdict
             data.modelVerdict = 'REJECTED_RESEARCH';
             data.modelVerdictReason = c.rejectionEvidence.reason || data.modelVerdictReason;
-            break;
+          }
+          if (c.hypothesisId === 'H2' && c.rejectionEvidence) {
+            data.h2Rejection = {
+              reason: c.rejectionEvidence.reason || 'Rejected based on smoke single-window evidence',
+              aggregateRankIC: c.rejectionEvidence.aggregateRankIC,
+              rankIC: c.rejectionEvidence.rankIC || c.rejectionEvidence.avgRankIC,
+              netReturn: c.rejectionEvidence.netReturn,
+              directionAccuracy: c.rejectionEvidence.directionAccuracy,
+              deltaCI: c.rejectionEvidence.deltaCI,
+              pValue: c.rejectionEvidence.pValue,
+              mcSamples: c.rejectionEvidence.mcSamples,
+              trades: c.rejectionEvidence.trades,
+              benchmarkStatus: c.rejectionEvidence.benchmarkStatus,
+              smokeOnly: c.rejectionEvidence.smokeOnly !== false,
+              rejectedAt: c.rejectedAt,
+              gateDecision: c.rejectionEvidence.gateDecision || 'REJECTED_RESEARCH',
+              hypothesisConfirmed: c.rejectionEvidence.hypothesisConfirmed || null,
+            };
+          }
+          if (c.hypothesisId === 'H3' && c.rejectionEvidence) {
+            data.h3Rejection = {
+              reason: c.rejectionEvidence.reason,
+              aggregateRankIC: c.rejectionEvidence.aggregateRankIC,
+              rejectedAt: c.rejectedAt,
+            };
           }
         }
       }
