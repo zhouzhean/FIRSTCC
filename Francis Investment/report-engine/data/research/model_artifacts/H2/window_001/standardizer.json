@@ -1,0 +1,12 @@
+{
+  "featureNames": [
+    "hidden"
+  ],
+  "means": [
+    76.58796866736627
+  ],
+  "stds": [
+    17.033917961271115
+  ],
+  "fittedOn": "train_only"
+}

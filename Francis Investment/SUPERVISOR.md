@@ -762,6 +762,57 @@ Per supervisor: "如果 11:25 通过，也不要立刻全量启动 H2；先做 H
 3. ⏳ Wait for next trading day 09:30 canonical acceptance
 4. ⏳ Formal H2 full research (only after all above pass)
 
+### H2 Smoke Result: REJECTED_RESEARCH (2026-06-26)
+
+**Verdict: H2 research gate correctly intercepted.** This is NOT a bug — the research
+factory performed exactly as designed: smoke test → negative evidence → rejection.
+
+H2 smoke used real historical data (snapshotHash=903a12fb) and the same execution
+config as H1 (0.452% round-trip, 30 MC, window 0). The smoke runner wrote only to
+`smoke_summary_h2.json` and `H2/window_001/` artifacts. No registry write, no
+candidate promotion, no Simfolio interaction.
+
+| Metric | Value | Evidence |
+|--------|-------|----------|
+| Rank IC | 0.019 | ≈zero, not meaningfully positive |
+| Direction Accuracy | 46.13% | Below 50%, worse than coin flip |
+| Model Net Return | -8.42% | Negative post-cost |
+| vsRandom Δ Mean | +1.00% | Tiny edge vs random |
+| vsRandom Δ CI | [-2.78, +4.16] | Crosses zero — no reliable edge |
+| p-value | 0.3548 | Not significant (p≫0.05) |
+| Decile Calibration | Non-monotonic | Model cannot separate winners from losers |
+| Benchmark | unavailable | Known limitation, doesn't change rejection |
+| Trades | 991/1003 | Realistic fill rate |
+
+**Scientific interpretation:** The hypothesis predicted that if hidden signals
+carry genuine alpha uncorrelated with price, a pure hidden-signal model would
+show positive Rank IC independent of technical factors. The smoke result shows
+the opposite: hidden signals alone produce near-zero Rank IC, negative post-cost
+returns, and a random-control distribution that cannot be distinguished from the
+model. The original rationale — "hidden signals are largely transformed price
+data" — is confirmed.
+
+**H2 frozen.** No further tuning, re-running, re-labeling, or reinterpretation.
+Artifacts preserved at `model_artifacts/H2/window_001/`. Candidate registry
+records the rejection with full evidence for future regression testing.
+
+**H3 guidance:** Do NOT continue mining hidden signals. H3 should test an
+economically meaningful interaction (e.g., signalCount × compositeScore) that
+captures signal confluence, not another derived transformation of the same data.
+H3 smoke → H3 formal study only after next trading day 09:30 canonical acceptance
+confirms predictionValid>0, researchEligible>0.
+
+### Post-H2: H3 readiness note
+
+Per user directive: "H3 应该换成更有经济含义的假设，例如 signalCount × compositeScore interaction，
+而不是继续挖 hidden_signal."
+
+The pre-locked H3 definition already captures this: `features: ['signalCount',
+'compositeScore']`, `interaction: 'signalCount * compositeScore'`. The rationale
+is that when many signals agree (high signalCount), the composite score should
+be more reliable. This tests signal diversity as an amplifier — a different
+economic mechanism from H1's low-volatility tilt and H2's pure hidden signals.
+
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
 ### What is verified locally
@@ -830,4 +881,5 @@ model, factor expansion, or live trading change is justified before then.
 | v3.4.6 | Market data became fail-closed; Top 50 ledger and evidence gating were introduced. |
 | v3.4.7 | Target-date settlement, outcome deduplication, baseline benchmark handling, and preliminary multi-day evidence schema were added. P0 is materially safer; P1 still needs statistical and UI completion. |
 | v3.4.8 | Baseline migration, seeded bootstrap, and basic evidence UI were added. A production review found the ledger is skipped by the unified BLOCK/REDUCE early return, outcome fields do not feed post-cost excess return, and CI/promotion guards are not enforced at the canonical summary/registry boundary. The next milestone is data-producing research operations, not more factors. |
+| v3.4.9.9 | **H2 REJECTED_RESEARCH**: smoke single-window evidence negative. Rank IC=0.019 (≈zero), vsRandom Δ CI crosses zero [-2.78, +4.16], p=0.35 (not significant), direction accuracy 46.13%. Hidden signals alone do not carry alpha — hypothesis rationale confirmed. H2 frozen. Smoke infrastructure generalized for hypothesis-agnostic use. H3 next: signalCount×compositeScore interaction. Gate: 09:30 canonical acceptance. |
 | v3.4.9 | The intended research-data architecture, promotion lock, tie-aware statistic, quote service, and UI were deployed. Focused tests pass, but source review found the critical unified BLOCK/REDUCE early return still skips ledger capture, and production has not yet run a new scan. Current status: deployed but not production-accepted. |

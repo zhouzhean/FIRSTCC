@@ -1240,6 +1240,96 @@ function renderResearchLab(researchLab) {
     }
   }
 
+  // P1.7→H2: H2 Smoke Evidence section
+  if (researchLab.h2Smoke) {
+    var hs2 = researchLab.h2Smoke;
+    var hasH2Data = hs2.status === 'completed' || hs2.status === 'failed' ||
+                  (hs2.rankIC != null || hs2.tradeCount != null);
+    if (hasH2Data) {
+      html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px;">';
+      html += '<div style="font-size:10px;font-weight:600;">H2 Smoke Evidence</div>';
+
+      var h2Bg = hs2.status === 'completed' ? '#f0fdf4' : hs2.status === 'failed' ? '#fee2e2' : '#fefce8';
+      var h2Color = hs2.status === 'completed' ? '#16a34a' : hs2.status === 'failed' ? '#dc2626' : '#a16207';
+      html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:baseline;">';
+      html += '<span style="font-size:9px;background:' + h2Bg + ';color:' + h2Color +
+        ';padding:1px 4px;border-radius:3px;font-weight:600;">' + esc(hs2.status) + '</span>';
+      if (hs2.runAt) {
+        html += '<span style="font-size:9px;color:#64748b;">' + esc(hs2.runAt.slice(0, 16).replace('T', ' ')) + '</span>';
+      }
+      if (hs2.window) {
+        html += '<span style="font-size:9px;color:#64748b;">' + esc(hs2.window) + '</span>';
+      }
+      html += '</div>';
+
+      html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+      if (hs2.tradeCount != null) {
+        html += '<span style="font-size:9px;color:#64748b;">Trades: ' + esc(String(hs2.tradeCount)) +
+          '/' + esc(String(hs2.totalSignals || '?')) + '</span>';
+      }
+      if (hs2.netReturn != null) {
+        var nr2 = hs2.netReturn;
+        html += '<span style="font-size:9px;' + (nr2 > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Net: ' + esc(String(Math.round(nr2 * 10000) / 100)) + '%</span>';
+      }
+      if (hs2.rankIC != null) {
+        html += '<span style="font-size:9px;' + (hs2.rankIC > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Rank IC: ' + esc(String(Math.round(hs2.rankIC * 10000) / 10000)) + '</span>';
+      }
+      if (hs2.randomControlAvailable) {
+        html += '<span style="font-size:9px;color:#64748b;">Δ CI: [' +
+          esc(String(Math.round((hs2.deltaCiLower != null ? hs2.deltaCiLower : 0) * 10000) / 100)) + ', ' +
+          esc(String(Math.round((hs2.deltaCiUpper != null ? hs2.deltaCiUpper : 0) * 10000) / 100)) + ']%</span>';
+      }
+      if (hs2.benchmarkStatus) {
+        var bm2Color = hs2.benchmarkStatus === 'available' ? '#16a34a' : '#94a3b8';
+        html += '<span style="font-size:9px;color:' + bm2Color + ';">BM: ' +
+          esc(hs2.benchmarkStatus) + '</span>';
+      }
+      html += '</div>';
+
+      // Hashes
+      if (hs2.dataHash || hs2.executionHash) {
+        html += '<div style="margin-top:4px;font-size:8px;color:#94a3b8;font-family:monospace;">';
+        if (hs2.dataHash) html += 'data: ' + esc(hs2.dataHash) + ' ';
+        if (hs2.executionHash) html += 'exec: ' + esc(hs2.executionHash);
+        html += '</div>';
+      }
+
+      // Evidence verdict
+      var h2Verdict = null;
+      var h2VerdictBg = '#f0fdf4';
+      var h2VerdictColor = '#16a34a';
+      if (hs2.status === 'completed') {
+        var rankIC2Ok = (hs2.rankIC != null && hs2.rankIC > 0);
+        var deltaCI2Ok = (hs2.randomControlAvailable && hs2.deltaCiUpper != null && hs2.deltaCiUpper >= 0);
+        if (!rankIC2Ok || !deltaCI2Ok) {
+          h2Verdict = 'REJECTED_RESEARCH — Evidence Negative';
+          h2VerdictBg = '#fee2e2';
+          h2VerdictColor = '#dc2626';
+        } else if (hs2.benchmarkStatus !== 'available') {
+          h2Verdict = 'Completed — benchmark unavailable, insufficient for promotion';
+          h2VerdictBg = '#fefce8';
+          h2VerdictColor = '#a16207';
+        } else {
+          h2Verdict = 'Evidence Positive — all gates passed';
+        }
+      } else if (hs2.errors && hs2.errors.length > 0) {
+        h2Verdict = 'Execution errors: ' + hs2.errors.join('; ');
+        h2VerdictBg = '#fee2e2';
+        h2VerdictColor = '#dc2626';
+      }
+
+      if (h2Verdict) {
+        html += '<div style="margin-top:4px;padding:4px 8px;background:' + h2VerdictBg +
+          ';border-radius:3px;font-size:9px;font-weight:600;color:' + h2VerdictColor + ';">' +
+          esc(h2Verdict) + '</div>';
+      }
+
+      html += '</div>';  // close h2Smoke section
+    }
+  }
+
   // P1.5: Canonical cohort status
   if (researchLab.canonicalCohort) {
     var cc = researchLab.canonicalCohort;

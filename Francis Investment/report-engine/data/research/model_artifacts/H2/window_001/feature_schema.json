@@ -1,0 +1,13 @@
+{
+  "features": [
+    {
+      "name": "hidden",
+      "source": "dimensions",
+      "type": "numeric"
+    }
+  ],
+  "hypothesisId": "H2",
+  "interaction": null,
+  "standardizer": "fit_on_train_only",
+  "intercept": "unregularized"
+}

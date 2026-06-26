@@ -1,44 +1,42 @@
-# Francis Investment · A股量化交易系统 v3.4.9.8
+# Francis Investment · A股量化交易系统 v3.4.9.9
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全天候自动交易+24/7自主学习+报告引擎。低价(≤20元)非创业板A股子策略。
 
-## v3.4.9.8: P1.2–P1.7 ✅ Intraday (2026-06-24~26)
+## v3.4.9.9: H2 Smoke REJECTED_RESEARCH ✅ (2026-06-26)
 
 ### P1.7 — expectedReturn Wiring Fix ✅ INTRADAY ACCEPTED (2026-06-26)
 
 - **Root cause (original)**: `simfolio.js` `makeTradingDecisions()` built research snapshot and wrote prediction ledger BEFORE `rankByExpectedReturn()`. `pipelineResults` had no `.prediction` → all ledger entries got `expectedReturn=null`.
 - **Root cause (TDZ bug — found 10:35 CST)**: P1.7 block referenced `weekendContext` at line 936, but `const weekendContext = loadWeekendContext()` was declared at line 1602 — 660 lines later. JavaScript TDZ (Temporal Dead Zone) caused `ReferenceError: Cannot access 'weekendContext' before initialization`. The try/catch silently swallowed this error on every scan, making `rankByExpectedReturn` NEVER execute.
 - **Fix (final)**: Load `weekendContext` inline via `loadWeekendContext()` inside P1.7 block instead of referencing the later `const` declaration. Added diagnostic error file write (`p17_diag.json`) for future debugging.
-- **Cloud test verified**: Direct `makeTradingDecisions` call with mock mid_scan data → `expectedReturn=-0.09`, `confidence=0.5` written to ledger. No diag file created.
-- **Diagnostic fields**: `cohort_stats.js` now counts `missingExpectedReturn`, `expectedReturnInjected`, and sets `predictionSource` (`"rankByExpectedReturn"` | `"none"`). Exposed in `/api/prediction-settlement` and `/api/cohort-integrity`.
-- **Release identity**: Cloud `buildCommit` = `bd37b58a` (TDZ fix), `deployManifestValid=true`, 12 files.
-- **Intraday fixes deployed**:
-  1. `scheduler.js`: mid_scan `scheduledSlot` was hard-coded `null` → now passes actual `HH:MM`.
-  2. `simfolio.js`: P1.7 block's `_appendPredictionLedger` context now explicitly passes `buildCommit`.
-  3. `simfolio.js`: **TDZ fix** — `weekendContext` loaded inline via `loadWeekendContext()`.
-
-#### 11:25 CST Mid-Scan Acceptance — ALL 4 CHECKS PASS ✅
-
-| Criterion | Expected | Actual | Status |
-|-----------|----------|--------|--------|
-| buildCommit | `bd37b58a` | `bd37b58a` | ✅ |
-| scheduledOps has 11:25 | yes | yes | ✅ |
-| lastMidScan > 11:25 | yes | `03:26:04.649Z` | ✅ |
-| 11:25 entries expectedReturn type | number | 0.59, 0.55, 0.39... (50/50) | ✅ |
-| confidence type | number | 0.5 (all 50) | ✅ |
-| expectedReturnInjected | > 0 | **100** (+50 vs pre-11:25) | ✅ |
-| predictionSource | `rankByExpectedReturn` | `rankByExpectedReturn` | ✅ |
-| predictionValid | > 0 | **100** | ✅ |
-| researchEligible | > 0 | **100** | ✅ |
-| p17_diag.json | NOT FOUND | NOT FOUND (zero errors) | ✅ |
-
-- Note: `missingExpectedReturn=123` = old pre-fix entries from 09:30 full + 10:00 mid + 10:30 mid — immutable historical record, correct.
-- Note: `executionEligible=0` — kernel evidence gate blocking (expectedReturn magnitude modest), NOT a field wiring gap.
-- **100 expectedReturnInjected** = 50 from 11:00 full scan + 50 from 11:25 mid scan (both TDZ-fixed code). 11:00 full is NOT canonical (only 09:30 is per `_isDesignatedCanonicalWindow`).
-
+- **11:25 CST Mid-Scan Acceptance** ✅: 50/50 entries with expectedReturn as number, expectedReturnInjected=100, predictionSource="rankByExpectedReturn", predictionValid=100, researchEligible=100.
 - **Pending**: Next trading day 09:30 canonical run must produce `predictionValid>0`, `researchEligible>0`, `predictionSource="rankByExpectedReturn"`. **H2 gated until canonical acceptance.**
-- **Per supervisor**: Do NOT start full H2. Run H2 smoke single-window first. Wait for 09:30 canonical acceptance before formal H2.
-- **Commits**: `840800f` → `e5a9699` → `ed912cb` → `1039c4a` → `7284863` → `bd37b58` (TDZ fix) → `e55597b` (manifest).
+
+### H2 Smoke — REJECTED_RESEARCH ✅ (2026-06-26)
+
+- **Hypothesis**: H2 "Derived Hidden-Signal Bundle" — pure hidden signal (H1-H9 composite) as sole feature, no price/volatility/volume. `features: ['hidden']`, `interaction: null`.
+- **Rationale**: If hidden signals carry genuine alpha uncorrelated with price, a pure hidden-signal model should show positive Rank IC independent of technical factors. Failure = hidden signals are just transformed price data.
+- **Smoke run**: Window 0 only, smokeOnly mode. 361K train samples, 30 MC. Ephemeral versionId `smoke_H2_mqup1zzn` — NOT registered, NOT promoted. Artifacts saved to `H2/window_001/`.
+- **Results**:
+
+| Metric | Value | Gate |
+|--------|-------|------|
+| Rank IC | **0.019** | >0 ✅ (barely) |
+| Direction Accuracy | 46.13% | <50% ❌ |
+| Model Net Return | **-8.42%** | Negative ❌ |
+| vsRandom Δ Mean | +1.00% | — |
+| vsRandom Δ CI | **[-2.78, +4.16]** | Includes 0 ❌ |
+| p-value | 0.3548 | Not significant ❌ |
+| Benchmark | unavailable | — |
+| Trades | 991/1003 | Healthy |
+
+- **Verdict: REJECTED_RESEARCH** — Rank IC is positive but negligible (0.019), vsRandom delta CI crosses zero (includes negative values), and p=0.35 is far from significance. Hidden signals alone DO NOT carry sufficient alpha for a standalone strategy. Consistent with the hypothesis rationale: hidden signals appear to be largely transformed price data.
+- **Decile calibration**: No monotonic relationship between predicted decile and actual return (decile 1: -0.92%, decile 10: +0.31%) — model cannot separate winners from losers.
+- **H2 frozen**: No further tuning. No parameter changes. No promotion.
+- **Code changes for H2 support**:
+  1. `candidate_runner.js`: `smokeOnly` mode no longer hard-codes H1 — accepts `opts.hypotheses`. `versionId` uses hypothesis-aware prefix `smoke_<Hx>_<ts>`. `_writeSmokeSummary` writes hypothesis-specific file (`smoke_summary_h2.json`).
+  2. `mosaic_server.js`: Added `h2Smoke` field in `/api/cockpit` Research Lab, loaded from `smoke_summary_h2.json`.
+  3. `cockpit.js`: Added "H2 Smoke Evidence" section below H1 Smoke Evidence in Research Lab renderer.
 
 ### P1.6 — Canonical Cohort Root-Cause Fix (2026-06-25)
 
@@ -130,7 +128,8 @@ Next: H2 → H3 per pre-registered rules.
 - **Cloud OOM on full walk-forward**: 2GB ECS can't hold all train+test+MC samples (85274 test × 1000 MC). smokeOnly with 30 MC works. Full runs need local execution or `--max-old-space-size=1536` (still borderline on 2GB)
 - **Benchmark unavailable**: `benchmarkTradeCount=0` — same-path benchmark sleeve not in historical snapshots yet. Cannot claim post-cost market excess without it
 - **H1 REJECTED_RESEARCH**: 4-window formal study complete, all windows negative Rank IC, negative delta CI. Frozen — no more H1 tuning
-- **H2, H3 not yet run**: Pre-registered sequence — H2 follows H1 rejection. P1.6 supervisor directive: wait for next trading day 09:30 canonical cohort to generate naturally before entering H2
+- **H2 REJECTED_RESEARCH (2026-06-26)**: Smoke single-window — Rank IC=0.019 (barely positive), vsRandom Δ CI=[-2.78, +4.16] (crosses zero), p=0.35 (not significant). Hidden signals alone don't carry alpha. Frozen — no further tuning. Artifacts at `model_artifacts/H2/window_001/`
+- **H3 not yet run**: Pre-registered sequence — H3 follows H2 rejection. H3 = signalCount × compositeScore interaction. Gate: 09:30 canonical acceptance first
 - **Prediction engine wiring**: P1.7 ✅ INTRADAY ACCEPTED — `rankByExpectedReturn()` runs before research snapshot+ledger write. 11:25 mid_scan: 50/50 entries with expectedReturn as number, predictionValid=100, researchEligible=100. Canonical acceptance pending next 09:30.
 
 ## Research Architecture
@@ -236,6 +235,7 @@ curl -s http://8.153.101.112:8765/api/cockpit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
+| v3.4.9.9 | 2026-06-26 | **H2 Smoke REJECTED_RESEARCH**: pure hidden-signal model, Rank IC=0.019, vsRandom Δ CI crosses zero. Hidden signals alone don't carry alpha. H2 frozen. Smoke infrastructure generalized: hypothesis-agnostic smokeOnly mode, hypothesis-specific smoke_summary files, H2 smoke evidence in cockpit Research Lab |
 | v3.4.9.8 | 2026-06-26 | **P1.2**: unified executionConfig, empirical CI, lock window fix, idempotent eval. **P1.3**: smokeOnly, window range, H1 smoke test. **P1.4**: catch-up gate, window plan integrity, H1 Smoke UI, H1 4-window formal study → REJECTED_RESEARCH. **P1.5**: windowResults bug fix, cloud observability (/api/health+heartbeat+currentTask), release identity unified, Cockpit H1 rejection banner + canonical cohort. **P1.6**: canonical cohort root-cause fix (`scheduledSlot="9:30"` → `"09:30"`), enriched cockpit diagnostics. **P1.7**: expectedReturn wiring fix — TDZ bug found (weekendContext referenced before const declaration → rankByExpectedReturn silently failed every scan). Fixed by loading weekendContext inline. **P1.7 intraday accepted** (11:25 CST mid_scan: 50/50 entries with expectedReturn as number, expectedReturnInjected=100, predictionSource="rankByExpectedReturn", predictionValid=100, researchEligible=100). **Canonical acceptance pending next 09:30**. H2 gated. |
 | v3.4.9.7 | 2026-06-23 | **P0.2**: deploy identity, fixed capacity, same-path benchmark, exit tradability, Monte Carlo, Laplace p-value, paired delta CI |
 | v3.4.9.6 | 2026-06-23 | Phase 1.1: honest data boundaries, real feature availability, trade simulation |

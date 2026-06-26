@@ -1331,6 +1331,26 @@ function buildResearchLabData() {
       deltaCiUpper: null,
       directionAccuracy: null,
     },
+    // P1.7→H2: H2 Smoke status
+    h2Smoke: {
+      status: 'not_run',
+      runAt: null,
+      window: null,
+      tradeCount: null,
+      totalSignals: null,
+      dataHash: null,
+      executionHash: null,
+      verdict: null,
+      samples: null,
+      benchmarkStatus: 'unavailable',
+      randomControlAvailable: false,
+      rankIC: null,
+      errors: [],
+      netReturn: null,
+      deltaCiLower: null,
+      deltaCiUpper: null,
+      directionAccuracy: null,
+    },
   };
 
   try {
@@ -1743,6 +1763,33 @@ function buildResearchLabData() {
       };
     }
   } catch (_) { /* no smoke_summary.json yet — stays not_run */ }
+
+  // P1.7→H2: Load H2 smoke summary
+  try {
+    var smokeH2Path = path.join(__dirname, 'report-engine', 'data', 'research', 'model_artifacts', 'smoke_summary_h2.json');
+    if (fs.existsSync(smokeH2Path)) {
+      var smokeH2 = JSON.parse(fs.readFileSync(smokeH2Path, 'utf8'));
+      data.h2Smoke = {
+        status: smokeH2.verdict ? (smokeH2.verdict.indexOf('completed') === 0 ? 'completed' : (smokeH2.verdict.indexOf('failed') === 0 ? 'failed' : 'completed')) : 'not_run',
+        runAt: smokeH2.runAt || null,
+        window: smokeH2.windowIndex != null ? 'Window ' + (smokeH2.windowIndex + 1) : null,
+        tradeCount: smokeH2.execution ? smokeH2.execution.executedTrades : null,
+        totalSignals: smokeH2.execution ? smokeH2.execution.totalSignals : null,
+        dataHash: smokeH2.snapshotHash || null,
+        executionHash: smokeH2.execution ? smokeH2.execution.executionHash : null,
+        verdict: smokeH2.verdict || null,
+        samples: smokeH2.samples ? (smokeH2.samples.train + smokeH2.samples.validate + smokeH2.samples.test) : null,
+        benchmarkStatus: smokeH2.benchmark ? smokeH2.benchmark.status : 'unavailable',
+        randomControlAvailable: smokeH2.randomControl ? (smokeH2.randomControl.pairedDelta_ci95_lower != null) : false,
+        rankIC: smokeH2.metrics ? smokeH2.metrics.avgRankIC : null,
+        errors: smokeH2.errors || [],
+        netReturn: smokeH2.portfolio ? smokeH2.portfolio.netReturn : null,
+        deltaCiLower: smokeH2.randomControl ? smokeH2.randomControl.pairedDelta_ci95_lower : null,
+        deltaCiUpper: smokeH2.randomControl ? smokeH2.randomControl.pairedDelta_ci95_upper : null,
+        directionAccuracy: smokeH2.metrics ? smokeH2.metrics.directionAccuracy : null,
+      };
+    }
+  } catch (_) { /* no smoke_summary_h2.json yet — stays not_run */ }
 
   // P1.5: Load H1 rejection evidence from candidate_registry.json
   try {

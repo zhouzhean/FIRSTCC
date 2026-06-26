@@ -628,8 +628,8 @@ function runCandidateEvaluation(options) {
   var completedInProgress = {};
 
   if (isSmoke) {
-    // Smoke mode: versionId = smoke_H1_<timestamp_8char> — not persisted
-    versionId = 'smoke_H1_' + Date.now().toString(36).slice(-8);
+    // Smoke mode: versionId = smoke_<hypothesisId>_<timestamp_8char> — not persisted
+    versionId = 'smoke_' + hypothesisId + '_' + Date.now().toString(36).slice(-8);
     console.log('Smoke versionId: ' + versionId + ' (ephemeral, not persisted)');
     console.log();
   } else {
@@ -968,12 +968,12 @@ function runAllHypotheses(options) {
   var opts = options || {};
   var isSmoke = !!opts.smokeOnly;
 
-  // P1.3: smokeOnly mode forces H1-only, single window
+  // P1.3: smokeOnly mode — single window, hypothesis from opts or default H1
   if (isSmoke) {
-    opts.hypotheses = ['H1'];
+    opts.hypotheses = opts.hypotheses || ['H1'];
     opts.windowsStart = 0;
     opts.windowsEnd = 0;
-    console.log('=== P1.3 SMOKE TEST: H1 Window 0 Only ===');
+    console.log('=== P1.3 SMOKE TEST: ' + opts.hypotheses.join(', ') + ' Window 0 Only ===');
     console.log('Mode: smokeOnly — NO registry writes, NO progress writes, NO state changes');
     console.log();
   }
@@ -1059,7 +1059,8 @@ function runAllHypotheses(options) {
  * coverage info, and any failure reasons.
  */
 function _writeSmokeSummary(result, windows, opts) {
-  var summaryPath = path.join(ARTIFACTS_DIR, 'smoke_summary.json');
+  var hypothesisId = (result && result.hypothesisId) || 'H1';
+  var summaryPath = path.join(ARTIFACTS_DIR, 'smoke_summary_' + hypothesisId.toLowerCase() + '.json');
   try {
     if (!fs.existsSync(ARTIFACTS_DIR)) fs.mkdirSync(ARTIFACTS_DIR, { recursive: true });
   } catch (_) {}
@@ -1067,7 +1068,7 @@ function _writeSmokeSummary(result, windows, opts) {
   var windowResult = (result && result.windows && result.windows.length > 0) ? result.windows[0] : null;
   var smoke = {
     mode: 'smokeOnly',
-    hypothesisId: 'H1',
+    hypothesisId: result ? result.hypothesisId : 'H1',
     runAt: new Date().toISOString(),
     windowIndex: 0,
     dataHash: null,

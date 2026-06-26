@@ -1,0 +1,11 @@
+{
+  "trainStart": "2023-10-30",
+  "trainEnd": "2024-11-08",
+  "trainDays": 252,
+  "validateStart": "2024-11-11",
+  "validateEnd": "2024-12-06",
+  "validateDays": 20,
+  "testStart": "2024-12-09",
+  "testEnd": "2025-03-10",
+  "testDays": 60
+}

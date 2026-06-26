@@ -236,6 +236,89 @@
           "evaluatedAt": "2026-06-25T02:14:24.874Z"
         }
       ]
+    },
+    {
+      "versionId": "smoke_H2_mqup1zzn",
+      "hypothesisId": "H2",
+      "hypothesis": "Derived Hidden-Signal Bundle",
+      "status": "REJECTED_RESEARCH",
+      "registeredAt": "2026-06-26T08:53:47.020Z",
+      "model": {},
+      "metrics": {},
+      "window": {
+        "trainStart": "2023-10-30",
+        "trainEnd": "2024-11-08",
+        "testStart": "2024-12-09",
+        "testEnd": "2025-03-10"
+      },
+      "artifactsPath": "report-engine/data/research/model_artifacts/H2",
+      "strategyHash": "H2_prelocked_2026-06-24",
+      "featureSchemaHash": "hidden_only",
+      "snapshotHash": "903a12fbd898ffd7fce1db1be4fc43008b6b899a5096cb41cef7854d24d8b26d",
+      "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+      "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+      "evaluatedWindows": [0],
+      "lastEvaluated": "2026-06-26T08:53:47.020Z",
+      "evaluationNotes": "Smoke only — single window. NOT a full candidate registration. Rejected based on smoke evidence.",
+      "shadowSince": null,
+      "forwardSamples": 0,
+      "rejectedAt": "2026-06-26T08:53:47.020Z",
+      "rejectionEvidence": {
+        "reason": "H2 smoke: pure hidden-signal model shows no independent alpha. Rank IC=0.019 (≈zero), direction accuracy=46.13% (<50%), vsRandom Δ CI=[-2.78, +4.16] crosses zero, p=0.35 (not significant). Decile calibration shows no monotonic relationship between predicted and actual return. Hidden signals are largely transformed price data — hypothesis rationale confirmed. REJECTED: no further tuning, no promotion, no shadow tracking.",
+        "windows": [0],
+        "aggregateRankIC": 0.019,
+        "avgRankIC": 0.019,
+        "netReturn": -8.42,
+        "directionAccuracy": 46.13,
+        "deltaCI": [-2.78, 4.16],
+        "pValue": 0.3548,
+        "mcSamples": 30,
+        "trades": 991,
+        "totalSignals": 1003,
+        "benchmarkStatus": "unavailable",
+        "decileCalibration": "No monotonic: decile 1 = -0.92%, decile 10 = +0.31%",
+        "smokeOnly": true,
+        "gateDecision": "REJECTED_RESEARCH — Rank IC≈zero + delta CI crosses zero + p>0.05",
+        "hypothesisConfirmed": "Hidden signals are transformed price data, not independent alpha source"
+      },
+      "evaluationResults": [
+        {
+          "windowIndex": 0,
+          "windowRole": "research",
+          "rankIC": 0.019,
+          "netReturn": -8.42,
+          "grossReturn": -3.25,
+          "benchmarkReturn": 0,
+          "netExcessReturn": -8.42,
+          "deltaCI": [-2.78, 4.16],
+          "directionAccuracy": 46.13,
+          "candidateVersionId": "smoke_H2_mqup1zzn",
+          "hypothesisId": "H2",
+          "strategyHash": "H2_prelocked_2026-06-24",
+          "featureSchemaHash": "hidden_only",
+          "snapshotHash": "903a12fbd898ffd7fce1db1be4fc43008b6b899a5096cb41cef7854d24d8b26d",
+          "windowPlanHash": "f23093df28e3bacaf7e85110a693f2e642671d3f81da4d55393eadf6ed7da648",
+          "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+          "windowId": "window_001",
+          "costAssumptions": {
+            "roundTripCostPct": 0.452,
+            "commissionRate": 0.00025,
+            "stampTaxRate": 0.001,
+            "transferFeeRate": 0.00001,
+            "slippagePct": 0.0015
+          },
+          "benchmarkStatus": "unavailable",
+          "windowDates": {
+            "trainStart": "2023-10-30",
+            "trainEnd": "2024-11-08",
+            "validateStart": "2024-11-11",
+            "validateEnd": "2024-12-06",
+            "testStart": "2024-12-09",
+            "testEnd": "2025-03-10"
+          },
+          "evaluatedAt": "2026-06-26T08:53:47.020Z"
+        }
+      ]
     }
   ],
   "hypotheses": [
@@ -386,8 +469,27 @@
         "dataHash": "b155957cc0e7adc3",
         "strategyHash": "416d170ba97fbebc"
       }
+    },
+    {
+      "from": "RESEARCH_ONLY",
+      "to": "REJECTED_RESEARCH",
+      "hypothesisId": "H2",
+      "versionId": "smoke_H2_mqup1zzn",
+      "reason": "H2 smoke: pure hidden-signal model shows no alpha. Rank IC=0.019, vsRandom Δ CI crosses zero [-2.78, +4.16], p=0.35, direction accuracy=46.13%. Decile calibration shows no monotonic relationship. Hypothesis confirmed: hidden signals are transformed price data, not independent alpha source.",
+      "date": "2026-06-26",
+      "evidence": {
+        "rankIC": 0.019,
+        "netReturn": -8.42,
+        "deltaCI": [-2.78, 4.16],
+        "pValue": 0.3548,
+        "directionAccuracy": 46.13,
+        "mcSamples": 30,
+        "trades": 991,
+        "smokeOnly": true,
+        "gateDecision": "REJECTED_RESEARCH"
+      }
     }
   ],
-  "lastEvaluationDate": "2026-06-25",
-  "updatedAt": "2026-06-25T02:16:35.087Z"
+  "lastEvaluationDate": "2026-06-26",
+  "updatedAt": "2026-06-26T09:00:00.000Z"
 }

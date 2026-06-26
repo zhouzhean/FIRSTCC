@@ -1,0 +1,17 @@
+{
+  "intercept": 0.2574,
+  "weights": [
+    0.1354
+  ],
+  "featureNames": [
+    "hidden"
+  ],
+  "lambda": 0.001,
+  "nFeatures": 1,
+  "trainedAt": "2026-06-26T08:53:47.018Z",
+  "trainSamples": 361157,
+  "valSamples": 29524,
+  "testSamples": 1003,
+  "hypothesisId": "H2",
+  "interaction": null
+}

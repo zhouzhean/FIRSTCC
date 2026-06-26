@@ -1,0 +1,67 @@
+{
+  "mode": "smokeOnly",
+  "hypothesisId": "H2",
+  "runAt": "2026-06-26T08:53:47.020Z",
+  "windowIndex": 0,
+  "dataHash": null,
+  "snapshotHash": "903a12fbd898ffd7fce1db1be4fc43008b6b899a5096cb41cef7854d24d8b26d",
+  "windowHash": null,
+  "executionHash": "fe466a202c564ea6801ab05bfa3746be9a537f50c510bf58a9d5f60e5487b8cf",
+  "windowDates": {
+    "trainStart": "2023-10-30",
+    "trainEnd": "2024-11-08",
+    "validateStart": "2024-11-11",
+    "validateEnd": "2024-12-06",
+    "testStart": "2024-12-09",
+    "testEnd": "2025-03-10"
+  },
+  "samples": {
+    "train": 361157,
+    "validate": 29524,
+    "test": 1003
+  },
+  "costs": {
+    "roundTripCostPct": null,
+    "commissionRate": null,
+    "stampTaxRate": null,
+    "transferFeeRate": null,
+    "slippagePct": null
+  },
+  "execution": {
+    "executionHash": null,
+    "executedTrades": 991,
+    "totalSignals": 1003,
+    "actualRoundTripCostPct": 0.452
+  },
+  "benchmark": {
+    "status": "unavailable",
+    "tradeCount": 0,
+    "unavailableCount": null
+  },
+  "randomControl": {
+    "monteCarloSamples": 30,
+    "pairedDelta_ci95_lower": -2.7800000000000002,
+    "pairedDelta_ci95_upper": 4.16,
+    "pairedDelta_mean": 1.0000000000000002,
+    "pValue": 0.3548387096774194
+  },
+  "metrics": {
+    "avgRankIC": 0.019,
+    "rankICDays": 59,
+    "directionAccuracy": 46.13,
+    "testMSE": 25.27
+  },
+  "portfolio": {
+    "netReturn": -8.42,
+    "grossReturn": -3.25,
+    "netExcessReturn": -8.42,
+    "sharpeRatio": -2.49,
+    "maxDrawdownBps": 11.35
+  },
+  "coverage": {
+    "totalSnapshotsAvailable": null,
+    "windowsAvailable": null
+  },
+  "errors": [],
+  "verdict": "completed: samples ok, trades ok, random control available"
+}
