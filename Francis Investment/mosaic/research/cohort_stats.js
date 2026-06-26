@@ -453,12 +453,6 @@ function buildCohortIntegrityStats(dataDir, date) {
           if (cie.predictionId && boughtPredIds[cie.predictionId]) {
             result.counts.actualBought++;
           }
-          // missingExpectedReturn + expectedReturnInjected (second pass)
-          if (cie.expectedReturn == null) {
-            result.counts.missingExpectedReturn++;
-          } else {
-            result.counts.expectedReturnInjected++;
-          }
           // Feature coverage distribution
           var fc = cie.featureCoverage != null ? cie.featureCoverage.toFixed(2) : '?';
           result.featureCoverage[fc] = (result.featureCoverage[fc] || 0) + 1;
