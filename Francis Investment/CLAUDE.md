@@ -2,7 +2,18 @@
 
 Node.js 零外部依赖，阿里云 ECS `8.153.101.112:8765`。全天候自动交易+24/7自主学习+报告引擎。低价(≤20元)非创业板A股子策略。
 
-## v3.4.9.8: P1.2–P1.6 (2026-06-24~25)
+## v3.4.9.8: P1.2–P1.7 (2026-06-24~26)
+
+### P1.7 — expectedReturn Wiring Fix (2026-06-26)
+
+- **Root cause**: `simfolio.js` `makeTradingDecisions()` built research snapshot (line 920) and wrote prediction ledger (line 956) BEFORE `rankByExpectedReturn()` (line 1710). `pipelineResults` had no `.prediction` → all 23 canonical ledger entries got `expectedReturn=null`, `predictionValid=0`.
+- **Fix**: Insert `rankByExpectedReturn()` call BEFORE `buildResearchSnapshot()` (~line 917), when `useExpectedReturnRanking=true`. Wrapped in try/catch — honest null on failure, no fake values. `rankByExpectedReturn` is idempotent; the later buy-candidate block (now ~line 1736) still re-runs it harmlessly.
+- **Diagnostic fields**: `cohort_stats.js` now counts `missingExpectedReturn`, `expectedReturnInjected`, and sets `predictionSource` (`"rankByExpectedReturn"` | `"none"`). Exposed in `/api/prediction-settlement` and `/api/cohort-integrity`.
+- **Release identity**: Cloud `buildCommit` = `e5a9699` (P1.7), NOT old `9c3be3c` (P1.6). Manifest has 12 files (was 11), includes `simfolio.js`.
+- **Verification**: Cloud test with real 2026-06-26 ledger data (23 entries) → all 23 would get `predictionValid=true`, `expectedReturn` (e.g. 002568 er=0.35, 601991 er=0.31), `confidence=0.5`, 6 breakdown dimensions.
+- **Acceptance pending**: Next trading day 09:30 must produce `predictionValid>0`, `researchEligible>0`, `expectedReturnInjected>0`, `predictionSource="rankByExpectedReturn"`. Today's 09:30 ledger was pre-fix (immutable).
+- **Deploy**: Cloud deployed ~10:00 CST, `buildCommit=e5a9699`, `deployManifestValid=true`, `deployFileHashCount=12`. H2 gated until acceptance.
+- **Commits**: `840800f` (code + diagnostic fields) + `e5a9699` (fix double-count) + `ed912cb` (manifest).
 
 ### P1.6 — Canonical Cohort Root-Cause Fix (2026-06-25)
 
@@ -95,7 +106,7 @@ Next: H2 → H3 per pre-registered rules.
 - **Benchmark unavailable**: `benchmarkTradeCount=0` — same-path benchmark sleeve not in historical snapshots yet. Cannot claim post-cost market excess without it
 - **H1 REJECTED_RESEARCH**: 4-window formal study complete, all windows negative Rank IC, negative delta CI. Frozen — no more H1 tuning
 - **H2, H3 not yet run**: Pre-registered sequence — H2 follows H1 rejection. P1.6 supervisor directive: wait for next trading day 09:30 canonical cohort to generate naturally before entering H2
-- **Prediction engine not yet wired**: `expected_return.js` `rankByExpectedReturn()` exists but is never called by the pipeline. All 309 intraday ledger entries have `expectedReturn=null`, `predictionValid=false`. Must be fixed before any candidate promotion — blocked by canonical validation first
+- **Prediction engine wiring**: P1.7 fixed — `rankByExpectedReturn()` now runs before research snapshot+ledger write. Diagnostic fields (`expectedReturnInjected`, `predictionSource`) visible in API. Awaiting next 09:30 run for production acceptance (predictionValid>0, researchEligible>0).
 
 ## Research Architecture
 
@@ -200,7 +211,7 @@ curl -s http://8.153.101.112:8765/api/cockpit
 
 | Version | Date | Key Changes |
 |---------|------|-------------|
-| v3.4.9.8 | 2026-06-25 | **P1.2**: unified executionConfig, empirical CI, lock window fix, idempotent eval. **P1.3**: smokeOnly, window range, H1 smoke test. **P1.4**: catch-up gate, window plan integrity, H1 Smoke UI, H1 4-window formal study → REJECTED_RESEARCH. **P1.5**: windowResults bug fix, cloud observability (/api/health+heartbeat+currentTask), release identity unified, Cockpit H1 rejection banner + canonical cohort. **P1.6**: canonical cohort root-cause fix (`scheduledSlot="9:30"` → `"09:30"`), enriched cockpit diagnostics, H2 gated on next 09:30 success |
+| v3.4.9.8 | 2026-06-26 | **P1.2**: unified executionConfig, empirical CI, lock window fix, idempotent eval. **P1.3**: smokeOnly, window range, H1 smoke test. **P1.4**: catch-up gate, window plan integrity, H1 Smoke UI, H1 4-window formal study → REJECTED_RESEARCH. **P1.5**: windowResults bug fix, cloud observability (/api/health+heartbeat+currentTask), release identity unified, Cockpit H1 rejection banner + canonical cohort. **P1.6**: canonical cohort root-cause fix (`scheduledSlot="9:30"` → `"09:30"`), enriched cockpit diagnostics. **P1.7**: expectedReturn wiring fix — `rankByExpectedReturn()` now runs before research snapshot, ledger entries will carry expectedReturn/confidence/breakdown (acceptance pending next 09:30) |
 | v3.4.9.7 | 2026-06-23 | **P0.2**: deploy identity, fixed capacity, same-path benchmark, exit tradability, Monte Carlo, Laplace p-value, paired delta CI |
 | v3.4.9.6 | 2026-06-23 | Phase 1.1: honest data boundaries, real feature availability, trade simulation |
 | v3.4.9.5 | 2026-06-23 | PIT Historical Research Lab: 5 modules, 835 days x 953K records |

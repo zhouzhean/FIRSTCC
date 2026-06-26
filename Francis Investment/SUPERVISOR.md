@@ -705,6 +705,82 @@ Open verification risks:
    either rejected or promoted to shadow-review status. No H1 tuning and no live
    trading permission changes.
 
+## Latest Review: P1.7 expectedReturn Wiring (2026-06-26)
+
+### P1.6 Acceptance: ✅ PASSED
+
+The 2026-06-26 09:30 canonical cohort ran correctly after the P1.6 fix:
+
+- `canonicalCohort.date`: `2026-06-26`, `completed: true`
+- `runId`: `mqtmjuwc_full_1` (non-empty)
+- `canonicalCohortCount`: 23 (was 0 yesterday)
+- `daily_research_manifest_2026-06-26.json` exists on cloud
+- `canonicalFieldValidation`: 23/23 all fields present
+- `codeVersion`: `v3.4.9.8`
+
+The root cause (`scheduledSlot="9:30"` → canonical gate rejected) is confirmed fixed.
+The 23 count (not 50) is because today's pipeline only screened 23 candidates —
+the fix is correct; the candidate count is a separate observation.
+
+### P1.7: Fix expectedReturn wiring into canonical ledger
+
+**Root cause**: In `simfolio.js` `makeTradingDecisions()`, the research snapshot
+(line 920) and prediction ledger write (line 956) happened BEFORE `rankByExpectedReturn()`
+(line 1710). The `pipelineResults` passed to `buildResearchSnapshot` had no `.prediction`
+field, so every ledger entry got `expectedReturn=null`, `predictionValid=false`.
+
+**Fix**: Insert `rankByExpectedReturn()` call BEFORE the research snapshot build
+(~line 917), when `useExpectedReturnRanking=true`. The prediction context
+(stockFactorPerf, marketCycle, nbPerf) is built from the same modules and parameters
+that the later buy-candidate block uses. The call is wrapped in try/catch —
+if prediction engine is unavailable, snapshot still works with null expectedReturn
+(honest failure, no fake values).
+
+**Fix location**: `mosaic/simfolio.js`, lines 914-945 (before `buildResearchSnapshot`).
+
+**Diagnostic fields added** (P1.7 revision, 2026-06-26 ~10:00 CST):
+- `mosaic/research/cohort_stats.js` `_scanLedger()` now counts `missingExpectedReturn`
+  and `expectedReturnInjected` for all non-legacy, non-quarantined entries.
+- `/api/prediction-settlement` now exposes: `missingExpectedReturn`, `expectedReturnInjected`,
+  `predictionSource` (`"rankByExpectedReturn"` | `"none"`).
+- `/api/cohort-integrity` now exposes: `counts.expectedReturnInjected`, `predictionSource`.
+
+**Release identity (P1.7 revision)**:
+- Local commits: `840800f` (code), `e5a9699` (fix double-count), `ed912cb` (manifest).
+- Cloud `buildCommit` = `deployCommit` = `e5a9699` — NOT the old P1.6 commit `9c3be3c`.
+- `deployFileHashCount`: 12 (was 11 — `simfolio.js` added, `cohort_stats.js` hash updated).
+- `identityStatus`: `manifest_verified_no_git`.
+
+**Cloud API verification (2026-06-26 10:05 CST)**:
+- `/api/status`: `buildCommit=e5a9699`, `deployCommit=e5a9699`, manifest valid, 12 files.
+- `/api/prediction-settlement`: `missingExpectedReturn=73`, `expectedReturnInjected=0`,
+  `predictionSource="none"` — correct: today's 09:30 ledger is immutable pre-fix data.
+- `/api/cohort-integrity`: `counts.missingExpectedReturn=73`, `counts.expectedReturnInjected=0`,
+  `predictionSource="none"` — consistent with PS endpoint.
+- `/api/health`: healthy, `eventLoopBlocked=false`.
+
+**Why predictionValid is still 0**: Today's 09:30 canonical ledger was written at
+~09:31 CST — BEFORE the P1.7 fix was deployed to cloud at ~10:00 CST. Those 23
+canonical entries are immutable records of the pre-fix state. This is correct and
+expected. The diagnostic fields now make this explicitly visible in the API.
+
+**Acceptance condition**: Next trading day (Monday 2026-06-29 or next trading day)
+09:30 canonical run must produce:
+- `predictionValid > 0` (currently 0)
+- `researchEligible > 0` (currently 0)
+- `expectedReturnInjected > 0` (currently 0)
+- `predictionSource = "rankByExpectedReturn"` (currently "none")
+- `missingExpectedReturn = 0` for canonical entries (currently 73 across all)
+- cockpit, decision-status, ledger all show same expectedReturn values
+- If `executionEligible=0`, kernel must record the actual blocking reason
+
+**Deployed**: All P1.7 files on cloud, service restarted, release identity traceable.
+Today's 09:30 ledger (written pre-fix) still has `predictionValid=0` — immutable,
+expected, and not actionable.
+
+**Next**: Wait for next trading day 09:30 natural run to verify P1.7 acceptance.
+Do NOT start H2 until `predictionValid>0` and `researchEligible>0` are confirmed.
+
 ## Latest Review: P0-C.1 and P1.1 local implementation (2026-06-24)
 
 ### What is verified locally
