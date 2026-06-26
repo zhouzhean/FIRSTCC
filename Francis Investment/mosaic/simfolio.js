@@ -929,16 +929,28 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
       var _factorPerfEarly = require('./analysis/factor_performance');
       var _cycleEarly = require('./analysis/market_cycle');
       var _earlyCycle = _cycleEarly.getMarketCycle();
+      // P1.7 fix: Load weekendContext inline — do NOT reference the const declared
+      // at line ~1602 (TDZ ReferenceError). Use loadWeekendContext() directly.
+      var _earlyWeekendCtx = null;
+      try { _earlyWeekendCtx = loadWeekendContext(); } catch (_) {}
       var _earlyPredCtx = {
         stockFactorPerf: _stockPredEarly.computeStockFactorPerformance(3),
         marketCycle: _earlyCycle,
         nbPerf: _factorPerfEarly.getNBPerformance(),
-        weekendContext: weekendContext || null,
+        weekendContext: _earlyWeekendCtx,
       };
       pipelineResults = _erEarly.rankByExpectedReturn(pipelineResults, _earlyPredCtx);
     } catch (_) {
       // Prediction engine unavailable — continue without .prediction, ledger will have nulls
       // (honest failure, no fake values)
+      try {
+        var _fs = require('fs');
+        var _path = require('path');
+        var _errLog = _path.join(__dirname, '..', 'report-engine', 'data', 'simfolio', 'p17_diag.json');
+        var _errEntry = { timestamp: new Date().toISOString(), error: _.message || String(_), stack: (_.stack || '').split('\n').slice(0, 5).join(' | ') };
+        _fs.writeFileSync(_errLog, JSON.stringify(_errEntry, null, 2), 'utf8');
+      } catch (_2) {}
+      console.error('[Simfolio] P1.7 rankByExpectedReturn FAILED: ' + (_.message || _) + ' stack: ' + (_.stack || '(no stack)'));
     }
   }
 
