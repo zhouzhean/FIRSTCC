@@ -1000,6 +1000,57 @@ function renderResearchLab(researchLab) {
   }
   html += '</div>';
 
+  // P1: Research Gate Summary — unified hypothesis status overview
+  if (researchLab.researchGate) {
+    var rg = researchLab.researchGate;
+    html += '<div style="padding:8px 12px;margin-bottom:10px;background:#f8fafc;border-radius:4px;border:1px solid #e2e8f0;">';
+    html += '<div style="font-size:11px;font-weight:700;margin-bottom:6px;color:#1e293b;"> Research Gate Summary</div>';
+
+    // Hypothesis status row
+    html += '<div style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;">';
+    var hyps = rg.hypotheses || {};
+    var hypKeys = Object.keys(hyps).sort();
+    for (var hi = 0; hi < hypKeys.length; hi++) {
+      var h = hyps[hypKeys[hi]];
+      var hBg = h.status === 'REJECTED_RESEARCH' ? '#fee2e2' :
+                h.status === 'PENDING_CANONICAL' ? '#fefce8' : '#f0fdf4';
+      var hColor = h.status === 'REJECTED_RESEARCH' ? '#dc2626' :
+                   h.status === 'PENDING_CANONICAL' ? '#a16207' : '#16a34a';
+      var hLabel = h.status === 'REJECTED_RESEARCH' ? ' REJECTED' :
+                   h.status === 'PENDING_CANONICAL' ? ' PENDING' : h.status;
+      html += '<div style="flex:1;min-width:100px;text-align:center;padding:6px 4px;background:' + hBg +
+        ';border-radius:4px;border:1px solid ' + hColor + ';">';
+      html += '<div style="font-size:11px;font-weight:700;color:' + hColor + ';">' + esc(hypKeys[hi]) + hLabel + '</div>';
+      html += '<div style="font-size:8px;color:#64748b;margin-top:2px;">' + (h.frozen ? ' frozen' : ' awaiting gate') + '</div>';
+      html += '</div>';
+    }
+    html += '</div>';
+
+    // Next gate
+    if (rg.nextGate) {
+      html += '<div style="font-size:9px;color:#64748b;margin-top:2px;">Next gate: <span style="font-weight:600;">' +
+        esc(rg.nextGate) + '</span></div>';
+      if (rg.nextGateDescription) {
+        html += '<div style="font-size:8px;color:#94a3b8;">' + esc(rg.nextGateDescription.slice(0, 140)) + '</div>';
+      }
+    }
+
+    // Rejection history summary
+    if (rg.rejectionHistory && rg.rejectionHistory.length > 0) {
+      html += '<div style="margin-top:6px;font-size:9px;color:#64748b;">';
+      html += '<span style="font-weight:600;">Rejection history:</span> ';
+      for (var rj = 0; rj < rg.rejectionHistory.length; rj++) {
+        var r = rg.rejectionHistory[rj];
+        if (rj > 0) html += ' | ';
+        html += esc(r.hypothesisId) + ': ';
+        if (r.aggregateRankIC != null) html += 'IC=' + esc(String(Math.round(r.aggregateRankIC * 10000) / 10000));
+        if (r.pValue != null) html += ' p=' + esc(String(Math.round(r.pValue * 10000) / 10000));
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
   // P1.5: H1 rejection verdict banner — prominent, always visible when rejected
   if (researchLab.modelVerdict === 'REJECTED_RESEARCH' || researchLab.h1Rejection) {
     var rejInfo = researchLab.h1Rejection || {};
@@ -1328,6 +1379,80 @@ function renderResearchLab(researchLab) {
 
       html += '</div>';  // close h2Smoke section
     }
+  }
+
+  // P2: H3 Smoke placeholder — Signal-Volume Interaction (pending canonical gate)
+  if (researchLab.h3Smoke) {
+    var hs3 = researchLab.h3Smoke;
+    html += '<div style="border-top:1px solid #e2e8f0;padding-top:6px;margin-top:6px;">';
+    html += '<div style="font-size:10px;font-weight:600;"> H3 Smoke — Signal×Volume Interaction</div>';
+
+    // Status badge
+    var h3Bg = hs3.status === 'completed' ? '#f0fdf4' :
+               hs3.status === 'failed' ? '#fee2e2' :
+               hs3.status === 'pending_canonical_gate' ? '#fefce8' : '#f8fafc';
+    var h3Color = hs3.status === 'completed' ? '#16a34a' :
+                  hs3.status === 'failed' ? '#dc2626' :
+                  hs3.status === 'pending_canonical_gate' ? '#a16207' : '#64748b';
+    var h3Label = hs3.status === 'pending_canonical_gate' ? 'awaiting canonical gate' : hs3.status;
+    html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;align-items:baseline;">';
+    html += '<span style="font-size:9px;background:' + h3Bg + ';color:' + h3Color +
+      ';padding:1px 4px;border-radius:3px;font-weight:600;">' + esc(h3Label) + '</span>';
+
+    // Hypothesis info
+    html += '<span style="font-size:9px;color:#64748b;">features: [signalCount, compositeScore]</span>';
+    html += '<span style="font-size:9px;color:#64748b;">interaction: signalCount × compositeScore</span>';
+    html += '</div>';
+
+    // Gate status (P1.7 canonical 4-condition check)
+    var gs = hs3.gateStatus;
+    if (gs) {
+      html += '<div style="margin-top:4px;font-size:9px;color:#64748b;">';
+      html += '<span style="font-weight:600;">Gate conditions:</span> ';
+      html += '<span style="color:' + (gs.canonicalAccepted ? '#16a34a' : '#94a3b8') + ';">canonicalAccepted=' + (gs.canonicalAccepted ? 'true' : 'false') + '</span> ';
+      html += '<span style="color:' + (gs.predictionValid > 0 ? '#16a34a' : '#94a3b8') + ';">predictionValid=' + (gs.predictionValid != null ? gs.predictionValid : '?') + '</span> ';
+      html += '<span style="color:' + (gs.researchEligible > 0 ? '#16a34a' : '#94a3b8') + ';">researchEligible=' + (gs.researchEligible != null ? gs.researchEligible : '?') + '</span> ';
+      html += '<span style="color:' + (gs.expectedReturnInjected > 0 ? '#16a34a' : '#94a3b8') + ';">expectedReturnInjected=' + (gs.expectedReturnInjected != null ? gs.expectedReturnInjected : '?') + '</span> ';
+      html += '</div>';
+    }
+
+    // Already-run data (if smoke has executed)
+    if (hs3.rankIC != null || hs3.tradeCount != null) {
+      html += '<div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">';
+      if (hs3.tradeCount != null) {
+        html += '<span style="font-size:9px;color:#64748b;">Trades: ' + esc(String(hs3.tradeCount)) +
+          '/' + esc(String(hs3.totalSignals || '?')) + '</span>';
+      }
+      if (hs3.netReturn != null) {
+        var nr3 = hs3.netReturn;
+        html += '<span style="font-size:9px;' + (nr3 > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Net: ' + esc(String(Math.round(nr3 * 10000) / 100)) + '%</span>';
+      }
+      if (hs3.rankIC != null) {
+        html += '<span style="font-size:9px;' + (hs3.rankIC > 0 ? 'color:#16a34a;' : 'color:#dc2626;') +
+          '">Rank IC: ' + esc(String(Math.round(hs3.rankIC * 10000) / 10000)) + '</span>';
+      }
+      if (hs3.directionAccuracy != null) {
+        html += '<span style="font-size:9px;color:#64748b;">DirAcc: ' + esc(String(hs3.directionAccuracy)) + '%</span>';
+      }
+      if (hs3.randomControlAvailable) {
+        html += '<span style="font-size:9px;color:#64748b;">Δ CI: [' +
+          esc(String(Math.round((hs3.deltaCiLower != null ? hs3.deltaCiLower : 0) * 10000) / 100)) + ', ' +
+          esc(String(Math.round((hs3.deltaCiUpper != null ? hs3.deltaCiUpper : 0) * 10000) / 100)) + ']%</span>';
+      }
+      html += '</div>';
+    }
+
+    // Verdict
+    if (hs3.verdict) {
+      var v3Bg = hs3.verdict.indexOf('pending') === 0 ? '#fefce8' : '#fee2e2';
+      var v3Color = hs3.verdict.indexOf('pending') === 0 ? '#a16207' : '#dc2626';
+      html += '<div style="margin-top:4px;padding:4px 8px;background:' + v3Bg +
+        ';border-radius:3px;font-size:9px;font-weight:600;color:' + v3Color + ';">' +
+        esc(hs3.verdict) + '</div>';
+    }
+
+    html += '</div>';  // close h3Smoke section
   }
 
   // P1.5: Canonical cohort status

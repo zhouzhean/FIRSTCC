@@ -1351,6 +1351,44 @@ function buildResearchLabData() {
       deltaCiUpper: null,
       directionAccuracy: null,
     },
+    // P2: H3 Smoke status — Signal-Volume Interaction (pending canonical)
+    h3Smoke: {
+      status: 'pending_canonical_gate',
+      runAt: null,
+      window: null,
+      tradeCount: null,
+      totalSignals: null,
+      dataHash: null,
+      executionHash: null,
+      verdict: null,
+      samples: null,
+      benchmarkStatus: 'unavailable',
+      randomControlAvailable: false,
+      rankIC: null,
+      errors: [],
+      netReturn: null,
+      deltaCiLower: null,
+      deltaCiUpper: null,
+      directionAccuracy: null,
+      gateStatus: {
+        canonicalAccepted: false,
+        predictionValid: null,
+        researchEligible: null,
+        expectedReturnInjected: null,
+        predictionSource: null,
+      },
+    },
+    // P1: Research Gate Summary — unified hypothesis status
+    researchGate: {
+      hypotheses: {
+        H1: { status: 'REJECTED_RESEARCH', frozen: true },
+        H2: { status: 'REJECTED_RESEARCH', frozen: true },
+        H3: { status: 'PENDING_CANONICAL', frozen: false },
+      },
+      nextGate: 'next_trading_day_09:30_canonical',
+      nextGateDescription: 'H3 smoke is gated on canonical cohort acceptance: predictionValid>0, researchEligible>0, expectedReturnInjected>0, predictionSource=rankByExpectedReturn',
+      rejectionHistory: [],  // populated below from candidate_registry.json
+    },
   };
 
   try {
@@ -1791,6 +1829,46 @@ function buildResearchLabData() {
     }
   } catch (_) { /* no smoke_summary_h2.json yet — stays not_run */ }
 
+  // P2: Load H3 smoke summary (fixture/placeholder until canonical gate passes)
+  try {
+    var smokeH3Path = path.join(__dirname, 'report-engine', 'data', 'research', 'model_artifacts', 'smoke_summary_h3.json');
+    if (fs.existsSync(smokeH3Path)) {
+      var smokeH3 = JSON.parse(fs.readFileSync(smokeH3Path, 'utf8'));
+      // H3 smoke only populates when gate passes; until then show placeholder status
+      var h3Status = 'pending_canonical_gate';
+      if (smokeH3.verdict && smokeH3.verdict.indexOf('pending') !== 0) {
+        h3Status = smokeH3.verdict.indexOf('completed') === 0 ? 'completed' :
+                   smokeH3.verdict.indexOf('failed') === 0 ? 'failed' : 'not_run';
+      }
+      data.h3Smoke = {
+        status: h3Status,
+        runAt: smokeH3.runAt || null,
+        window: smokeH3.windowIndex != null ? 'Window ' + (smokeH3.windowIndex + 1) : null,
+        tradeCount: smokeH3.execution ? smokeH3.execution.executedTrades : null,
+        totalSignals: smokeH3.execution ? smokeH3.execution.totalSignals : null,
+        dataHash: smokeH3.snapshotHash || null,
+        executionHash: smokeH3.execution ? smokeH3.execution.executionHash : null,
+        verdict: smokeH3.verdict || null,
+        samples: null,
+        benchmarkStatus: smokeH3.benchmark ? smokeH3.benchmark.status : 'unavailable',
+        randomControlAvailable: smokeH3.randomControl ? (smokeH3.randomControl.pairedDelta_ci95_lower != null) : false,
+        rankIC: smokeH3.metrics ? smokeH3.metrics.avgRankIC : null,
+        errors: smokeH3.errors || [],
+        netReturn: smokeH3.portfolio ? smokeH3.portfolio.netReturn : null,
+        deltaCiLower: smokeH3.randomControl ? smokeH3.randomControl.pairedDelta_ci95_lower : null,
+        deltaCiUpper: smokeH3.randomControl ? smokeH3.randomControl.pairedDelta_ci95_upper : null,
+        directionAccuracy: smokeH3.metrics ? smokeH3.metrics.directionAccuracy : null,
+        gateStatus: smokeH3.gateStatus || {
+          canonicalAccepted: false,
+          predictionValid: null,
+          researchEligible: null,
+          expectedReturnInjected: null,
+          predictionSource: null,
+        },
+      };
+    }
+  } catch (_) { /* no smoke_summary_h3.json yet */ }
+
   // P1.5: Load H1 rejection evidence from candidate_registry.json
   try {
     var regPath = path.join(__dirname, 'report-engine', 'data', 'research', 'candidate_registry.json');
@@ -1840,6 +1918,28 @@ function buildResearchLabData() {
       }
     }
   } catch (_) { /* candidate_registry.json not available */ }
+
+  // P1: Populate researchGate.rejectionHistory from h1Rejection + h2Rejection
+  if (data.h1Rejection) {
+    data.researchGate.rejectionHistory.push({
+      hypothesisId: 'H1',
+      name: 'Momentum + Volatility',
+      rejectedAt: data.h1Rejection.rejectedAt,
+      aggregateRankIC: data.h1Rejection.aggregateRankIC,
+      evidence: data.h1Rejection.reason,
+    });
+  }
+  if (data.h2Rejection) {
+    data.researchGate.rejectionHistory.push({
+      hypothesisId: 'H2',
+      name: 'Derived Hidden-Signal Bundle',
+      rejectedAt: data.h2Rejection.rejectedAt,
+      rankIC: data.h2Rejection.rankIC,
+      pValue: data.h2Rejection.pValue,
+      directionAccuracy: data.h2Rejection.directionAccuracy,
+      evidence: data.h2Rejection.reason,
+    });
+  }
 
   // P1.5: Load canonical cohort status for today
   try {
