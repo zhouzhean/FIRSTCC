@@ -1,7 +1,7 @@
 {
-  "commit": "e5a9699c4d5e894464c6adf3ddc3fdd659ff8f22",
+  "commit": "1039c4a23807dcffb83cda676fb9a3536e26bcf2",
   "version": "v3.4.9.8",
-  "deployedAt": "2026-06-26T04:25:00.000Z",
+  "deployedAt": "2026-06-26T02:24:32.492Z",
   "branch": "master",
   "files": {
     "mosaic_server.js": "1869078ecfd7277e",
@@ -14,7 +14,7 @@
     "mosaic/research/trade_simulator.js": "a88ed4448584c8e1",
     "mosaic/research/true_walk_forward.js": "f7252070819f56e3",
     "mosaic/config.js": "93d231cdfecefe58",
-    "mosaic/scheduler.js": "0890336efe6f4e82",
-    "mosaic/simfolio.js": "b18421f2351485ba"
+    "mosaic/scheduler.js": "e6605bb1c18710f2",
+    "mosaic/simfolio.js": "1b7584191962eb27"
   }
 }
