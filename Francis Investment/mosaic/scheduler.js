@@ -543,10 +543,12 @@ class Scheduler extends EventEmitter {
 
     // Mid-Day Scan
     for (const time of SC.midDayScanTimes) {
-      const opKey = 'mid_scan_' + dateStr + '_' + String(time.hour).padStart(2, '0') + ':' + String(time.minute).padStart(2, '0');
+      var slotHour = String(time.hour).padStart(2, '0');
+      var slotMinute = String(time.minute).padStart(2, '0');
+      const opKey = 'mid_scan_' + dateStr + '_' + slotHour + ':' + slotMinute;
       if (!this._scheduledOps.has(opKey) && h === time.hour && m >= time.minute && m < time.minute + 5) {
         this._scheduledOps.add(opKey);
-        this._runMidDayScan();
+        this._runMidDayScan(slotHour + ':' + slotMinute);
       }
     }
 
@@ -910,7 +912,7 @@ class Scheduler extends EventEmitter {
 
   // ==================== 操作：Mid-Day Scan ====================
 
-  async _runMidDayScan() {
+  async _runMidDayScan(scheduledSlot) {
     if (this._opsRunning) {
       this._logEvent('midscan_skip', { reason: 'ops_running' });
       return;
@@ -1047,7 +1049,7 @@ class Scheduler extends EventEmitter {
           const macroContext = { riskState: crossMarket.getCachedRiskState() };
           // v3.4.2: Pass market state
           var midStateLabels = { closed: '离市', pre_market: '盘前', morning_session: '上午交易', lunch_break: '午休', afternoon_session: '下午交易', post_market: '盘后' };
-          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state, midRunId, null);
+          const tradeResult = simfolio.makeTradingDecisions(pf, results, indices, 'mid', macroContext, this._state, midStateLabels[this._state] || this._state, midRunId, scheduledSlot || null);
           // v3.4.2: trade_complete event for mid-scan (was missing — only full scan had it)
           this._logEvent('trade_complete', {
             decisions: tradeResult.decisions ? tradeResult.decisions.length : 0,

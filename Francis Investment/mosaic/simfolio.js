@@ -996,6 +996,7 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
     meetsEvidenceThreshold: true,
     quoteSource: 'unknown',
     quoteAsOf: null,
+    buildCommit: (function() { try { return require('./config').buildCommit; } catch (_) { return null; } })(),
   }, scanType, kernelDecision, dqReport ? dqReport.penalty : 0);
 
   // v3.4.9.4: Update run manifest to completed AFTER ledger write (canonical scans only)
