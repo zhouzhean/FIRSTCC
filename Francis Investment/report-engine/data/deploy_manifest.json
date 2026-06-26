@@ -1,7 +1,7 @@
 {
-  "commit": "840800fd594c2b5990ee9356d9512bb1af257209",
+  "commit": "e5a9699c4d5e894464c6adf3ddc3fdd659ff8f22",
   "version": "v3.4.9.8",
-  "deployedAt": "2026-06-26T04:15:00.000Z",
+  "deployedAt": "2026-06-26T04:25:00.000Z",
   "branch": "master",
   "files": {
     "mosaic_server.js": "1869078ecfd7277e",
@@ -9,7 +9,7 @@
     "mosaic/evolution/evolution_scheduler.js": "89452e2c5ab6d510",
     "mosaic/research/baseline_models.js": "ffcdfe0bca511eb1",
     "mosaic/research/candidate_registry.js": "746cec57c7dc8963",
-    "mosaic/research/cohort_stats.js": "a80ea7c2e053130b",
+    "mosaic/research/cohort_stats.js": "0c00bf5dd1228599",
     "mosaic/research/linear_model.js": "b2d3b068bf2cd4f2",
     "mosaic/research/trade_simulator.js": "a88ed4448584c8e1",
     "mosaic/research/true_walk_forward.js": "f7252070819f56e3",
