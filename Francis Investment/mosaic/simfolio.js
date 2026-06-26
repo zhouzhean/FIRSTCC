@@ -916,6 +916,32 @@ function makeTradingDecisions(pf, pipelineResults, indices, scanType, macroConte
   // Canonical-ness is determined by scheduler task identity, NOT wall clock execution time.
   var _isCanonical = _isDesignatedCanonicalWindow(scanType, scheduledSlot);
 
+  // P1.7: Stamp .prediction (expectedReturn, confidence, breakdown) on pipelineResults
+  // BEFORE building the research snapshot, so canonical ledger entries carry real predictions.
+  // rankByExpectedReturn is idempotent — calling it again later in the buy-candidate block
+  // will re-use the same computations. If prediction context fails to build, snapshot still works
+  // (expectedReturn stays null — no fake values).
+  var _usePredictionForLedger = (config.PREDICTION && config.PREDICTION.useExpectedReturnRanking);
+  if (_usePredictionForLedger) {
+    try {
+      var _erEarly = require('./predict/expected_return');
+      var _stockPredEarly = require('./predict/stock_predictor');
+      var _factorPerfEarly = require('./analysis/factor_performance');
+      var _cycleEarly = require('./analysis/market_cycle');
+      var _earlyCycle = _cycleEarly.getMarketCycle();
+      var _earlyPredCtx = {
+        stockFactorPerf: _stockPredEarly.computeStockFactorPerformance(3),
+        marketCycle: _earlyCycle,
+        nbPerf: _factorPerfEarly.getNBPerformance(),
+        weekendContext: weekendContext || null,
+      };
+      pipelineResults = _erEarly.rankByExpectedReturn(pipelineResults, _earlyPredCtx);
+    } catch (_) {
+      // Prediction engine unavailable — continue without .prediction, ledger will have nulls
+      // (honest failure, no fake values)
+    }
+  }
+
   // Dedup by code, sort by expectedReturn DESC → compositeScore DESC → code ASC, top 50
   var _researchSnapshot = cohort.buildResearchSnapshot(pipelineResults || []);
 

@@ -56,6 +56,10 @@ function _scanLedger(ledgerPath, options) {
     predictionValid: 0,
     executionCandidateEligible: 0,
     globalBlocked: 0,
+    // P1.7: expectedReturn diagnostic fields
+    missingExpectedReturn: 0,
+    expectedReturnInjected: 0,
+    predictionSource: 'none',  // 'rankByExpectedReturn' | 'none' — set to 'rankByExpectedReturn' if any entry has .prediction
     canonicalFieldValidation: {
       totalCanonical: 0,
       allFieldsPresent: 0,
@@ -132,6 +136,13 @@ function _scanLedger(ledgerPath, options) {
             if (!entry.modelVersionId)       { fv.missingFields.modelVersionId++; allOk = false; }
             if (allOk) fv.allFieldsPresent++;
 
+            // P1.7: expectedReturn diagnostic (triple-filtered)
+            if (entry.expectedReturn == null) {
+              stats.missingExpectedReturn++;
+            } else {
+              stats.expectedReturnInjected++;
+            }
+
             // Eligibility (triple-filtered)
             if (entry.eligible) stats.eligible++;
             if (entry.evaluationEligible) stats.evaluationEligible++;
@@ -183,6 +194,13 @@ function _scanLedger(ledgerPath, options) {
             stats.intradayObservationCount++;
           }
 
+          // P1.7: expectedReturn diagnostic (unfiltered)
+          if (entry.expectedReturn == null) {
+            stats.missingExpectedReturn++;
+          } else {
+            stats.expectedReturnInjected++;
+          }
+
           // Eligibility (unfiltered — all non-legacy, non-quarantined entries)
           if (entry.eligible) stats.eligible++;
           if (entry.evaluationEligible) stats.evaluationEligible++;
@@ -213,6 +231,11 @@ function _scanLedger(ledgerPath, options) {
       } catch (_) {}
     }
   } catch (_) {}
+
+  // P1.7: Set predictionSource based on observed data
+  if (stats.expectedReturnInjected > 0) {
+    stats.predictionSource = 'rankByExpectedReturn';
+  }
 
   return stats;
 }
@@ -253,6 +276,10 @@ function buildPredictionSettlementStats(dataDir, date) {
     canonicalComplete: stats.canonicalComplete,
     legacyNoTargetDate: stats.legacyNoTargetDate,
     legacyRecords: stats.legacyRecords,
+    // P1.7: expectedReturn diagnostic fields
+    missingExpectedReturn: stats.missingExpectedReturn,
+    expectedReturnInjected: stats.expectedReturnInjected,
+    predictionSource: stats.predictionSource,
     exclusionReasons: stats.exclusionReasons,
     eligibilityReasons: stats.eligibilityReasons,
     t3pending: 0,
@@ -373,8 +400,11 @@ function buildCohortIntegrityStats(dataDir, date) {
       globalBlocked: stats.globalBlocked,
       executionEligible: stats.executionEligible,
       actualBought: 0,
-      missingExpectedReturn: 0,
+      // P1.7: expectedReturn diagnostics — populated from shared scan + second pass
+      missingExpectedReturn: stats.missingExpectedReturn,
+      expectedReturnInjected: stats.expectedReturnInjected,
     },
+    predictionSource: stats.predictionSource,
     featureCoverage: {},
     ledgerTotal: stats.totalEntries,
   };
@@ -423,9 +453,11 @@ function buildCohortIntegrityStats(dataDir, date) {
           if (cie.predictionId && boughtPredIds[cie.predictionId]) {
             result.counts.actualBought++;
           }
-          // missingExpectedReturn
+          // missingExpectedReturn + expectedReturnInjected (second pass)
           if (cie.expectedReturn == null) {
             result.counts.missingExpectedReturn++;
+          } else {
+            result.counts.expectedReturnInjected++;
           }
           // Feature coverage distribution
           var fc = cie.featureCoverage != null ? cie.featureCoverage.toFixed(2) : '?';
@@ -433,6 +465,11 @@ function buildCohortIntegrityStats(dataDir, date) {
         } catch (_) {}
       }
     } catch (_) {}
+  }
+
+  // P1.7: Set predictionSource from second-pass counts
+  if (result.counts.expectedReturnInjected > 0) {
+    result.predictionSource = 'rankByExpectedReturn';
   }
 
   // ── Note ──
